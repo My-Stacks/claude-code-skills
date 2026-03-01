@@ -10,7 +10,7 @@ Skills are designed for token efficiency, cross-model compatibility, and minimal
 |-------|---------|-------------|
 | [linear](./linear/) | 0.4.0 | Linear project management with session continuity. Buffered writes, board management, ticket creation, structured handoffs persisted to Linear. |
 | [handoff](./handoff/) | 2.1 | Session continuity via markdown files in git. Full handoffs, quick checkpoints, resume, status reports, and cross-tool project transfers. |
-| [claude-md-optimizer](./claude-md-optimizer/) | 1.0 | Compression and architecture optimization for CLAUDE.md and agent instruction files. |
+
 
 ## Install
 
