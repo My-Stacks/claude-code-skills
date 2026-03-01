@@ -1,0 +1,4 @@
+# versions.yaml
+linear: "0.4.0"
+handoff: "2.1"
+claude-md-optimizer: "1.0"
