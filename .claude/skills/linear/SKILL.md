@@ -1,5 +1,5 @@
 ## Version Check
-To check for updates: `curl -s https://raw.githubusercontent.com/stacklist/claude-code-skills/main/versions.yaml](https://raw.githubusercontent.com/My-Stacks/claude-code-skills/refs/heads/main/versions.yaml`
+To check for updates: `curl -s https://raw.githubusercontent.com/My-Stacks/claude-code-skills/refs/heads/main/versions.yaml`
 Compare against this file's version in frontmatter.
 
 ---
