@@ -6,7 +6,7 @@ Reusable components for [Claude Code](https://docs.anthropic.com/en/docs/claude-
 
 | Component | Type | Version | What it does |
 |-----------|------|---------|-------------|
-| [linear](./.claude/skills/linear/) | Skill | 0.4.0 | Linear project management with session continuity. Buffered writes, board management, ticket creation, structured handoffs persisted to Linear. |
+| [linear](./.claude/skills/linear/) | Skill | 0.5.0 | Linear project management with session continuity. Buffered writes, board management, ticket creation, structured handoffs persisted to Linear. Auto-maintains `.latest-status.md`. |
 | [handoff](./.claude/skills/handoff/) | Skill | 3.0 | Session continuity via `.latest-status.md`. Auto-updates during plan execution. Manual handoff, resume, and transfer commands. |
 | [commit](./.claude/commands/commit.md) | Command | 1.0 | Smart commit with conventional format, staged diffs, and hook compliance. |
 | [push](./.claude/commands/push.md) | Command | 1.0 | Push with safety checks, branch protection, and tracking setup. |
@@ -83,6 +83,21 @@ These components are built around a few constraints that shape every decision.
 **Progressive disclosure.** Not everything loads at once. Reference files are loaded on demand. The agent gets what it needs for the current command, not the entire knowledge base.
 
 ## Upgrade Notes
+
+### Linear v0.5.0
+
+The linear skill now auto-maintains `.latest-status.md` (the same file used by the handoff skill), eliminating the need to run `/handoff` separately when using Linear.
+
+- **Auto-updates:** `.latest-status.md` updates on plan start and plan completion when the linear skill is active
+- **Resume priority:** `/linear resume` reads `.latest-status.md` first, then `.linear/last-handoff.md` for expanded detail, then falls back to Linear API
+- **Three handoff destinations:** `.latest-status.md` (universal, 100-300 words), `.linear/last-handoff.md` (full detail), Linear project update (lean, 150-300 words)
+- **Coexistence:** Both skills write to `.latest-status.md`. `/handoff` still works for manual updates
+
+To upgrade:
+
+```bash
+cp -r .claude/skills/linear/ ~/.claude/skills/linear/
+```
 
 ### Handoff v3.0 (breaking)
 

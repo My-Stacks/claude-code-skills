@@ -152,6 +152,7 @@ Auto-detect on every update. Read-only.
 2. Check `.linear/session.yaml` → read recent ticket activity (keys + statuses).
 3. Write `## Linear` section with project link + ticket list.
 4. No section if `.linear/` directory doesn't exist.
+5. If the linear skill is active, it auto-maintains `.latest-status.md`. Both skills coexist: `/handoff` still works for manual updates.
 
 ---
 

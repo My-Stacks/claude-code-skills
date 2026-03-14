@@ -8,8 +8,9 @@ description: |
   Linear project management with integrated session continuity.
   Session tracking, board management, ticket creation, project updates,
   and structured handoffs persisted to Linear.
+  Auto-maintains .latest-status.md for cross-session resume.
 trigger: /linear
-version: "0.4.0"
+version: "0.5.0"
 ---
 
 # Linear Skill
@@ -55,6 +56,44 @@ Every output competes for context window space. These targets are hard limits, n
 - Full handoff available in `.linear/last-handoff.md` if agent needs more.
 
 **The test:** For every line in an output, ask: "Would removing this cause the next session to make a mistake?" If no, cut it.
+
+## Status File
+
+When the linear skill is active, it maintains `.latest-status.md` at project root — the same file used by the handoff skill. This enables cross-session resume without invoking `/handoff` separately.
+
+**On plan start** (entering execution after plan approval):
+- Light update: date, branch, status → `in_progress`, goal from plan.
+
+**On plan completion:**
+- Full update with Linear section populated from session buffer.
+
+**Template** (100-300 words, same as handoff skill):
+
+```markdown
+---
+date: YYYY-MM-DD HH:MM
+branch: <current git branch>
+status: in_progress | paused | blocked | complete
+---
+
+# Status: [Brief Title]
+
+## Resume
+**Goal:** [one line]
+**State:** [1-2 sentences]
+**Next:** [action + file + done-when]
+
+## Next
+1. [Action] — `path` — done when: [condition]
+
+## Traps
+- **[What]:** [signal] — [cause]. Retry if: [condition]
+
+## Linear
+- [Project](url) — ENG-142 (done), ENG-156 (in progress)
+```
+
+**Sections:** Resume + Next always present. Omit Traps if none. Populate Linear from session buffer and cache.
 
 ## Commands
 
@@ -302,11 +341,13 @@ End-of-session. Push remaining changes, write lean session summary to Linear.
 **Procedure:**
 1. If buffer has pending ticket changes, run push flow first.
 2. Write full session details to `.linear/last-handoff.md` (see Full Handoff format below).
-3. Draft the **lean update** for Linear (see Lean Update format below).
-4. Show preview. Wait for approval.
-5. Post as a **project update** on `active_project` via `save_status_update`.
-6. Clear entire session buffer.
-7. Confirm with link to the update in Linear.
+3. Update `.latest-status.md` using Status File template (status `paused` or `complete`). Populate `## Linear` from session buffer.
+4. Draft the **lean update** for Linear (see Lean Update format below).
+5. Show preview. Wait for approval.
+6. Post as a **project update** on `active_project` via `save_status_update`.
+7. Clear entire session buffer.
+8. Commit `.latest-status.md` and `.linear/last-handoff.md` to git.
+9. Confirm with link to the update in Linear.
 
 **Lean Update format (posted to Linear, 150-300 words max):**
 
@@ -369,8 +410,7 @@ Do not repeat: [Biggest trap for next session]
 **Handoff rules:**
 - **Delta, not snapshot.** What changed this session only.
 - **Resume block is the payload.** Everything else is reference material.
-- **Linear gets the lean version.** 150-300 words. No exceptions.
-- **Full details live locally.** `.linear/last-handoff.md` has everything.
+- **Three destinations:** `.latest-status.md` (universal, 100-300 words), `.linear/last-handoff.md` (full detail), Linear project update (lean, 150-300 words).
 - **Failed approaches are mandatory.** Highest value per token.
 - **Cut aggressively.** If removing a line wouldn't cause the next session to make a mistake, remove it.
 
@@ -382,18 +422,19 @@ Start-of-session. Pull context from Linear, orient, begin. Loads lean, expands o
 1. Check for existing `.linear/session.yaml`. If it has pending changes from a
    crashed/interrupted session, flag it: "Found unpushed buffer from [date] with
    [n] pending changes. Push these first, or discard?"
-2. Check for `.linear/last-handoff.md`. If present, read Resume block from local file (no API call needed).
-3. If no local handoff, fetch most recent project update for `active_project` via `get_status_updates`. Parse the Resume block only (Goal, State, Next, Do not repeat).
-4. Fetch current board state (same as `/linear board`).
-5. **Store full update** in `.linear/last-handoff.md` for on-demand access.
-6. Synthesize and confirm:
+2. Check for `.latest-status.md`. If present, read Resume block (Goal, State, Next) and Traps section. This is the primary resume source.
+3. Check for `.linear/last-handoff.md`. If present and more recent, prefer its Resume block. Use for expanded detail (full changes, detailed traps, notes) regardless.
+4. If neither local file exists, fetch most recent project update for `active_project` via `get_status_updates`. Parse the Resume block only (Goal, State, Next, Do not repeat).
+5. Fetch current board state (same as `/linear board`).
+6. **Store full update** in `.linear/last-handoff.md` for on-demand access.
+7. Synthesize and confirm:
    > "Picking up from [date]. Goal: [goal].
    > Starting with: [next action].
    > Board: [n] in progress, [n] todo, [n] blocked."
-7. If board contradicts handoff (issue done that handoff says in-progress,
+8. If board contradicts handoff (issue done that handoff says in-progress,
    new issues appeared), flag drift before proceeding.
-8. Initialize new session buffer with goal carried forward.
-9. **Do not retry failed approaches** unless explicitly asked or
+9. Initialize new session buffer with goal carried forward.
+10. **Do not retry failed approaches** unless explicitly asked or
    "retry only if" condition is met. If agent needs trap details, read from `.linear/last-handoff.md`.
 
 ### `/linear context`
@@ -412,7 +453,7 @@ Need more? /linear board (live) | /linear resume (full reload)
 ```
 
 **Sources:** `.linear/cache.yaml` for project/team, `.linear/session.yaml` for buffer,
-`.linear/last-handoff.md` for last session context.
+`.latest-status.md` for resume context, `.linear/last-handoff.md` for full session detail.
 
 ### `/linear update`
 
