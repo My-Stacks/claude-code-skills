@@ -82,6 +82,24 @@ These components are built around a few constraints that shape every decision.
 
 **Progressive disclosure.** Not everything loads at once. Reference files are loaded on demand. The agent gets what it needs for the current command, not the entire knowledge base.
 
+## Upgrade Notes
+
+### Handoff v3.0 (breaking)
+
+The handoff skill now uses a single `.latest-status.md` file at project root instead of dated files in `docs/handoffs/`. Key changes:
+
+- **New file location:** `.latest-status.md` (replaces `docs/handoffs/LATEST.md` + dated archives)
+- **Auto-updates:** `.latest-status.md` updates automatically on plan start and completion
+- **Fewer commands:** `/handoff quick` and `/handoff status` removed — the new format is already lean, and `/handoff resume` covers status
+- **Linear integration:** Auto-detects `.linear/cache.yaml` and `.linear/session.yaml` to populate a `## Linear` section
+- **Migration:** `/handoff resume` falls back to `docs/handoffs/LATEST.md` if `.latest-status.md` doesn't exist yet
+
+To upgrade, copy the new SKILL.md over your installed version:
+
+```bash
+cp -r .claude/skills/handoff/ ~/.claude/skills/handoff/
+```
+
 ## License
 
 MIT
