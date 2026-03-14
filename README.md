@@ -7,7 +7,7 @@ Reusable components for [Claude Code](https://docs.anthropic.com/en/docs/claude-
 | Component | Type | Version | What it does |
 |-----------|------|---------|-------------|
 | [linear](./.claude/skills/linear/) | Skill | 0.4.0 | Linear project management with session continuity. Buffered writes, board management, ticket creation, structured handoffs persisted to Linear. |
-| [handoff](./.claude/skills/handoff/) | Skill | 2.1 | Session continuity via markdown files in git. Full handoffs, quick checkpoints, resume, status reports, and cross-tool project transfers. |
+| [handoff](./.claude/skills/handoff/) | Skill | 3.0 | Session continuity via `.latest-status.md`. Auto-updates during plan execution. Manual handoff, resume, and transfer commands. |
 | [commit](./.claude/commands/commit.md) | Command | 1.0 | Smart commit with conventional format, staged diffs, and hook compliance. |
 | [push](./.claude/commands/push.md) | Command | 1.0 | Push with safety checks, branch protection, and tracking setup. |
 | [commit-push-pr](./.claude/commands/commit-push-pr.md) | Command | 1.0 | Full pipeline: commit, push, and create a PR via gh CLI. |
