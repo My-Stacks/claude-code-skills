@@ -34,7 +34,7 @@ Match installed `name`/`version` against remote `versions.yaml`.
 | Component | Type    | Installed | Latest | Status           |
 |-----------|---------|-----------|--------|------------------|
 | handoff   | skill   | 2.0       | 2.1    | Update available |
-| linear    | skill   | 0.4.0     | 0.4.0  | Up to date       |
+| linear    | skill   | 0.5.0     | 0.5.0  | Up to date       |
 | commit    | command | 1.0       | 1.0    | Up to date       |
 ```
 
