@@ -1,6 +1,6 @@
 ---
 name: handoff
-version: 3.0
+version: "3.0.1"
 description: "Session continuity via .latest-status.md. Auto-updates during plan execution. Manual handoff, resume, and transfer commands."
 ---
 

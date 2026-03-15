@@ -6,7 +6,7 @@ description: |
   and structured handoffs persisted to Linear.
   Auto-maintains .latest-status.md for cross-session resume.
 trigger: /linear
-version: "0.5.0"
+version: "0.5.1"
 ---
 
 ## Version Check

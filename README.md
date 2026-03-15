@@ -6,8 +6,8 @@ Reusable components for [Claude Code](https://docs.anthropic.com/en/docs/claude-
 
 | Component | Type | Version | What it does |
 |-----------|------|---------|-------------|
-| [linear](./.claude/skills/linear/) | Skill | 0.5.0 | Linear project management with session continuity. Buffered writes, board management, ticket creation, structured handoffs persisted to Linear. Auto-maintains `.latest-status.md`. |
-| [handoff](./.claude/skills/handoff/) | Skill | 3.0 | Session continuity via `.latest-status.md`. Auto-updates during plan execution. Manual handoff, resume, and transfer commands. |
+| [linear](./.claude/skills/linear/) | Skill | 0.5.1 | Linear project management with session continuity. Buffered writes, board management, ticket creation, structured handoffs persisted to Linear. Auto-maintains `.latest-status.md`. |
+| [handoff](./.claude/skills/handoff/) | Skill | 3.0.1 | Session continuity via `.latest-status.md`. Auto-updates during plan execution. Manual handoff, resume, and transfer commands. |
 | [commit](./.claude/commands/commit.md) | Command | 1.0 | Smart commit with conventional format, staged diffs, and hook compliance. |
 | [push](./.claude/commands/push.md) | Command | 1.0 | Push with safety checks, branch protection, and tracking setup. |
 | [commit-push-pr](./.claude/commands/commit-push-pr.md) | Command | 1.0 | Full pipeline: commit, push, and create a PR via gh CLI. |
@@ -83,6 +83,17 @@ These components are built around a few constraints that shape every decision.
 **Progressive disclosure.** Not everything loads at once. Reference files are loaded on demand. The agent gets what it needs for the current command, not the entire knowledge base.
 
 ## Upgrade Notes
+
+### Linear v0.5.1 / Handoff v3.0.1
+
+Fixes a frontmatter parsing bug in both skills. The `## Version Check` section was placed before the YAML frontmatter, preventing the parser from reading `trigger`, `description`, and other metadata. This caused `/linear update` to run a version check instead of posting a project status update, and both skills to appear as "Version Check" in the skill list.
+
+To upgrade:
+
+```bash
+cp -r .claude/skills/linear/ ~/.claude/skills/linear/
+cp -r .claude/skills/handoff/ ~/.claude/skills/handoff/
+```
 
 ### Linear v0.5.0
 
