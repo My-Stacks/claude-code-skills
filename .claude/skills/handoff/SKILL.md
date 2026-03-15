@@ -1,12 +1,12 @@
-## Version Check
-To check for updates: `curl -s https://raw.githubusercontent.com/My-Stacks/claude-code-skills/refs/heads/main/versions.yaml`
-Compare against this file's version in frontmatter.
-
 ---
 name: handoff
 version: 3.0
 description: "Session continuity via .latest-status.md. Auto-updates during plan execution. Manual handoff, resume, and transfer commands."
 ---
+
+## Version Check
+To check for updates: `curl -s https://raw.githubusercontent.com/My-Stacks/claude-code-skills/refs/heads/main/versions.yaml`
+Compare against this file's version in frontmatter.
 
 # Hand-Off
 

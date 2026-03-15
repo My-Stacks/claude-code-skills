@@ -1,7 +1,3 @@
-## Version Check
-To check for updates: `curl -s https://raw.githubusercontent.com/My-Stacks/claude-code-skills/refs/heads/main/versions.yaml`
-Compare against this file's version in frontmatter.
-
 ---
 name: linear
 description: |
@@ -12,6 +8,10 @@ description: |
 trigger: /linear
 version: "0.5.0"
 ---
+
+## Version Check
+To check for updates: `curl -s https://raw.githubusercontent.com/My-Stacks/claude-code-skills/refs/heads/main/versions.yaml`
+Compare against this file's version in frontmatter.
 
 # Linear Skill
 
