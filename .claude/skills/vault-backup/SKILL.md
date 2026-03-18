@@ -20,12 +20,14 @@ On the first invocation in any environment, check for a config file at `~/.vault
 If it does not exist, ask the user:
 
 > "Where is your Obsidian knowledge vault located? (full path, e.g. ~/Projects/knowledge-vault)"
+> "Who is the author? (e.g. kyle, martina)"
 
-Save their answer:
+Save their answers:
 
 ```json
 {
-  "vault_path": "~/Projects/knowledge-vault"
+  "vault_path": "~/Projects/knowledge-vault",
+  "author": "martina"
 }
 ```
 
@@ -42,7 +44,7 @@ Every time the skill is invoked:
 List the top-level directories in the vault path. These are the available categories.
 
 ```bash
-ls -d */ ~/Projects/knowledge-vault/
+ls -d {vault_path}/*/
 ```
 
 ### Step 2: Ask the user two questions
@@ -51,7 +53,7 @@ ls -d */ ~/Projects/knowledge-vault/
 
 2. **What type of output is this?**
    - `context`: source material, inputs, references, background information
-   - `drafts`: work in progress, early takes, rough notes
+   - `draft`: work in progress, early takes, rough notes
    - `synthesis`: combined research, reports, analysis, multi-source summaries
    - `final`: finished artifacts, ready for reference and reuse
 
