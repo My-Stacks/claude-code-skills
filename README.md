@@ -8,6 +8,7 @@ Reusable components for [Claude Code](https://docs.anthropic.com/en/docs/claude-
 |-----------|------|---------|-------------|
 | [linear](./.claude/skills/linear/) | Skill | 0.5.1 | Linear project management with session continuity. Buffered writes, board management, ticket creation, structured handoffs persisted to Linear. Auto-maintains `.latest-status.md`. |
 | [handoff](./.claude/skills/handoff/) | Skill | 3.0.1 | Session continuity via `.latest-status.md`. Auto-updates during plan execution. Manual handoff, resume, and transfer commands. |
+| [vault-backup](./.claude/skills/vault-backup/) | Skill | 1.0 | Save research, project outputs, and knowledge artifacts from any Claude Code workspace into a shared Obsidian knowledge vault. |
 | [commit](./.claude/commands/commit.md) | Command | 1.0 | Smart commit with conventional format, staged diffs, and hook compliance. |
 | [push](./.claude/commands/push.md) | Command | 1.0 | Push with safety checks, branch protection, and tracking setup. |
 | [commit-push-pr](./.claude/commands/commit-push-pr.md) | Command | 1.0 | Full pipeline: commit, push, and create a PR via gh CLI. |
@@ -61,7 +62,9 @@ claude-code-skills/
     │   ├── linear/
     │   │   ├── SKILL.md
     │   │   └── REFERENCE.md
-    │   └── handoff/
+    │   ├── handoff/
+    │   │   └── SKILL.md
+    │   └── vault-backup/
     │       └── SKILL.md
     ├── agents/
     │   └── .gitkeep
@@ -69,7 +72,8 @@ claude-code-skills/
         ├── commit.md
         ├── push.md
         ├── commit-push-pr.md
-        └── update-skills.md
+        ├── update-skills.md
+        └── vault-backup.md
 ```
 
 ## Design Principles
