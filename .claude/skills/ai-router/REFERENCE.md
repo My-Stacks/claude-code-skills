@@ -16,14 +16,14 @@ Load this file on demand. Not needed for route, config, or setup commands.
 
 | Provider | Default Model | Strengths | Context |
 |----------|--------------|-----------|---------|
-| Anthropic | claude-sonnet-4-6-20250514 | Structured output, instruction following, code | 200K |
-| OpenAI | gpt-4o | Broad knowledge, creative writing, multimodal | 128K |
-| Gemini | gemini-2.0-flash | Speed, long context, multimodal, cost efficiency | 1M |
+| Anthropic | claude-sonnet-4-6 | Structured output, instruction following, code | 200K |
+| OpenAI | gpt-5.4 | Broad knowledge, creative writing, multimodal, reasoning | 1M |
+| Gemini | gemini-3-flash-preview | Speed, long context, multimodal, cost efficiency | 1M |
 
 ### Model Override
 
 To use a non-default model for a single call, the user can specify it:
-> `/ai-router ask --model claude-opus-4-6-20250514 "deep architecture question"`
+> `/ai-router ask --model claude-opus-4-6 "deep architecture question"`
 
 Parse `--model <value>` from the prompt. Substitute into the API call template, overriding the config default.
 
@@ -72,13 +72,24 @@ chmod 600 ~/.orchestrator-config.json
 ### Large diffs in review
 If the diff exceeds ~100K characters, it may hit API context limits. Truncate to the most recent N files or ask the user to scope the review.
 
-## Cost Awareness
+## Pricing Reference (per 1M tokens)
 
-External API calls cost money. For reference:
-- **Ensemble** = 3 API calls (one per provider)
-- **Compare** = 3 API calls
-- **Ask** = 1 API call
-- **Review** = 3 API calls (with potentially large input)
-- **Route/Config/Setup** = 0 API calls
+| Provider | Model | Input | Output |
+|----------|-------|------:|-------:|
+| Anthropic | claude-sonnet-4-6 | $3.00 | $15.00 |
+| Anthropic | claude-opus-4-6 | $5.00 | $25.00 |
+| Anthropic | claude-haiku-4-5 | $1.00 | $5.00 |
+| OpenAI | gpt-5.4 | $2.50 | $15.00 |
+| Gemini | gemini-3-flash-preview | $0.50 | $3.00 |
+
+### Typical Cost Per Command
+
+| Command | Calls | Est. cost (short prompt) | Est. cost (PR review ~5K lines) |
+|---------|------:|-------------------------:|--------------------------------:|
+| ask | 1 | ~$0.005 | ~$0.05 |
+| ensemble | 3 | ~$0.012 | ~$0.12 |
+| compare | 3 | ~$0.012 | ~$0.12 |
+| review | 3 | ~$0.05 | ~$0.15 |
+| route/config/setup | 0 | $0 | — |
 
 When the prompt is large (e.g., PR diffs), note the approximate token count so the user can decide whether to proceed.

@@ -22,9 +22,9 @@ File: `~/.orchestrator-config.json`
   "anthropic_api_key": "sk-ant-...",
   "openai_api_key": "sk-...",
   "gemini_api_key": "AIza...",
-  "default_anthropic_model": "claude-sonnet-4-6-20250514",
-  "default_openai_model": "gpt-4o",
-  "default_gemini_model": "gemini-2.0-flash"
+  "default_anthropic_model": "claude-sonnet-4-6",
+  "default_openai_model": "gpt-5.4",
+  "default_gemini_model": "gemini-3-flash-preview"
 }
 ```
 
@@ -58,13 +58,13 @@ curl -s -o /dev/null -w "%{http_code}" https://api.anthropic.com/v1/messages \
 ```bash
 curl -s -o /dev/null -w "%{http_code}" https://api.openai.com/v1/chat/completions \
   -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-  -d '{"model":"gpt-4o-mini","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}'
+  -d '{"model":"gpt-5.4","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}'
 ```
 
 **Gemini:**
 ```bash
 curl -s -o /dev/null -w "%{http_code}" \
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$KEY" \
+  "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=$KEY" \
   -H "Content-Type: application/json" -d '{"contents":[{"parts":[{"text":"hi"}]}]}'
 ```
 
@@ -241,8 +241,8 @@ Show current configuration with redacted keys.
 
 | Provider | Key | Model | Status |
 |----------|-----|-------|--------|
-| Anthropic | sk-ant-...XY12 | claude-sonnet-4-6-20250514 | Active |
-| OpenAI | sk-...Ab34 | gpt-4o | Active |
+| Anthropic | sk-ant-...XY12 | claude-sonnet-4-6 | Active |
+| OpenAI | sk-...Ab34 | gpt-5.4 | Active |
 | Gemini | — | — | Not configured |
 
 Config: ~/.orchestrator-config.json
@@ -322,6 +322,47 @@ When building the prompt string for API calls:
 - Use `jq -Rs .` to safely escape the prompt for JSON embedding.
 - For review commands, prepend the diff to the prompt.
 - Keep system context minimal — the prompt should stand alone.
+
+---
+
+## Cost Tracking
+
+After every API call, extract token usage from the response and calculate cost.
+
+### Extracting Usage
+
+**Anthropic:** `echo "$RESPONSE" | jq '{input: .usage.input_tokens, output: .usage.output_tokens}'`
+
+**OpenAI:** `echo "$RESPONSE" | jq '{input: .usage.prompt_tokens, output: .usage.completion_tokens}'`
+
+**Gemini:** `echo "$RESPONSE" | jq '{input: .usageMetadata.promptTokenCount, output: .usageMetadata.candidatesTokenCount}'`
+
+### Pricing Table (per 1M tokens)
+
+| Provider | Model | Input | Output |
+|----------|-------|------:|-------:|
+| Anthropic | claude-sonnet-4-6 | $3.00 | $15.00 |
+| Anthropic | claude-opus-4-6 | $5.00 | $25.00 |
+| Anthropic | claude-haiku-4-5 | $1.00 | $5.00 |
+| OpenAI | gpt-5.4 | $2.50 | $15.00 |
+| Gemini | gemini-3-flash-preview | $0.50 | $3.00 |
+
+### Cost Calculation
+
+```
+cost = (input_tokens / 1_000_000 * input_rate) + (output_tokens / 1_000_000 * output_rate)
+```
+
+### Cost Report
+
+Append a cost summary to every API response (`ask`, `ensemble`, `compare`, `review`):
+
+```
+---
+**Cost:** Claude $0.0045 (312 in / 189 out) | GPT $0.0038 (298 in / 201 out) | Gemini $0.0008 (305 in / 195 out) | **Total: $0.0091**
+```
+
+For single-model calls (`ask`), show just that provider's cost. For multi-model calls, show per-provider breakdown + total.
 
 ---
 
