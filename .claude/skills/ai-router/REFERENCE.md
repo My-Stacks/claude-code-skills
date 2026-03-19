@@ -1,6 +1,6 @@
 # AI Router Reference
 
-Load this file on demand. Not needed for route, config, or setup commands.
+This file is not needed for `route`, `config`, or `setup` commands. Load on demand.
 
 ## Model Catalog
 
@@ -22,14 +22,13 @@ Load this file on demand. Not needed for route, config, or setup commands.
 
 ### Model Override
 
-To use a non-default model for a single call, the user can specify it:
+To use a non-default model for a single call:
 > `/ai-router ask --model claude-opus-4-6 "deep architecture question"`
 
-Parse `--model <value>` from the prompt. Substitute into the API call template, overriding the config default.
+Parse `--model <value>` from the prompt. Validate the model name contains only `[a-zA-Z0-9._-]`. Substitute into the API call, overriding the config default for that single call.
 
-For Anthropic models: substitute in the `model` field.
-For OpenAI models: substitute in the `model` field.
-For Gemini models: substitute in the URL path.
+For Anthropic/OpenAI: substitute in the `model` field of the JSON body.
+For Gemini: substitute in the URL path.
 
 ## PR Review Rubric
 
@@ -61,18 +60,18 @@ Key is invalid or revoked. Regenerate from the provider's dashboard:
 Wait and retry. For ensemble calls, the other providers still return results.
 
 ### API call returns 400 (bad request)
-Usually a prompt encoding issue. Check that `jq` is escaping the prompt correctly. Common cause: unescaped quotes or control characters in the prompt.
+Check model name is valid and prompt is not empty. If using `--model` override, verify the model ID exists with the provider.
 
 ### Config file permissions
-The config contains API keys. Ensure it's not world-readable:
+The config contains API keys. Setup creates it with `umask 077`, but verify:
 ```bash
 chmod 600 ~/.orchestrator-config.json
 ```
 
 ### Large diffs in review
-If the diff exceeds ~100K characters, it may hit API context limits. Truncate to the most recent N files or ask the user to scope the review.
+If the diff exceeds ~80K characters, the skill warns and asks the user to scope the review. To manually scope: `gh pr diff 42 -- src/` or pass specific file paths.
 
-## Pricing Reference (per 1M tokens)
+## Pricing Reference (per 1M tokens, estimates as of 2026-03)
 
 | Provider | Model | Input | Output |
 |----------|-------|------:|-------:|
@@ -81,6 +80,8 @@ If the diff exceeds ~100K characters, it may hit API context limits. Truncate to
 | Anthropic | claude-haiku-4-5 | $1.00 | $5.00 |
 | OpenAI | gpt-5.4 | $2.50 | $15.00 |
 | Gemini | gemini-3-flash-preview | $0.50 | $3.00 |
+
+Prices may change. These are used for cost estimates only.
 
 ### Typical Cost Per Command
 
