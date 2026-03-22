@@ -1,6 +1,6 @@
 ---
 name: vault-backup
-version: "1.0"
+version: "1.1"
 description: "Save research, project outputs, and knowledge artifacts from any Claude Code workspace into a shared Obsidian knowledge vault."
 trigger: "when the user says /vault-backup or asks to save work to the vault"
 ---
@@ -20,14 +20,12 @@ On the first invocation in any environment, check for a config file at `~/.vault
 If it does not exist, ask the user:
 
 > "Where is your Obsidian knowledge vault located? (full path, e.g. ~/Projects/knowledge-vault)"
-> "Who is the author? (e.g. kyle, martina)"
 
-Save their answers:
+Save their answer:
 
 ```json
 {
-  "vault_path": "~/Projects/knowledge-vault",
-  "author": "martina"
+  "vault_path": "~/Projects/knowledge-vault"
 }
 ```
 
@@ -44,16 +42,25 @@ Every time the skill is invoked:
 List the top-level directories in the vault path. These are the available categories.
 
 ```bash
-ls -d {vault_path}/*/
+ls -d */ ~/Projects/knowledge-vault/
 ```
 
 ### Step 2: Ask the user two questions
 
-1. **Which top-level folder should this go under?** Present the actual folder names found in Step 1 as options. If none fit, offer to create a new one.
+1. **Which top-level folder should this go under?** Present the actual folder names found in Step 1 as options. Use this decision tree to suggest the best match:
+   - Stacklist product itself (messaging, pricing, features, roadmap, pitch)? → `stacklist/`
+   - Specific client or consulting project? → `clients/`
+   - Multi-model research output? → `research/`
+   - Agent spec or architecture? → `agents/`
+   - Content creation (blog, newsletter, help article)? → `writing/`
+   - Operational (hiring, finance, legal, CRM)? → `ops/`
+   - Unsure or temporary? → `_inbox/`
+
+   If none fit, offer to create a new one — but bias toward using the existing 7 folders.
 
 2. **What type of output is this?**
    - `context`: source material, inputs, references, background information
-   - `draft`: work in progress, early takes, rough notes
+   - `drafts`: work in progress, early takes, rough notes
    - `synthesis`: combined research, reports, analysis, multi-source summaries
    - `final`: finished artifacts, ready for reference and reuse
 
