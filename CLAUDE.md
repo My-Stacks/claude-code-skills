@@ -36,10 +36,6 @@ versions.yaml   — Version registry for all components
 - **Cross-model compatibility.** Standard markdown + YAML frontmatter. No model-specific syntax. Works in Claude Code, Cursor, Windsurf, or any tool that reads markdown.
 - **Progressive disclosure.** Reference files load on demand. Not everything loads at once.
 
-## Session Start
-
-If the pull-and-sync skill is loaded, check remote sync status at the start of every session. See `.claude/skills/pull-and-sync/SKILL.md`.
-
 ## Version Tracking
 
 All component versions are tracked in `versions.yaml`. Each SKILL.md/agent/command has a version in its frontmatter that should match.
