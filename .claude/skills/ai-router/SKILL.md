@@ -307,7 +307,7 @@ body = json.dumps({
 })
 
 result = subprocess.run([
-    "curl", "-sS", "--max-time", "60", "--connect-timeout", "10",
+    "curl", "-sS", "--max-time", "120", "--connect-timeout", "10",
     "-o", "/tmp/ai-router-resp.json", "-w", "%{http_code}",
     "https://api.anthropic.com/v1/messages",
     "-H", f"x-api-key: {config['anthropic_api_key']}",
@@ -343,7 +343,7 @@ body = json.dumps({
 })
 
 result = subprocess.run([
-    "curl", "-sS", "--max-time", "60", "--connect-timeout", "10",
+    "curl", "-sS", "--max-time", "120", "--connect-timeout", "10",
     "-o", "/tmp/ai-router-resp.json", "-w", "%{http_code}",
     "https://api.openai.com/v1/chat/completions",
     "-H", f"Authorization: Bearer {config['openai_api_key']}",
@@ -377,7 +377,7 @@ body = json.dumps({
 })
 
 result = subprocess.run([
-    "curl", "-sS", "--max-time", "60", "--connect-timeout", "10",
+    "curl", "-sS", "--max-time", "120", "--connect-timeout", "10",
     "-o", "/tmp/ai-router-resp.json", "-w", "%{http_code}",
     f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
     "-H", "Content-Type: application/json",
