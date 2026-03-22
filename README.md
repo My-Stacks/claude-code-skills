@@ -10,6 +10,7 @@ Reusable components for [Claude Code](https://docs.anthropic.com/en/docs/claude-
 | [handoff](./.claude/skills/handoff/) | Skill | 3.0.1 | Session continuity via `.latest-status.md`. Auto-updates during plan execution. Manual handoff, resume, and transfer commands. |
 | [vault-backup](./.claude/skills/vault-backup/) | Skill | 1.0 | Save research, project outputs, and knowledge artifacts from any Claude Code workspace into a shared Obsidian knowledge vault. |
 | [ai-router](./.claude/skills/ai-router/) | Skill | 1.1 | Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Requires `curl` and `jq`. |
+| [pull-and-sync](./.claude/skills/pull-and-sync/) | Skill | 1.0 | Sync local repo with remote before starting work. Session-start nudge, multi-branch sync, stash/restore safety. |
 | [commit](./.claude/commands/commit.md) | Command | 1.0 | Smart commit with conventional format, staged diffs, and hook compliance. |
 | [push](./.claude/commands/push.md) | Command | 1.0 | Push with safety checks, branch protection, and tracking setup. |
 | [commit-push-pr](./.claude/commands/commit-push-pr.md) | Command | 1.0 | Full pipeline: commit, push, and create a PR via gh CLI. |
@@ -67,9 +68,11 @@ claude-code-skills/
     │   │   └── SKILL.md
     │   ├── vault-backup/
     │   │   └── SKILL.md
-    │   └── ai-router/
-    │       ├── SKILL.md
-    │       └── REFERENCE.md
+    │   ├── ai-router/
+    │   │   ├── SKILL.md
+    │   │   └── REFERENCE.md
+    │   └── pull-and-sync/
+    │       └── SKILL.md
     ├── agents/
     │   └── .gitkeep
     └── commands/
