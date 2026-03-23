@@ -33,6 +33,16 @@ Write this to `~/.vault-backup-config.json`. On all subsequent runs, read from t
 
 If the path does not exist or is not a git repo, stop and tell the user.
 
+### Author Detection
+
+The `author` field in frontmatter is derived at runtime from the GitHub username:
+
+```bash
+gh api user --jq '.login'
+```
+
+This returns the authenticated user's GitHub username (e.g. `kylehudson`, `Mart06`). Use this value directly as the `author` in frontmatter. No config entry needed.
+
 ## Workflow
 
 Every time the skill is invoked:
@@ -98,7 +108,7 @@ All files must be markdown (`.md`) with YAML frontmatter.
 ---
 title: "Descriptive title"
 date: YYYY-MM-DD
-author: kyle | martina
+author: GitHub username (auto-detected)
 tags: [tag1, tag2]
 source: "workspace name or project that generated this"
 status: draft | active | final | archived
@@ -110,7 +120,7 @@ type: context | drafts | synthesis | final
 
 - `tags`: include the workspace name, top-level folder name, and any cross-cutting topics
 - `source`: the Claude Code workspace or project that generated this file
-- `author`: set manually in `~/.vault-backup-config.json`. Use `kyle` or `martina`.
+- `author`: auto-detected via `gh api user --jq '.login'`. Uses the GitHub username of the authenticated user.
 - `date`: date the content was created
 - `type`: must match the output type selected in Step 2
 - `status`: set to `draft` for drafts and context, `active` for synthesis, `final` for final
@@ -180,9 +190,10 @@ Examples:
 
 ```json
 {
-  "vault_path": "~/Projects/knowledge-vault",
-  "author": "kyle"
+  "vault_path": "~/Projects/knowledge-vault"
 }
 ```
 
-Both `vault_path` and `author` are set on first run and reused on all subsequent runs. The user can update this file manually or delete it to re-trigger setup.
+Set on first run and reused on all subsequent runs. The user can update this file manually or delete it to re-trigger setup.
+
+`author` is not stored in config — it is detected at runtime from `gh api user --jq '.login'`.
