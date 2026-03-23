@@ -42,7 +42,7 @@ Every time the skill is invoked:
 List the top-level directories in the vault path. These are the available categories.
 
 ```bash
-ls -d */ ~/Projects/knowledge-vault/
+ls -d {vault_path}/*/
 ```
 
 ### Step 2: Ask the user two questions
@@ -102,7 +102,7 @@ author: kyle | martina
 tags: [tag1, tag2]
 source: "workspace name or project that generated this"
 status: draft | active | final | archived
-type: context | draft | synthesis | final
+type: context | drafts | synthesis | final
 ---
 ```
 
@@ -110,7 +110,7 @@ type: context | draft | synthesis | final
 
 - `tags`: include the workspace name, top-level folder name, and any cross-cutting topics
 - `source`: the Claude Code workspace or project that generated this file
-- `author`: ask on first run and save to config. Use `kyle` or `martina`.
+- `author`: set manually in `~/.vault-backup-config.json`. Use `kyle` or `martina`.
 - `date`: date the content was created
 - `type`: must match the output type selected in Step 2
 - `status`: set to `draft` for drafts and context, `active` for synthesis, `final` for final
