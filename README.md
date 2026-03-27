@@ -10,6 +10,7 @@ Reusable components for [Claude Code](https://docs.anthropic.com/en/docs/claude-
 | [handoff](./.claude/skills/handoff/) | Skill | 3.0.1 | Session continuity via `.latest-status.md`. Auto-updates during plan execution. Manual handoff, resume, and transfer commands. |
 | [vault-backup](./.claude/skills/vault-backup/) | Skill | 1.0 | Save research, project outputs, and knowledge artifacts from any Claude Code workspace into a shared Obsidian knowledge vault. |
 | [ai-router](./.claude/skills/ai-router/) | Skill | 1.1 | Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Requires `curl` and `jq`. |
+| [pr-watch](./.claude/skills/pr-watch/) | Skill | 1.0 | Monitor a GitHub PR and notify on reviews, comments, check changes, merge, or closure. Polls via CronCreate every 10 minutes. |
 | [pull-and-sync](./.claude/commands/pull-and-sync.md) | Command | 1.0 | Sync working branch with latest from default branch using merge --no-ff. |
 | [commit](./.claude/commands/commit.md) | Command | 1.0 | Smart commit with conventional format, staged diffs, and hook compliance. |
 | [push](./.claude/commands/push.md) | Command | 1.0 | Push with safety checks, branch protection, and tracking setup. |
@@ -71,6 +72,8 @@ claude-code-skills/
     │   ├── ai-router/
     │   │   ├── SKILL.md
     │   │   └── REFERENCE.md
+    │   └── pr-watch/
+    │       └── SKILL.md
     ├── agents/
     │   └── .gitkeep
     └── commands/
