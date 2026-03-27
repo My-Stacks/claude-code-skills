@@ -49,7 +49,7 @@ Get `{owner}/{repo}` for API calls:
 gh repo view --json nameWithOwner --jq .nameWithOwner
 ```
 
-Confirm: "Watching PR #{N}: {title} — I'll check every 10 minutes and notify you of any activity."
+Confirm: "Watching PR #{N}: {title} — I'll check every 30 minutes and notify you of any activity."
 
 ### Step 2: Capture Baseline and Create State File
 
@@ -93,7 +93,7 @@ Substitute `{owner}`, `{repo}`, `{N}` before running.
 ### Step 3: Schedule the Polling Loop
 
 Use CronCreate with:
-- **cron:** `*/10 * * * *`
+- **cron:** `*/30 * * * *`
 - **recurring:** true
 - **prompt:** The polling prompt below (substitute all `{tokens}` first)
 
@@ -111,7 +111,7 @@ json.dump(state, open(f, 'w'), indent=2)
 
 Tell the user:
 - Job ID (for manual cancel via CronDelete)
-- Polling interval: every 10 minutes
+- Polling interval: every 30 minutes
 - Auto-expires after 2 hours
 - Auto-cancels on merge/close
 - Ends when session ends (CronCreate jobs are session-scoped)
