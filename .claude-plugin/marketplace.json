@@ -1,0 +1,22 @@
+{
+  "name": "stacks-inc-skills",
+  "owner": {
+    "name": "Stacks Inc",
+    "url": "https://github.com/stacks-inc"
+  },
+  "metadata": {
+    "description": "Stacks Inc / Stack Lab shared Claude Code skills and plugins.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "design-qa",
+      "source": "./plugins/design-qa",
+      "description": "Headless responsive UI review across breakpoints, themes, a11y, Core Web Vitals, SEO, and visual regression.",
+      "version": "0.1.0",
+      "category": "testing",
+      "tags": ["design-review", "qa", "responsive", "accessibility", "lighthouse", "visual-regression"],
+      "strict": true
+    }
+  ]
+}

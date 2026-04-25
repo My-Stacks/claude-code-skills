@@ -1,0 +1,24 @@
+---
+description: Just Core Web Vitals and Lighthouse. Mobile + desktop runs.
+argument-hint: <url>
+allowed-tools: Bash, Read, Write
+---
+
+Run Lighthouse against `$1`.
+
+1. Run `bash ${CLAUDE_PLUGIN_ROOT}/bin/run-lighthouse.sh "$1"` — drives `lighthouse` directly via `chrome-launcher` (no `playwright-lighthouse` wrapper):
+   - One mobile run (Moto G Power emulation, slow 4G throttling, 4× CPU slowdown).
+   - One desktop run (no throttling).
+   - Outputs HTML + JSON to `.claude/design-qa/reports/<timestamp>/lighthouse/<profile>/`.
+   - The Vercel bypass secret (when set) is forwarded via `extraHeaders`, never via the URL.
+2. Parse the JSON. Surface:
+   - LCP, INP, CLS, TBT, FCP — actual numbers, with green/yellow/red thresholds.
+   - Performance / Accessibility / Best Practices / SEO scores.
+   - Top 5 opportunities (render-blocking, unused JS, oversized images, etc.) with byte-cost.
+3. Report as a markdown table with mobile and desktop columns side-by-side.
+4. Severity:
+   - **Blocker:** LCP > 4s, performance score < 50, CLS > 0.25.
+   - **High:** LCP > 2.5s, INP > 200ms, performance score < 80.
+   - **Medium:** any opportunity > 100KB savings.
+
+Never fabricate metric numbers. If Lighthouse fails to run (e.g., URL 401s), report the failure and stop.
