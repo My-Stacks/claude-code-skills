@@ -16,9 +16,9 @@ Run SEO/meta checks against `$1`.
    - Checks heading hierarchy (one h1, no skipped levels).
    - Checks alt text presence for all `<img>` tags (empty alt OK for decorative).
    - Outputs `.claude/design-qa/reports/<timestamp>/seo/report.json`.
-2. Severity:
-   - **Blocker:** Missing `<title>`, missing canonical on a page that needs one, malformed JSON-LD, missing `<html lang>`.
-   - **High:** Missing og:image, og:image broken/wrong size, missing meta description, no viewport meta.
-   - **Medium:** Missing Twitter Card, suboptimal title/description length, h1 issues.
-   - **Nitpicks:** Title not matching brand pattern, missing favicon variants.
+2. Severity (matches what `run-seo.mjs` actually emits):
+   - **Blocker:** Missing `<title>`, missing `<html lang>`, malformed JSON-LD.
+   - **High:** Missing meta description, missing canonical, missing viewport meta (or `user-scalable=no`), missing `og:image`, `og:image` not reachable, missing or multiple `<h1>`.
+   - **Medium:** Suboptimal title/description length, missing Twitter card, missing other OG tags, images without `alt`, `target="_blank"` links missing `rel="noopener"`.
+   - **Nitpicks:** none emitted by the runner today; flag manually if you spot brand-pattern misses or missing favicon variants.
 3. Report as markdown with a checklist per category and the actual values pulled from the page.

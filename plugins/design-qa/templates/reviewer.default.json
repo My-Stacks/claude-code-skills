@@ -26,5 +26,12 @@
     "settings": ["scannability", "destructive-action affordance", "save/cancel clarity"]
   },
   "excludeRules": [],
-  "hooks": true
+  "hooks": true,
+  "breakpointPagesAllowed": {
+    "marketing": ["/"],
+    "product": [],
+    "checkout": [],
+    "auth": [],
+    "settings": []
+  }
 }

@@ -11,33 +11,36 @@ You're capturing the responsive screenshot matrix for a design QA review.
 
 The matrix is determined by `${user_config.breakpointPreset}`:
 
-**`fast`** (5 widths, ~30 screenshots):
+**`fast`** (5 widths × 1 theme = 5 screenshots):
 ```
 375, 768, 1024, 1440, 1920
 ```
 
-**`agency-default`** (18 widths, default, ~108 screenshots):
+**`agency-default`** (18 widths × 3 themes = 54 screenshots):
 ```
 280, 320, 360, 375, 390, 414, 480, 600, 700, 768,
 834, 900, 1024, 1180, 1280, 1440, 1920, 2560
 ```
 
-**`thorough`** (agency-default + extras, ~180 screenshots):
+**`thorough`** (21 widths × 3 themes = 63 screenshots):
 ```
-agency-default + 384 (foldable outer), 3840 (4K), 844x390 landscape, print media
+agency-default + 384 (foldable outer), 3840 (4K)
 ```
+
+(Earlier versions of this doc listed `844x390 landscape` and `print media` for `thorough`; those aren't implemented in `breakpoint-sweep.mjs` and the doc has been pulled back to match the runner's actual matrix.)
 
 Why these widths: 280 covers folded foldables; 320/360/375/390/414 cover the common phone range including iPhone mini through Pro Max; 480 catches large phone landscape; 600/700 are the **foldable-inner / awkward-tablet zone where designs frequently fail**; 768/834/900 cover the iPad-portrait-to-landscape transition; 1024/1180/1280/1440/1920/2560 cover the laptop-to-large-monitor spectrum.
 
 ## Theme variants per width
 
-For each width, capture:
+For each width, the runner captures three theme variants:
 1. Light theme, default state.
 2. Dark theme (`prefers-color-scheme: dark`).
 3. Reduced motion (`prefers-reduced-motion: reduce`) — light theme.
-4. Focus state on the first interactive CTA above the fold (Tab once, screenshot).
 
-Skip variants 3 and 4 if `${user_config.breakpointPreset}` is `fast`.
+The `fast` preset captures only variant 1 (light, default).
+
+A separate focus-state pass over interactive elements happens during the `run-axe.mjs` accessibility audit, not in the responsive sweep.
 
 ## Stability before screenshot
 

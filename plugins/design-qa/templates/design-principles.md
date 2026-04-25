@@ -76,7 +76,7 @@ Pervasive on AI-generated UIs. Mark as Medium severity at `balanced` strictness,
 
 If `brand.tokens` is provided, sample the rendered DOM and verify ≥ 90% of elements use tokens. Below 90% means the design system is leaking.
 
-If `brand.voice` lists "no jargon," scan visible copy for: synergize, leverage, ecosystem, robust, scalable, seamless, cutting-edge, best-in-class, world-class, revolutionary, game-changing, unlock, empower (without an object), seamless. Flag each occurrence.
+If `brand.voice` lists "no jargon," scan visible copy for: synergize, leverage, ecosystem, robust, scalable, seamless, cutting-edge, best-in-class, world-class, revolutionary, game-changing, unlock, empower (without an object). Flag each occurrence.
 
 ## When to be lenient
 

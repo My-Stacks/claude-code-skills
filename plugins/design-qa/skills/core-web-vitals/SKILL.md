@@ -56,7 +56,7 @@ Pull these fields:
 
 Pull `audits` where `details.type === 'opportunity'` and sort by `numericValue` (estimated savings in ms or bytes). Surface the top 3:
 
-```
+```text
 1. eliminate-render-blocking-resources — saves ~1,400ms (CSS/JS in head)
 2. unused-javascript — saves ~340KB across 4 bundles
 3. modern-image-formats — saves ~180KB (5 images served as PNG, could be AVIF/WebP)

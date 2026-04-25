@@ -21,7 +21,7 @@ Before running, the project should have these dev dependencies installed:
 
 If they're missing, install them: `npm i -D @playwright/test @axe-core/playwright axe-core playwright-lighthouse lighthouse pa11y && npx playwright install --with-deps chromium`.
 
-## Six-phase review (same as the plugin)
+## Phased review (same as the plugin)
 
 ### Phase 0: Prep
 
@@ -59,7 +59,7 @@ Run Lighthouse with mobile profile (Moto G Power, Slow 4G, 4× CPU) and desktop 
 
 ### Phase 5: SEO & meta
 
-Extract: `<title>`, meta description, canonical, `<html lang>`, viewport meta, all `og:*`, all `twitter:*`, all JSON-LD blocks. Validate JSON-LD parses and has `@context: "https://schema.org"`. Verify og:image is reachable and ≥ 1200×630.
+Extract: `<title>`, meta description, canonical, `<html lang>`, viewport meta, all `og:*`, all `twitter:*`, all JSON-LD blocks. Validate JSON-LD parses as JSON. Fetch `og:image` to verify it's reachable — apply a timeout (~8s), a redirect cap (~5), and a size cap (~10MB) to stop slow or huge responses from stalling the run, and pass the same bypass header as the page request when scanning protected previews. Recommended dimensions are 1200×630 for `og:image` and 1200×675 for Twitter `summary_large_image`; check manually if the value isn't obvious from the URL.
 
 ### Phase 6: Visual regression
 

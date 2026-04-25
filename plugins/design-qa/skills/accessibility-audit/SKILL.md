@@ -58,7 +58,8 @@ axe and Pa11y combined cover ~57% of WCAG. Things you should still look for in t
 Return a markdown report:
 ```markdown
 ## Accessibility (axe + Pa11y, WCAG 2.2 AA)
-- Scanned: 3 viewports × 2 themes × 2 interaction states = 12 scans
+- Scanned: 3 viewports × 2 themes × 3 interaction states (default/hover/focus) = 18 axe scans
+- Pa11y additionally scanned the same widths (1 theme each)
 - Total unique violations: N
 - Suppressed by reviewer config: N (rules: ...)
 

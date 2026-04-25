@@ -44,29 +44,19 @@ Recommended:
 - If `summary_large_image`, image should be 1200×675 (16:9-ish).
 
 ### JSON-LD structured data
-Parse every `<script type="application/ld+json">` block:
-- Must be valid JSON.
-- Must have `@context: "https://schema.org"`.
-- `@type` must be a known schema.org type.
-- Validate against schema.org shape for that type:
-  - `Organization`: `name`, `url`, `logo`.
-  - `WebSite`: `name`, `url`. Bonus: `potentialAction` for sitelinks search.
-  - `Article`: `headline`, `author`, `datePublished`, `image`.
-  - `Product`: `name`, `image`, `offers.price`, `offers.priceCurrency`.
-  - `BreadcrumbList`: `itemListElement` array with `position`, `name`, `item`.
+The runner (`run-seo.mjs`) parses every `<script type="application/ld+json">` block and reports whether it is valid JSON. Schema.org shape validation (e.g. checking that `Organization` has `name`/`url`/`logo`) is **not** performed automatically today — flag shape violations manually if you spot them in the extracted `data.jsonLd` array.
 
 ### Heading hierarchy
-- Exactly one `<h1>` per page.
-- No skipped levels (h1 → h3 without h2 is a violation).
-- Headings should be descriptive (not "Welcome" or "About us" without context).
+- Runner check: count of `<h1>` (zero = high; >1 = high).
+- Manual check (not automated): no skipped levels (h1 → h3 without h2), and headings should be descriptive (not just "Welcome" or "About us").
 
 ### Images
-- All `<img>` have an `alt` attribute. Empty `alt=""` is OK for decorative images. Missing `alt` is a violation.
-- Decorative SVG icons should be `aria-hidden="true"` or in `<svg role="img"><title>...</title></svg>` form.
+- Runner check: every `<img>` has an `alt` attribute. Empty `alt=""` is OK for decorative images; missing `alt` is reported as medium.
+- Manual check (not automated): decorative SVG icons should be `aria-hidden="true"` or in `<svg role="img"><title>...</title></svg>` form.
 
 ### Links
-- No `target="_blank"` without `rel="noopener"` (security + perf).
-- Link text descriptive (not "click here", "read more" without context).
+- Runner check: no `target="_blank"` without `rel="noopener"` (security + perf) — reported as medium severity.
+- Manual check (not automated): link text descriptive (not "click here" or "read more" without context).
 
 ## Severity
 

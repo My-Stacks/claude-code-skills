@@ -6,10 +6,11 @@ allowed-tools: Bash, Read, Write
 
 Run Lighthouse against `$1`.
 
-1. Run `bash ${CLAUDE_PLUGIN_ROOT}/bin/run-lighthouse.sh "$1"` — uses `playwright-lighthouse`:
-   - One mobile run (Moto G Power profile, slow 4G throttling).
+1. Run `bash ${CLAUDE_PLUGIN_ROOT}/bin/run-lighthouse.sh "$1"` — drives `lighthouse` directly via `chrome-launcher` (no `playwright-lighthouse` wrapper):
+   - One mobile run (Moto G Power emulation, slow 4G throttling, 4× CPU slowdown).
    - One desktop run (no throttling).
-   - Outputs HTML + JSON to `.claude/design-qa/reports/<timestamp>/lighthouse/`.
+   - Outputs HTML + JSON to `.claude/design-qa/reports/<timestamp>/lighthouse/<profile>/`.
+   - The Vercel bypass secret (when set) is forwarded via `extraHeaders`, never via the URL.
 2. Parse the JSON. Surface:
    - LCP, INP, CLS, TBT, FCP — actual numbers, with green/yellow/red thresholds.
    - Performance / Accessibility / Best Practices / SEO scores.

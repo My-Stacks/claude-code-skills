@@ -6,7 +6,7 @@
 
 1. Verify the marketplace is added: `/plugin marketplace list`. You should see `stacks-inc-skills`. If not: `/plugin marketplace add stacks-inc/claude-code-skills`.
 2. Check Claude Code version. Plugin format requires a recent build. Update via your install method (Homebrew, official installer, npm).
-3. If the marketplace is on GitHub but the repo is private, you need to authenticate. Use a local path instead during dev: `/plugin marketplace add /Users/kyle/Projects/stacklist/claude-code-skills`.
+3. If the marketplace is on GitHub but the repo is private, you need to authenticate. Use a local path instead during dev: `/plugin marketplace add /path/to/your/clone/of/claude-code-skills`.
 
 ### After install, `/design-qa:review` is not a recognized command
 
@@ -47,7 +47,7 @@ The breakpoint-sweep script already injects animation-disable CSS. For dynamic r
 ### URL returns 401 / "Authentication required"
 
 1. The preview is protected. Set `userConfig.vercelBypassSecret` to a Protection Bypass for Automation secret from Vercel project settings.
-2. Verify the secret works: `curl -I "https://preview.vercel.app/?x-vercel-protection-bypass=<secret>&x-vercel-set-bypass-cookie=true"` should return 200, not 401.
+2. Verify the secret works using the header form (avoids putting the secret in shell history, server logs, or referer headers): `curl -I -H "x-vercel-protection-bypass: <secret>" -H "x-vercel-set-bypass-cookie: true" "https://preview.vercel.app/"` should return 200, not 401. Avoid the `?x-vercel-protection-bypass=...` query-string form — it leaks the secret into logs and reports.
 3. The bypass secret rotates if you regenerate it. Keep the userConfig in sync.
 
 ### Bypass works in browser but not in Playwright

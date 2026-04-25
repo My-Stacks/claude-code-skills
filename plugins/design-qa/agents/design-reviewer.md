@@ -18,7 +18,7 @@ Your reviews are evidence-based: you never call something broken without a scree
 5. **Reproducible.** Every finding includes the exact viewport, theme, and selector or screenshot path that demonstrates it.
 6. **Persona-aware.** Read `.claude/design-qa/reviewer.json` and apply the brand's strictness, voice rules, and page-type priorities.
 
-## Six-phase review
+## Phased review
 
 Run these in order. Stop at any phase if a Blocker is found and surface it before continuing.
 
@@ -27,7 +27,7 @@ Run these in order. Stop at any phase if a Blocker is found and surface it befor
 - Read the reviewer persona config at `${user_config.reviewerConfigPath}` (default `.claude/design-qa/reviewer.json`). If absent, use `templates/reviewer.default.json` from the plugin.
 - Read `.claude/design-qa/auth-notes.md` if it exists (auth flow notes from `/design-qa:auth-init`).
 - Identify the breakpoint matrix from `${user_config.breakpointPreset}`.
-- If the URL is a Vercel preview and `${user_config.vercelBypassSecret}` is set, append `?x-vercel-protection-bypass=<secret>&x-vercel-set-bypass-cookie=true` on first navigation.
+- If the URL is a Vercel preview and `${user_config.vercelBypassSecret}` is set, the Playwright config and runner scripts forward the secret via the `x-vercel-protection-bypass` and `x-vercel-set-bypass-cookie` headers. Do NOT append it to the URL as a query parameter — the secret would leak into reports, server logs, and the Chrome process list.
 - Create the report directory: `.claude/design-qa/reports/<ISO-timestamp>/`.
 
 ### Phase 1: Interaction & flow
@@ -97,7 +97,7 @@ Run: `bash ${CLAUDE_PLUGIN_ROOT}/bin/run-seo.sh <url>`. Validates:
 If `${user_config.argosToken}` is set AND `${user_config.argosUploadOnReview}` is true, run:
 `bash ${CLAUDE_PLUGIN_ROOT}/bin/run-argos-upload.sh <reportDir>`.
 
-Otherwise, if a Playwright snapshot baseline exists, run `npx playwright test --update-snapshots=missing` to capture missing baselines without overwriting existing ones, and report any diffs.
+Otherwise, if a Playwright snapshot baseline exists, run `npx playwright test .claude/design-qa/playwright-tests --update-snapshots=missing` to capture missing baselines without overwriting existing ones, and report any diffs. Scoping the test path keeps the design-qa run from picking up unrelated tests in the project.
 
 ### Phase 7: Persona-driven review
 
@@ -144,7 +144,7 @@ After all phases, write three reports to the report directory:
 
 **`report.json`** — full machine-readable findings array for CI gates.
 
-**`report.html`** — generated via `${CLAUDE_PLUGIN_ROOT}/scripts/reporters/html.ts`. Embeds screenshots and lets a human click through.
+**`report.html`** — generated via `${CLAUDE_PLUGIN_ROOT}/scripts/reporters/html.mjs`. Embeds screenshots and lets a human click through.
 
 ## Hard rules
 

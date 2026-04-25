@@ -6,7 +6,7 @@ Headless responsive UI review for Claude Code, optimized for Vercel preview depl
 
 A single `/design-qa:review <url>` runs a full multi-pass audit:
 
-1. **Responsive sweep** across 18 breakpoints (configurable) with light/dark/reduced-motion variants. Captures default, hover, focus, and active states for interactive elements.
+1. **Responsive sweep** across 18 breakpoints (configurable) with light/dark/reduced-motion variants. The accessibility pass (next step) is where hover/focus/active states are exercised — the sweep itself captures static screenshots.
 2. **Accessibility audit** via axe-core at every breakpoint. Catches WCAG 2.2 AA violations including contrast on hover/focus/dark mode (which axe misses by default unless states are triggered first).
 3. **Core Web Vitals** via Lighthouse — LCP, INP, CLS, TBT, plus a11y/SEO/best-practices scores.
 4. **SEO + meta** — Open Graph, Twitter Card, JSON-LD validation, canonical URL, viewport meta, lang attribute, heading hierarchy, alt text.
@@ -62,7 +62,7 @@ Plus light/dark theme + reduced-motion variants.
 
 `fast` = `[375, 768, 1024, 1440, 1920]`.
 
-`thorough` = agency-default + `[3840, 384, 844x390 landscape, print media]`.
+`thorough` = agency-default + `[384, 3840]` (foldable outer + 4K).
 
 ## Reviewer persona
 
@@ -101,7 +101,7 @@ Every run writes to `.claude/design-qa/reports/<ISO-timestamp>/`:
 - `screenshots/` — full PNG matrix
 - `axe/` — per-breakpoint axe JSON
 - `lighthouse/` — Lighthouse JSON + HTML
-- `argos-build-id.txt` — if uploaded
+- `argos-build-url.txt` — if uploaded (this is the file the reporters read)
 
 ## Hooks
 

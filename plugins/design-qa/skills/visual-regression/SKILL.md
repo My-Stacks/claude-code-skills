@@ -35,10 +35,10 @@ You're comparing the current screenshot matrix against an established baseline.
 1. Run the existing Playwright tests with `--reporter=html` and capture the diff.
 2. If running for the first time, Playwright will fail with "no baseline found" and write the current screenshot as the baseline. Tell the user to commit the baseline directory.
 3. On subsequent runs, Playwright generates `<n>-diff.png` files for each mismatch.
-4. Default tolerances:
+4. Default tolerances live in `templates/playwright.config.template.ts` under `expect.toHaveScreenshot`:
    - `maxDiffPixelRatio: 0.01` (1% of pixels can differ).
    - `threshold: 0.2` (per-pixel color tolerance).
-   - These are stricter than Argos defaults; loosen if false positives are noisy.
+   These are stricter than Argos defaults — loosen them in your project's `playwright.config.ts` if false positives are noisy. The plugin does not yet read these from `reviewer.json`.
 5. Surface the diff images and the mismatch ratio.
 
 ## Anti-flakiness checklist
