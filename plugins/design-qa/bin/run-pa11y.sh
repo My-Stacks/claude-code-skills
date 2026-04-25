@@ -5,11 +5,12 @@
 set -euo pipefail
 
 URL="${1:?usage: run-pa11y.sh <url>}"
-PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-REPORT_DIR="${DESIGN_QA_REPORT_DIR:-.claude/design-qa/reports/$(date -u +%Y%m%dT%H%M%SZ)}"
+REPORT_DIR_INPUT="${DESIGN_QA_REPORT_DIR:-.claude/design-qa/reports/$(date -u +%Y%m%dT%H%M%SZ)}"
 PRESET="${DESIGN_QA_PRESET:-agency-default}"
 
 # Reject report-dir paths that escape the workspace before any mkdir runs.
+# Use the validated path (RESOLVED_REPORT_DIR) for every downstream operation
+# so the guard isn't bypassed by symlinks under the original input.
 RESOLVED_REPORT_DIR="$(node -e '
 const p = require("node:path");
 const cwd = process.cwd();
@@ -19,8 +20,9 @@ if (resolved !== cwd && !resolved.startsWith(cwd + p.sep)) {
   process.exit(2);
 }
 process.stdout.write(resolved);
-' "$REPORT_DIR")" || exit 1
+' "$REPORT_DIR_INPUT")" || exit 1
 
+REPORT_DIR="$RESOLVED_REPORT_DIR"
 mkdir -p "$REPORT_DIR/pa11y"
 
 case "$PRESET" in

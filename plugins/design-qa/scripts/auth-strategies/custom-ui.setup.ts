@@ -16,7 +16,9 @@ import { test as setup } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 
-const authFile = path.join(__dirname, '.auth/user.json');
+// Resolve the auth file relative to the project root (cwd) — keeps the
+// template ESM/CJS-agnostic and aligned with playwright.config.template.ts.
+const authFile = path.resolve(process.cwd(), 'playwright', '.auth', 'user.json');
 
 // Normalise loginPath to a clean leading-slash form with no query/fragment so
 // the success check compares like-for-like against `url.pathname`.

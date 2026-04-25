@@ -17,7 +17,8 @@ import { test as setup } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 
-const authFile = path.join(__dirname, '.auth/user.json');
+// Resolve relative to project root (cwd) — keeps the template ESM/CJS-agnostic.
+const authFile = path.resolve(process.cwd(), 'playwright', '.auth', 'user.json');
 
 setup('authenticate via custom API', async ({ playwright }) => {
   const baseUrl = process.env.DESIGN_QA_BASE_URL;

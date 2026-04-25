@@ -17,7 +17,10 @@ import { clerk, clerkSetup } from '@clerk/testing/playwright';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 
-const authFile = path.join(__dirname, '.auth/user.json');
+// Resolve the auth file relative to the project root (cwd) to match the
+// playwright.config.template.ts expectation. Avoiding `__dirname` keeps the
+// template usable under both ESM and CJS Playwright configs.
+const authFile = path.resolve(process.cwd(), 'playwright', '.auth', 'user.json');
 
 setup('authenticate via Clerk', async ({ page }) => {
   await clerkSetup();

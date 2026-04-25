@@ -5,7 +5,6 @@
 set -euo pipefail
 
 URL="${1:?usage: run-playwright-baseline.sh <url>}"
-PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
 case "$URL" in
   http://*|https://*) ;;

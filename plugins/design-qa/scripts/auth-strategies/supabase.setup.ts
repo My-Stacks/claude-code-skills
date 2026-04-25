@@ -16,7 +16,10 @@ import { createClient } from '@supabase/supabase-js';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 
-const authFile = path.join(__dirname, '.auth/user.json');
+// Resolve relative to project root (cwd) — keeps the template ESM/CJS-agnostic
+// and aligned with playwright.config.template.ts (which expects
+// `<root>/playwright/.auth/user.json`).
+const authFile = path.resolve(process.cwd(), 'playwright', '.auth', 'user.json');
 
 setup('authenticate via Supabase Auth', async ({ page }) => {
   const supabaseUrl = process.env.DESIGN_QA_SUPABASE_URL;

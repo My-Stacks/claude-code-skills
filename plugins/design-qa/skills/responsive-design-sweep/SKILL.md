@@ -47,17 +47,17 @@ A separate focus-state pass over interactive elements happens during the `run-ax
 ALWAYS, before each screenshot:
 1. `await page.waitForLoadState('networkidle')`.
 2. `await page.evaluate(() => document.fonts.ready)`.
-3. Inject CSS to disable animations: `* { animation-duration: 0s !important; transition-duration: 0s !important; }`.
+3. Inject CSS to disable animations and transitions, including their delays: `*, *::before, *::after { animation-duration: 0s !important; animation-delay: 0s !important; transition-duration: 0s !important; transition-delay: 0s !important; }`.
 4. Wait 200ms for the disable to take effect.
 
 ## How to invoke
 
-The script `${CLAUDE_PLUGIN_ROOT}/bin/run-sweep.sh <url> <preset>` handles all of this. It:
+The script `${CLAUDE_PLUGIN_ROOT}/bin/run-sweep.sh <url> <preset>` handles all of this (delegating to `breakpoint-sweep.mjs`). It:
 - Iterates the matrix.
 - Uses Playwright's device emulation when a width matches a known device (e.g., 390 → "iPhone 14 Pro" with DPR 3, touch, mobile UA).
-- For unknown widths, sets DPR=2 and `isMobile: true` for widths ≤ 600.
-- Saves PNGs to `.claude/design-qa/reports/<timestamp>/screenshots/<width>-<theme>-<state>.png`.
-- Writes `manifest.json` with one entry per screenshot including the in-page horizontal-overflow check result.
+- For unknown widths, sets DPR=3 for widths ≤ 600, DPR=2 for widths ≤ 1024, DPR=1 above; treats widths ≤ 600 as mobile and ≤ 768 as touch.
+- Saves PNGs to `.claude/design-qa/reports/<timestamp>/screenshots/<width>-<theme>.png` (one per width × theme; interaction states are exercised in the axe pass, not here).
+- Writes `manifest.json` with one entry per screenshot — the entries reference the same `<width>-<theme>.png` filenames and include the in-page horizontal-overflow check result.
 
 You should call this script rather than driving Playwright MCP one width at a time — it's much faster and uses far fewer tokens.
 
