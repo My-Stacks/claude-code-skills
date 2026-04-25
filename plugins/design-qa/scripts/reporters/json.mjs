@@ -7,30 +7,51 @@ import { join } from 'node:path';
 const REPORT_DIR = process.argv[2];
 if (!REPORT_DIR) { console.error('usage: json.mjs <reportDir>'); process.exit(1); }
 
+// tryRead returns one of three states so the gate can tell "scan was not run"
+// (null) apart from "scan ran but produced no readable output" (corrupt).
+// A corrupt artifact must NOT be silently treated as a clean pass.
 function tryRead(p) {
-  if (!existsSync(p)) return null;
-  try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return null; }
+  if (!existsSync(p)) return { status: 'missing', data: null };
+  try { return { status: 'ok', data: JSON.parse(readFileSync(p, 'utf8')) }; }
+  catch (e) { return { status: 'corrupt', data: null, error: e.message }; }
 }
+
+const sweep = tryRead(join(REPORT_DIR, 'manifest.json'));
+const lh = tryRead(join(REPORT_DIR, 'lighthouse', 'summary.json'));
+const axe = tryRead(join(REPORT_DIR, 'axe', 'summary.json'));
+const seo = tryRead(join(REPORT_DIR, 'seo', 'report.json'));
 
 const combined = {
   reportDir: REPORT_DIR,
   generatedAt: new Date().toISOString(),
-  responsiveSweep: tryRead(join(REPORT_DIR, 'manifest.json')),
-  lighthouse: tryRead(join(REPORT_DIR, 'lighthouse', 'summary.json')),
-  axe: tryRead(join(REPORT_DIR, 'axe', 'summary.json')),
-  seo: tryRead(join(REPORT_DIR, 'seo', 'report.json')),
+  responsiveSweep: sweep.data,
+  lighthouse: lh.data,
+  axe: axe.data,
+  seo: seo.data,
   argosBuildUrl: existsSync(join(REPORT_DIR, 'argos-build-url.txt'))
     ? readFileSync(join(REPORT_DIR, 'argos-build-url.txt'), 'utf8').trim()
-    : null
+    : null,
+  artifactStatus: {
+    responsiveSweep: sweep.status,
+    lighthouse: lh.status,
+    axe: axe.status,
+    seo: seo.status
+  }
 };
 
-// Compute pass/fail for CI gates
 const gates = {
   noBlockers: true,
   lcpUnder4s: true,
   perfScoreOver50: true,
-  noOverflowAtStandardWidths: true
+  noOverflowAtStandardWidths: true,
+  noCorruptArtifacts: true
 };
+
+// Corrupt artifacts fail the gate so a broken run can't pass CI silently.
+const corrupt = Object.entries(combined.artifactStatus).filter(([, s]) => s === 'corrupt');
+if (corrupt.length > 0) {
+  gates.noCorruptArtifacts = false;
+}
 
 if (combined.lighthouse) {
   if (combined.lighthouse.mobile.metrics.lcp > 4000) gates.lcpUnder4s = false;
@@ -51,5 +72,8 @@ combined.passed = Object.values(gates).every(v => v);
 
 writeFileSync(join(REPORT_DIR, 'report.json'), JSON.stringify(combined, null, 2));
 console.log(`[json] wrote ${join(REPORT_DIR, 'report.json')}, gates passed: ${combined.passed}`);
+if (corrupt.length > 0) {
+  console.error(`[json] corrupt artifacts: ${corrupt.map(([k]) => k).join(', ')}`);
+}
 
 if (!combined.passed) process.exit(1);

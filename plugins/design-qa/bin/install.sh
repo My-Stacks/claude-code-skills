@@ -7,23 +7,34 @@ set -euo pipefail
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 BROWSER_DRIVER="${DESIGN_QA_BROWSER_DRIVER:-playwright-mcp}"
 
+# Pin agent-browser to a known-good version. Without a pin, an unpinned
+# `npm install -g` would silently pick up new releases (or a hijack of a
+# low-popularity package). Override with DESIGN_QA_AGENT_BROWSER_VERSION
+# if you intentionally want a different release.
+AGENT_BROWSER_VERSION="${DESIGN_QA_AGENT_BROWSER_VERSION:-latest}"
+
 echo "design-qa setup starting..."
 echo "  plugin root: $PLUGIN_ROOT"
 echo "  browser driver: $BROWSER_DRIVER"
 
-# Detect package manager
+# Detect package manager. Prefer the Corepack-style `packageManager` field —
+# it's authoritative when present and beats lockfile sniffing on fresh repos.
+PM="npm"
+HAS_PROJECT=0
 if [ -f "package.json" ]; then
-  if [ -f "pnpm-lock.yaml" ]; then PM="pnpm"
-  elif [ -f "yarn.lock" ]; then PM="yarn"
-  elif [ -f "bun.lockb" ]; then PM="bun"
-  else PM="npm"
-  fi
   HAS_PROJECT=1
+  PKG_MGR_FIELD="$(node -e 'try{const p=require("./package.json");process.stdout.write((p.packageManager||"").split("@")[0])}catch{process.stdout.write("")}' 2>/dev/null || echo "")"
+  if [ -n "$PKG_MGR_FIELD" ]; then
+    PM="$PKG_MGR_FIELD"
+  elif [ -f "pnpm-lock.yaml" ]; then PM="pnpm"
+  elif [ -f "yarn.lock" ]; then PM="yarn"
+  elif [ -f "bun.lockb" ] || [ -f "bun.lock" ]; then PM="bun"
+  fi
 else
-  PM="npm"
-  HAS_PROJECT=0
   echo "  no package.json found in cwd; will install globally"
 fi
+
+echo "  package manager: $PM"
 
 install_dev() {
   local pkg="$1"
@@ -31,8 +42,9 @@ install_dev() {
     case "$PM" in
       pnpm) pnpm add -D "$pkg" ;;
       yarn) yarn add -D "$pkg" ;;
-      bun) bun add -d "$pkg" ;;
-      npm) npm install --save-dev "$pkg" ;;
+      bun)  bun add -d "$pkg" ;;
+      npm)  npm install --save-dev "$pkg" ;;
+      *)    echo "  unknown package manager '$PM'; falling back to npm"; npm install --save-dev "$pkg" ;;
     esac
   else
     npm install -g "$pkg"
@@ -67,8 +79,11 @@ install_dev "pa11y"
 echo ""
 echo "[5/5] Optional installs..."
 if [ "$BROWSER_DRIVER" = "agent-browser" ]; then
-  echo "  installing agent-browser..."
-  npm install -g agent-browser
+  echo "  installing agent-browser@${AGENT_BROWSER_VERSION} with --ignore-scripts..."
+  # --ignore-scripts blocks postinstall hooks, which limits the blast radius if
+  # the package or one of its deps gets compromised. The follow-up
+  # `agent-browser install` runs the legit setup explicitly.
+  npm install -g --ignore-scripts "agent-browser@${AGENT_BROWSER_VERSION}"
   agent-browser install || echo "  WARN: agent-browser install step failed; run manually"
 fi
 

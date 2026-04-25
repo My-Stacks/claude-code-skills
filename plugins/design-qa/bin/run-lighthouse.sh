@@ -13,6 +13,7 @@ mkdir -p "$REPORT_DIR/lighthouse/mobile" "$REPORT_DIR/lighthouse/desktop"
 echo "[lighthouse] url=$URL"
 
 DESIGN_QA_URL="$URL" \
+DESIGN_QA_BASE_URL="$URL" \
 DESIGN_QA_REPORT_DIR="$REPORT_DIR" \
 DESIGN_QA_BYPASS="${DESIGN_QA_BYPASS:-${VERCEL_AUTOMATION_BYPASS_SECRET:-}}" \
 node "$PLUGIN_ROOT/scripts/run-lighthouse.mjs"

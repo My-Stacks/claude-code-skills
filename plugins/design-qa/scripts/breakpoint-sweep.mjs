@@ -4,7 +4,7 @@
 
 import { chromium, devices } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 const URL = process.env.DESIGN_QA_URL;
 const PRESET = process.env.DESIGN_QA_PRESET || 'agency-default';
@@ -13,6 +13,13 @@ const BYPASS = process.env.DESIGN_QA_BYPASS || '';
 
 if (!URL) {
   console.error('DESIGN_QA_URL is required');
+  process.exit(1);
+}
+
+const cwd = process.cwd();
+const resolvedReportDir = resolve(cwd, REPORT_DIR);
+if (!resolvedReportDir.startsWith(cwd + '/') && resolvedReportDir !== cwd) {
+  console.error(`DESIGN_QA_REPORT_DIR must stay inside the workspace; got ${resolvedReportDir}`);
   process.exit(1);
 }
 
@@ -106,7 +113,7 @@ for (const w of widths) {
 
     try {
       await page.goto(URL, { waitUntil: 'networkidle', timeout: 30000 });
-      await page.evaluate(() => document.fonts.ready);
+      await page.evaluate(() => (document.fonts?.ready ?? Promise.resolve()));
 
       // Disable animations for stability
       await page.addStyleTag({

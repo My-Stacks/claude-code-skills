@@ -4,7 +4,7 @@
 import { chromium } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 const URL = process.env.DESIGN_QA_URL;
 const REPORT_DIR = process.env.DESIGN_QA_REPORT_DIR;
@@ -15,7 +15,16 @@ if (!URL || !REPORT_DIR) {
   process.exit(1);
 }
 
-const REVIEWER_PATH = join(process.cwd(), '.claude/design-qa/reviewer.json');
+const cwd = process.cwd();
+const resolvedReportDir = resolve(cwd, REPORT_DIR);
+if (!resolvedReportDir.startsWith(cwd + '/') && resolvedReportDir !== cwd) {
+  console.error(`DESIGN_QA_REPORT_DIR must stay inside the workspace; got ${resolvedReportDir}`);
+  process.exit(1);
+}
+
+mkdirSync(join(REPORT_DIR, 'axe'), { recursive: true });
+
+const REVIEWER_PATH = join(cwd, '.claude/design-qa/reviewer.json');
 let excludeRules = [];
 if (existsSync(REVIEWER_PATH)) {
   try {
@@ -25,6 +34,10 @@ if (existsSync(REVIEWER_PATH)) {
     console.warn(`[axe] could not parse reviewer.json: ${e.message}`);
   }
 }
+
+// Apply the same WCAG tag set on every pass — hover/focus regressions in 2.1/2.2
+// rules were silently dropped before because their tags weren't requested.
+const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'];
 
 const widths = [
   { w: 375, h: 812, label: 'mobile' },
@@ -36,6 +49,11 @@ const themes = [
   { name: 'light', colorScheme: 'light' },
   { name: 'dark', colorScheme: 'dark' }
 ];
+
+// Stable, collision-proof key for a (rule, node-target) pair. The previous
+// `target.join(',')` collapsed when CSS selectors themselves contained commas
+// (e.g. `:is(a, button)`), silently merging unrelated findings.
+const findingKey = (ruleId, target) => `${ruleId}|${JSON.stringify(target)}`;
 
 const allFindings = [];
 const browser = await chromium.launch({ headless: true });
@@ -56,11 +74,10 @@ for (const { w, h, label } of widths) {
 
     try {
       await page.goto(URL, { waitUntil: 'networkidle', timeout: 30000 });
-      await page.evaluate(() => document.fonts.ready);
+      await page.evaluate(() => (document.fonts?.ready ?? Promise.resolve()));
 
       // 1. Default-state scan
-      const defaultBuilder = new AxeBuilder({ page })
-        .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice']);
+      const defaultBuilder = new AxeBuilder({ page }).withTags(WCAG_TAGS);
       if (excludeRules.length > 0) defaultBuilder.disableRules(excludeRules);
       const defaultResult = await defaultBuilder.analyze();
 
@@ -69,7 +86,11 @@ for (const { w, h, label } of widths) {
         JSON.stringify(defaultResult, null, 2)
       );
 
+      const defaultKeys = new Set();
       for (const v of defaultResult.violations) {
+        for (const node of v.nodes) {
+          defaultKeys.add(findingKey(v.id, node.target));
+        }
         allFindings.push({ ...v, viewport: label, theme: theme.name, state: 'default' });
       }
 
@@ -84,8 +105,7 @@ for (const { w, h, label } of widths) {
         } catch { /* element may have disappeared; ignore */ }
       }
 
-      const hoverBuilder = new AxeBuilder({ page })
-        .withTags(['wcag2a', 'wcag2aa', 'wcag22aa']);
+      const hoverBuilder = new AxeBuilder({ page }).withTags(WCAG_TAGS);
       if (excludeRules.length > 0) hoverBuilder.disableRules(excludeRules);
       const hoverResult = await hoverBuilder.analyze();
 
@@ -94,12 +114,13 @@ for (const { w, h, label } of widths) {
         JSON.stringify(hoverResult, null, 2)
       );
 
-      // Only surface NEW violations introduced by hover state
-      const defaultIds = new Set(defaultResult.violations.flatMap(v => v.nodes.map(n => v.id + '|' + n.target.join(','))));
+      // Hover-only = violations not seen in the default-state scan.
+      const hoverKeys = new Set();
       for (const v of hoverResult.violations) {
         for (const node of v.nodes) {
-          const id = v.id + '|' + node.target.join(',');
-          if (!defaultIds.has(id)) {
+          const key = findingKey(v.id, node.target);
+          hoverKeys.add(key);
+          if (!defaultKeys.has(key)) {
             allFindings.push({ id: v.id, impact: v.impact, description: v.description, helpUrl: v.helpUrl, nodes: [node], viewport: label, theme: theme.name, state: 'hover' });
           }
         }
@@ -111,8 +132,7 @@ for (const { w, h, label } of widths) {
         await page.waitForTimeout(30);
       }
 
-      const focusBuilder = new AxeBuilder({ page })
-        .withTags(['wcag2a', 'wcag2aa', 'wcag22aa']);
+      const focusBuilder = new AxeBuilder({ page }).withTags(WCAG_TAGS);
       if (excludeRules.length > 0) focusBuilder.disableRules(excludeRules);
       const focusResult = await focusBuilder.analyze();
 
@@ -121,10 +141,13 @@ for (const { w, h, label } of widths) {
         JSON.stringify(focusResult, null, 2)
       );
 
+      // Focus-only = not in default AND not in hover. Without comparing to
+      // hover, "focus-only" findings labelled as such included things that
+      // were really hover regressions visible during the focus pass too.
       for (const v of focusResult.violations) {
         for (const node of v.nodes) {
-          const id = v.id + '|' + node.target.join(',');
-          if (!defaultIds.has(id)) {
+          const key = findingKey(v.id, node.target);
+          if (!defaultKeys.has(key) && !hoverKeys.has(key)) {
             allFindings.push({ id: v.id, impact: v.impact, description: v.description, helpUrl: v.helpUrl, nodes: [node], viewport: label, theme: theme.name, state: 'focus' });
           }
         }
@@ -139,7 +162,6 @@ for (const { w, h, label } of widths) {
 
 await browser.close();
 
-// Aggregate
 const summary = {
   url: URL,
   totalFindings: allFindings.length,

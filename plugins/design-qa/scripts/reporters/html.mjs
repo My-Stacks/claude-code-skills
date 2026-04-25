@@ -93,7 +93,7 @@ ${axe ? `
   <p>Hover-state-only: ${axe.byState.hover} · Focus-state-only: ${axe.byState.focus}</p>
   ${axe.findings.slice(0, 10).map(f => `
     <div style="border-top: 1px solid #f0f0f0; padding: 8px 0; font-size: 13px;">
-      <span class="badge ${f.impact}">${f.impact}</span>
+      <span class="badge ${impactClass(f.impact)}">${escape(f.impact)}</span>
       <strong>${escape(f.id)}</strong> — ${escape(f.viewport)}/${escape(f.theme)}/${escape(f.state)}
       <div style="font-family: ui-monospace, monospace; color: #666; margin-top: 4px;">${escape(f.nodes?.[0]?.target?.[0] ?? '?')}</div>
     </div>
@@ -143,3 +143,8 @@ function num(v, d = 2) { return v == null ? '—' : v.toFixed(d); }
 function lhCls(v, good, bad) { if (v == null) return ''; if (v <= good) return 'ok'; if (v <= bad) return 'warn'; return 'bad'; }
 function scoreCls(s) { if (s >= 90) return 'ok'; if (s >= 50) return 'warn'; return 'bad'; }
 function escape(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+// Whitelist axe impact values before interpolating into a class attribute,
+// otherwise an attacker-controlled report could close the attribute and inject markup.
+function impactClass(impact) {
+  return ({ critical: 'crit', serious: 'serious', moderate: 'moderate', minor: 'minor' }[impact]) || 'minor';
+}

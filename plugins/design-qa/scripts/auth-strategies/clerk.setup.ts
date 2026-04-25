@@ -14,6 +14,7 @@
 
 import { test as setup, expect } from '@playwright/test';
 import { clerk, clerkSetup } from '@clerk/testing/playwright';
+import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 
 const authFile = path.join(__dirname, '.auth/user.json');
@@ -24,6 +25,8 @@ setup('authenticate via Clerk', async ({ page }) => {
   if (!process.env.DESIGN_QA_TEST_EMAIL || !process.env.DESIGN_QA_TEST_PASSWORD) {
     throw new Error('DESIGN_QA_TEST_EMAIL and DESIGN_QA_TEST_PASSWORD must be set');
   }
+
+  mkdirSync(path.dirname(authFile), { recursive: true });
 
   // Warn if email looks production-shaped
   const email = process.env.DESIGN_QA_TEST_EMAIL;

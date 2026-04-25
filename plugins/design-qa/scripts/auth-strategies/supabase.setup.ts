@@ -13,6 +13,7 @@
 
 import { test as setup } from '@playwright/test';
 import { createClient } from '@supabase/supabase-js';
+import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 
 const authFile = path.join(__dirname, '.auth/user.json');
@@ -28,22 +29,27 @@ setup('authenticate via Supabase Auth', async ({ page }) => {
     throw new Error('Missing required env vars. See file header for the list.');
   }
 
+  mkdirSync(path.dirname(authFile), { recursive: true });
+
   // Sign in via the Supabase JS client
   const supabase = createClient(supabaseUrl, anonKey);
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) throw error;
   if (!data.session) throw new Error('Supabase sign-in succeeded but session is null');
 
-  // Visit the app to establish origin, then inject the session into localStorage
-  // (Supabase JS client stores session under a key derived from the project URL)
-  await page.goto(baseUrl);
-  await page.evaluate(({ session, url }) => {
-    const projectId = new URL(url).hostname.split('.')[0];
-    const key = `sb-${projectId}-auth-token`;
-    localStorage.setItem(key, JSON.stringify(session));
-  }, { session: data.session, url: supabaseUrl });
+  // The Supabase JS client stores the session under a key derived from the
+  // project ref (the leftmost label of the hostname). This is the documented
+  // shape but breaks on custom Supabase domains — log the derived key so a
+  // failed login is easier to debug.
+  const projectId = new URL(supabaseUrl).hostname.split('.')[0];
+  const storageKey = `sb-${projectId}-auth-token`;
+  console.log(`[supabase-auth] storing session under localStorage key "${storageKey}"`);
 
-  // Reload to let the app pick up the session
+  await page.goto(baseUrl);
+  await page.evaluate(({ session, key }) => {
+    localStorage.setItem(key, JSON.stringify(session));
+  }, { session: data.session, key: storageKey });
+
   await page.reload();
 
   await page.context().storageState({ path: authFile });

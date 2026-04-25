@@ -2,30 +2,41 @@
 // run-seo.mjs — extract and validate SEO/OG/Twitter/JSON-LD/headings/alt.
 
 import { chromium } from '@playwright/test';
-import { writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 
-const URL = process.env.DESIGN_QA_URL;
+const URL_ENV = process.env.DESIGN_QA_URL;
 const REPORT_DIR = process.env.DESIGN_QA_REPORT_DIR;
 const BYPASS = process.env.DESIGN_QA_BYPASS || '';
 
-if (!URL || !REPORT_DIR) {
+if (!URL_ENV || !REPORT_DIR) {
   console.error('DESIGN_QA_URL and DESIGN_QA_REPORT_DIR are required');
   process.exit(1);
 }
 
+const cwd = process.cwd();
+const resolvedReportDir = resolve(cwd, REPORT_DIR);
+if (!resolvedReportDir.startsWith(cwd + '/') && resolvedReportDir !== cwd) {
+  console.error(`DESIGN_QA_REPORT_DIR must stay inside the workspace; got ${resolvedReportDir}`);
+  process.exit(1);
+}
+
+mkdirSync(join(REPORT_DIR, 'seo'), { recursive: true });
+
 const browser = await chromium.launch({ headless: true });
+const bypassHeaders = BYPASS ? {
+  'x-vercel-protection-bypass': BYPASS,
+  'x-vercel-set-bypass-cookie': 'true'
+} : {};
+
 const context = await browser.newContext({
   viewport: { width: 1440, height: 900 },
-  extraHTTPHeaders: BYPASS ? {
-    'x-vercel-protection-bypass': BYPASS,
-    'x-vercel-set-bypass-cookie': 'true'
-  } : {}
+  extraHTTPHeaders: bypassHeaders
 });
 const page = await context.newPage();
 
-console.log(`[seo] fetching ${URL}...`);
-await page.goto(URL, { waitUntil: 'networkidle', timeout: 30000 });
+console.log(`[seo] fetching ${URL_ENV.split('?')[0]}...`);
+await page.goto(URL_ENV, { waitUntil: 'networkidle', timeout: 30000 });
 
 const data = await page.evaluate(() => {
   const meta = (selector) => document.querySelector(selector)?.getAttribute('content') ?? null;
@@ -91,22 +102,77 @@ const data = await page.evaluate(() => {
 await context.close();
 await browser.close();
 
-// Validate og:image dimensions if present
+// Validate og:image: resolve relative URLs against the page URL, reuse the
+// bypass header on protected previews, cap size + redirects, and time out.
 if (data.og['og:image']) {
+  const OG_FETCH_TIMEOUT_MS = 8000;
+  const OG_MAX_BYTES = 10 * 1024 * 1024; // 10MB
+  const OG_MAX_REDIRECTS = 5;
+
+  let resolvedHref = data.og['og:image'];
   try {
-    const imgRes = await fetch(data.og['og:image']);
-    const buf = Buffer.from(await imgRes.arrayBuffer());
+    resolvedHref = new globalThis.URL(data.og['og:image'], URL_ENV).toString();
+  } catch {
+    // fall back to the raw value; fetch will surface the error
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), OG_FETCH_TIMEOUT_MS);
+
+  try {
+    let res;
+    let redirects = 0;
+    let nextUrl = resolvedHref;
+    while (true) {
+      res = await fetch(nextUrl, {
+        redirect: 'manual',
+        signal: controller.signal,
+        headers: bypassHeaders
+      });
+      if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
+        if (++redirects > OG_MAX_REDIRECTS) {
+          throw new Error(`og:image exceeded ${OG_MAX_REDIRECTS} redirects`);
+        }
+        nextUrl = new globalThis.URL(res.headers.get('location'), nextUrl).toString();
+        continue;
+      }
+      break;
+    }
+
+    const declaredSize = Number(res.headers.get('content-length') || 0);
+    if (declaredSize > OG_MAX_BYTES) {
+      throw new Error(`og:image too large: ${declaredSize} bytes (cap ${OG_MAX_BYTES})`);
+    }
+
+    // Stream-read with a hard cap so a chunked response can't OOM us.
+    let received = 0;
+    const reader = res.body?.getReader();
+    if (reader) {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        received += value.byteLength;
+        if (received > OG_MAX_BYTES) {
+          await reader.cancel();
+          throw new Error(`og:image stream exceeded cap ${OG_MAX_BYTES}`);
+        }
+      }
+    }
+
     data.og.imageActual = {
-      mime: imgRes.headers.get('content-type'),
-      size: buf.length,
-      reachable: imgRes.ok
+      mime: res.headers.get('content-type'),
+      size: received || declaredSize,
+      reachable: res.ok,
+      finalUrl: nextUrl,
+      redirects
     };
   } catch (e) {
     data.og.imageActual = { reachable: false, error: e.message };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
-// Build findings
 const findings = [];
 const add = (severity, category, message, detail) => findings.push({ severity, category, message, detail });
 
@@ -128,7 +194,6 @@ else if (data.viewport.includes('user-scalable=no') || data.viewport.includes('u
 
 if (!data.canonical) add('high', 'seo', 'Missing canonical URL', null);
 
-// OG
 const requiredOg = ['og:title', 'og:description', 'og:image', 'og:url', 'og:type'];
 for (const tag of requiredOg) {
   if (!data.og[tag]) add(tag === 'og:image' ? 'high' : 'medium', 'og', `Missing ${tag}`, null);
@@ -137,32 +202,27 @@ if (data.og.imageActual && !data.og.imageActual.reachable) {
   add('high', 'og', 'og:image URL not reachable', data.og['og:image']);
 }
 
-// Twitter Card
 if (!data.twitter['twitter:card']) add('medium', 'twitter', 'Missing twitter:card', null);
 
-// JSON-LD validity
 for (const ld of data.jsonLd) {
   if (!ld.valid) add('blocker', 'jsonld', 'Malformed JSON-LD block', ld.error);
 }
 
-// Headings
 if (data.headings.h1.length === 0) add('high', 'headings', 'No <h1> on page', null);
 else if (data.headings.h1.length > 1) add('high', 'headings', `Multiple <h1> tags (${data.headings.h1.length})`, data.headings.h1);
 
-// Images alt
 const missingAlt = data.images.filter(img => !img.hasAlt);
 if (missingAlt.length > 0) {
   add('medium', 'a11y', `${missingAlt.length} <img> without alt attribute`, missingAlt.map(i => i.src).slice(0, 5));
 }
 
-// Target=_blank without noopener
 const unsafeLinks = data.linksWithBlank.filter(l => !l.hasNoopener);
 if (unsafeLinks.length > 0) {
   add('medium', 'security', `${unsafeLinks.length} target="_blank" links missing rel="noopener"`, unsafeLinks.slice(0, 5));
 }
 
 const report = {
-  url: URL,
+  url: URL_ENV,
   scannedAt: new Date().toISOString(),
   data,
   findings,
