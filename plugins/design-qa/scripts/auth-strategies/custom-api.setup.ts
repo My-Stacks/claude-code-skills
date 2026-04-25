@@ -5,11 +5,13 @@
 // This is 10× faster than UI-based login and far less brittle.
 //
 // Prerequisites:
-// 1. The app must accept email/password (or token) at a known endpoint and return cookies.
+// 1. The app must accept email/password at a known endpoint and return cookies.
+//    (If you authenticate via token instead, fork this template — the v0.1
+//    shipped flow only handles credential-based login.)
 // 2. Set env vars:
 //    - DESIGN_QA_BASE_URL
-//    - DESIGN_QA_TEST_EMAIL (or DESIGN_QA_TEST_TOKEN)
-//    - DESIGN_QA_TEST_PASSWORD (if using credentials)
+//    - DESIGN_QA_TEST_EMAIL
+//    - DESIGN_QA_TEST_PASSWORD
 
 import { test as setup } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
@@ -36,7 +38,10 @@ setup('authenticate via custom API', async ({ playwright }) => {
     });
 
     if (!response.ok()) {
-      throw new Error(`Login failed: ${response.status()} ${await response.text()}`);
+      // Don't include response.text() — login endpoints often echo the
+      // submitted credentials, set-cookie material, or internal stack traces
+      // back in the error body. Status alone is enough to debug.
+      throw new Error(`Login failed: ${response.status()}`);
     }
 
     await ctx.storageState({ path: authFile });

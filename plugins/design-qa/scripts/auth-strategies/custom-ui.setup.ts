@@ -18,9 +18,17 @@ import path from 'node:path';
 
 const authFile = path.join(__dirname, '.auth/user.json');
 
+// Normalise loginPath to a clean leading-slash form with no query/fragment so
+// the success check compares like-for-like against `url.pathname`.
+const normalizeLoginPath = (raw: string): string => {
+  const withSlash = raw.startsWith('/') ? raw : `/${raw}`;
+  const withoutQuery = withSlash.split('?')[0].split('#')[0];
+  return withoutQuery.length > 1 ? withoutQuery.replace(/\/+$/, '') : withoutQuery;
+};
+
 setup('authenticate via UI', async ({ page }) => {
   const baseUrl = process.env.DESIGN_QA_BASE_URL;
-  const loginPath = process.env.DESIGN_QA_LOGIN_PATH ?? '/login';
+  const loginPath = normalizeLoginPath(process.env.DESIGN_QA_LOGIN_PATH ?? '/login');
   const email = process.env.DESIGN_QA_TEST_EMAIL;
   const password = process.env.DESIGN_QA_TEST_PASSWORD;
   if (!baseUrl) throw new Error('DESIGN_QA_BASE_URL must be set');
@@ -41,7 +49,7 @@ setup('authenticate via UI', async ({ page }) => {
   // Examples:
   //   await page.waitForURL(`${baseUrl}/dashboard`);
   //   await expect(page.locator('[data-testid="user-menu"]')).toBeVisible();
-  await page.waitForURL(url => !url.pathname.startsWith(loginPath), { timeout: 10000 });
+  await page.waitForURL(url => url.pathname !== loginPath, { timeout: 10000 });
 
   await page.context().storageState({ path: authFile });
 });

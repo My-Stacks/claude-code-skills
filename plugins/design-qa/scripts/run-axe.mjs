@@ -86,12 +86,24 @@ for (const { w, h, label } of widths) {
         JSON.stringify(defaultResult, null, 2)
       );
 
+      // Push one entry per (violation × node) so the default-state count is
+      // counted the same way as hover/focus — otherwise impact tallies in the
+      // summary mix violation-level and node-level entries.
       const defaultKeys = new Set();
       for (const v of defaultResult.violations) {
         for (const node of v.nodes) {
           defaultKeys.add(findingKey(v.id, node.target));
+          allFindings.push({
+            id: v.id,
+            impact: v.impact,
+            description: v.description,
+            helpUrl: v.helpUrl,
+            nodes: [node],
+            viewport: label,
+            theme: theme.name,
+            state: 'default'
+          });
         }
-        allFindings.push({ ...v, viewport: label, theme: theme.name, state: 'default' });
       }
 
       // 2. Hover state — sample first 10 interactive elements

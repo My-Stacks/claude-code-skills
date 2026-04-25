@@ -14,7 +14,7 @@ Run Lighthouse against `$1`.
 2. Parse the JSON. Surface:
    - LCP, INP, CLS, TBT, FCP — actual numbers, with green/yellow/red thresholds.
    - Performance / Accessibility / Best Practices / SEO scores.
-   - Top 3 opportunities (render-blocking, unused JS, oversized images, etc.) with byte-cost.
+   - Top 5 opportunities (render-blocking, unused JS, oversized images, etc.) with byte-cost.
 3. Report as a markdown table with mobile and desktop columns side-by-side.
 4. Severity:
    - **Blocker:** LCP > 4s, performance score < 50, CLS > 0.25.

@@ -25,7 +25,7 @@ const html = `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Design QA: ${sweep?.url ?? 'Report'}</title>
+<title>Design QA: ${escape(sweep?.url ?? 'Report')}</title>
 <style>
   * { box-sizing: border-box; }
   body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; color: #111; background: #fafafa; margin: 0; padding: 0; }
@@ -57,7 +57,7 @@ const html = `<!doctype html>
 <body>
 <header>
   <h1>Design QA Report</h1>
-  <div class="url">${sweep?.url ?? 'no url captured'}</div>
+  <div class="url">${escape(sweep?.url ?? 'no url captured')}</div>
   <div class="url" style="margin-top: 8px; font-size: 11px;">Generated ${new Date().toISOString()}</div>
 </header>
 

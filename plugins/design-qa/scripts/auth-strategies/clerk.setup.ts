@@ -28,10 +28,15 @@ setup('authenticate via Clerk', async ({ page }) => {
 
   mkdirSync(path.dirname(authFile), { recursive: true });
 
-  // Warn if email looks production-shaped
-  const email = process.env.DESIGN_QA_TEST_EMAIL;
+  // Warn if email looks production-shaped. Mask the local part in the log so
+  // we don't echo full account identifiers.
+  const email = process.env.DESIGN_QA_TEST_EMAIL!;
   if (!email.includes('+test') && !email.includes('+qa') && !email.match(/^test/i)) {
-    console.warn(`[auth] WARNING: ${email} does not look like a test account. Use a test user.`);
+    const at = email.indexOf('@');
+    const masked = at > 0
+      ? `${email[0]}***${email.slice(at)}`
+      : '***';
+    console.warn(`[auth] WARNING: ${masked} does not look like a test account. Use a test user.`);
   }
 
   await page.goto(process.env.DESIGN_QA_BASE_URL ?? 'http://localhost:3000');

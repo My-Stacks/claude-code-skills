@@ -59,7 +59,7 @@ Run Lighthouse with mobile profile (Moto G Power, Slow 4G, 4× CPU) and desktop 
 
 ### Phase 5: SEO & meta
 
-Extract: `<title>`, meta description, canonical, `<html lang>`, viewport meta, all `og:*`, all `twitter:*`, all JSON-LD blocks. Validate JSON-LD parses as JSON. Fetch `og:image` to verify it's reachable — apply a timeout (~8s), a redirect cap (~5), and a size cap (~10MB) to stop slow or huge responses from stalling the run, and pass the same bypass header as the page request when scanning protected previews. Recommended dimensions are 1200×630 for `og:image` and 1200×675 for Twitter `summary_large_image`; check manually if the value isn't obvious from the URL.
+Extract: `<title>`, meta description, canonical, `<html lang>`, viewport meta, all `og:*`, all `twitter:*`, all JSON-LD blocks. Validate JSON-LD parses as JSON. Fetch `og:image` to verify it's reachable — apply a timeout (~8s), a redirect cap (~5), and a size cap (~10MB) to stop slow or huge responses from stalling the run. **Only forward the bypass header to same-origin og:image URLs**; if og:image points to a CDN or third-party host, fetch without the secret so it doesn't leak to that origin. Recommended dimensions are 1200×630 for `og:image` and 1200×675 for Twitter `summary_large_image`; check manually if the value isn't obvious from the URL.
 
 ### Phase 6: Visual regression
 

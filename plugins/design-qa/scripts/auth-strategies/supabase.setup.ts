@@ -25,8 +25,16 @@ setup('authenticate via Supabase Auth', async ({ page }) => {
   const password = process.env.DESIGN_QA_TEST_PASSWORD;
   const baseUrl = process.env.DESIGN_QA_BASE_URL;
 
-  if (!supabaseUrl || !anonKey || !email || !password || !baseUrl) {
-    throw new Error('Missing required env vars. See file header for the list.');
+  const required = {
+    DESIGN_QA_SUPABASE_URL: supabaseUrl,
+    DESIGN_QA_SUPABASE_ANON_KEY: anonKey,
+    DESIGN_QA_TEST_EMAIL: email,
+    DESIGN_QA_TEST_PASSWORD: password,
+    DESIGN_QA_BASE_URL: baseUrl
+  };
+  const missing = Object.entries(required).filter(([, v]) => !v).map(([k]) => k);
+  if (missing.length > 0) {
+    throw new Error(`Missing required env vars: ${missing.join(', ')}`);
   }
 
   mkdirSync(path.dirname(authFile), { recursive: true });
@@ -38,10 +46,14 @@ setup('authenticate via Supabase Auth', async ({ page }) => {
   if (!data.session) throw new Error('Supabase sign-in succeeded but session is null');
 
   // The Supabase JS client stores the session under a key derived from the
-  // project ref (the leftmost label of the hostname). This is the documented
-  // shape but breaks on custom Supabase domains — log the derived key so a
-  // failed login is easier to debug.
-  const projectId = new URL(supabaseUrl).hostname.split('.')[0];
+  // project ref. For the standard *.supabase.co host, that's the leftmost
+  // label of the hostname. For custom Supabase domains the leftmost label is
+  // not the project ref, so fall back to a deterministic, sanitised key based
+  // on the full hostname — guarantees uniqueness and a valid localStorage key.
+  const supabaseHost = new URL(supabaseUrl!).hostname;
+  const projectId = supabaseHost.endsWith('.supabase.co')
+    ? supabaseHost.split('.')[0]
+    : supabaseHost.replace(/[^a-zA-Z0-9_-]+/g, '-');
   const storageKey = `sb-${projectId}-auth-token`;
   console.log(`[supabase-auth] storing session under localStorage key "${storageKey}"`);
 

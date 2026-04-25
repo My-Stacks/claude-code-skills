@@ -30,7 +30,7 @@ You're validating the meta layer of a page: the bits that don't render visually 
 Required:
 - `og:title`
 - `og:description`
-- `og:image` — verify URL is reachable, MIME is `image/png|jpeg|webp`, dimensions are at minimum 1200×630.
+- `og:image` — runner verifies the URL is reachable (with timeout, redirect cap, and size cap). MIME and dimensions are extracted into the report data but not validated automatically; the recommended target of 1200×630 is a manual check.
 - `og:url`
 - `og:type` (`website`, `article`, `product`, etc.)
 
@@ -60,8 +60,8 @@ The runner (`run-seo.mjs`) parses every `<script type="application/ld+json">` bl
 
 ## Severity
 
-- **Blocker:** Missing `<title>`, missing `<html lang>`, malformed JSON-LD, og:image broken.
-- **High:** Missing meta description, missing og:image, missing canonical on a content page, missing viewport meta, multiple h1s.
+- **Blocker:** Missing `<title>`, missing `<html lang>`, malformed JSON-LD.
+- **High:** Missing meta description, missing og:image, og:image not reachable, missing canonical on a content page, missing viewport meta, multiple h1s.
 - **Medium:** Missing Twitter Card, suboptimal title/description length, og:image wrong dimensions, missing alt text.
 - **Nitpicks:** og:locale missing, JSON-LD missing optional fields, decorative images not marked aria-hidden.
 

@@ -35,16 +35,27 @@ const PRESETS = {
   ]
 };
 
-// Map widths to Playwright device descriptors when there's a meaningful match
+// Normalise Playwright device descriptors into the shape the run loop uses
+// (`dpr/mobile/touch/userAgent`). Without this, spreading `devices['iPhone SE']`
+// would deliver `deviceScaleFactor/isMobile/hasTouch` and the loop would read
+// `undefined` instead — silently dropping DPR + touch on those widths.
+const fromDevice = (d) => ({
+  viewport: d.viewport,
+  dpr: d.deviceScaleFactor,
+  mobile: d.isMobile,
+  touch: d.hasTouch,
+  userAgent: d.userAgent
+});
+
 const DEVICE_HINTS = {
-  280: { name: 'Galaxy Fold (folded)', viewport: { width: 280, height: 653 }, dpr: 3, mobile: true, touch: true, ua: devices['Galaxy Note 3']?.userAgent },
+  280: { name: 'Galaxy Fold (folded)', viewport: { width: 280, height: 653 }, dpr: 3, mobile: true, touch: true, userAgent: devices['Galaxy Note 3']?.userAgent },
   320: { name: 'iPhone SE 1st gen', viewport: { width: 320, height: 568 }, dpr: 2, mobile: true, touch: true },
   360: { name: 'Android baseline', viewport: { width: 360, height: 640 }, dpr: 3, mobile: true, touch: true },
-  375: { ...devices['iPhone SE'], name: 'iPhone SE / iPhone 8' },
-  390: { ...devices['iPhone 14 Pro'], name: 'iPhone 14 Pro' },
-  414: { ...devices['iPhone 11 Pro Max'], name: 'iPhone 11 Pro Max' },
-  768: { ...devices['iPad (gen 7)'], name: 'iPad portrait' },
-  834: { ...devices['iPad Pro 11'], name: 'iPad Pro 11" portrait' },
+  375: { name: 'iPhone SE / iPhone 8', ...fromDevice(devices['iPhone SE']) },
+  390: { name: 'iPhone 14 Pro', ...fromDevice(devices['iPhone 14 Pro']) },
+  414: { name: 'iPhone 11 Pro Max', ...fromDevice(devices['iPhone 11 Pro Max']) },
+  768: { name: 'iPad portrait', ...fromDevice(devices['iPad (gen 7)']) },
+  834: { name: 'iPad Pro 11" portrait', ...fromDevice(devices['iPad Pro 11']) },
   1024: { name: 'iPad landscape / small laptop', viewport: { width: 1024, height: 768 }, dpr: 2, mobile: false, touch: false },
   1280: { name: 'Laptop', viewport: { width: 1280, height: 800 }, dpr: 2, mobile: false, touch: false },
   1440: { name: 'Desktop', viewport: { width: 1440, height: 900 }, dpr: 2, mobile: false, touch: false },

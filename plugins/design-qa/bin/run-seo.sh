@@ -8,7 +8,8 @@ URL="${1:?usage: run-seo.sh <url>}"
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 REPORT_DIR="${DESIGN_QA_REPORT_DIR:-.claude/design-qa/reports/$(date -u +%Y%m%dT%H%M%SZ)}"
 
-mkdir -p "$REPORT_DIR/seo"
+# Don't mkdir at the wrapper layer — run-seo.mjs validates the path
+# (rejects anything that escapes the workspace) before creating directories.
 
 DESIGN_QA_URL="$URL" \
 DESIGN_QA_BASE_URL="$URL" \

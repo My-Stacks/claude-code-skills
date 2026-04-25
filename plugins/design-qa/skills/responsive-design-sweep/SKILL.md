@@ -12,18 +12,18 @@ You're capturing the responsive screenshot matrix for a design QA review.
 The matrix is determined by `${user_config.breakpointPreset}`:
 
 **`fast`** (5 widths × 1 theme = 5 screenshots):
-```
+```text
 375, 768, 1024, 1440, 1920
 ```
 
 **`agency-default`** (18 widths × 3 themes = 54 screenshots):
-```
+```text
 280, 320, 360, 375, 390, 414, 480, 600, 700, 768,
 834, 900, 1024, 1180, 1280, 1440, 1920, 2560
 ```
 
 **`thorough`** (21 widths × 3 themes = 63 screenshots):
-```
+```text
 agency-default + 384 (foldable outer), 3840 (4K)
 ```
 

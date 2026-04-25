@@ -7,10 +7,12 @@ set -euo pipefail
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 BROWSER_DRIVER="${DESIGN_QA_BROWSER_DRIVER:-playwright-mcp}"
 
-# Pin agent-browser to a known-good version. Without a pin, an unpinned
-# `npm install -g` would silently pick up new releases (or a hijack of a
-# low-popularity package). Override with DESIGN_QA_AGENT_BROWSER_VERSION
-# if you intentionally want a different release.
+# Resolve the agent-browser version. The default is `latest` so the install
+# stays usable out-of-the-box, but production-leaning users should pin to a
+# specific release by exporting DESIGN_QA_AGENT_BROWSER_VERSION before running
+# install.sh — that closes the supply-chain risk that comes with `latest` on a
+# low-popularity package. The install also runs with --ignore-scripts to limit
+# blast radius regardless of which version resolves.
 AGENT_BROWSER_VERSION="${DESIGN_QA_AGENT_BROWSER_VERSION:-latest}"
 
 echo "design-qa setup starting..."

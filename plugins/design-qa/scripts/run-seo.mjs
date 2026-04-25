@@ -14,6 +14,19 @@ if (!URL_ENV || !REPORT_DIR) {
   process.exit(1);
 }
 
+let parsedPageUrl;
+try {
+  parsedPageUrl = new globalThis.URL(URL_ENV);
+} catch {
+  console.error(`DESIGN_QA_URL is not a valid URL: ${URL_ENV}`);
+  process.exit(1);
+}
+if (parsedPageUrl.protocol !== 'http:' && parsedPageUrl.protocol !== 'https:') {
+  console.error(`DESIGN_QA_URL must be http(s); got ${parsedPageUrl.protocol}`);
+  process.exit(1);
+}
+const baseOrigin = parsedPageUrl.origin;
+
 const cwd = process.cwd();
 const resolvedReportDir = resolve(cwd, REPORT_DIR);
 if (!resolvedReportDir.startsWith(cwd + '/') && resolvedReportDir !== cwd) {
@@ -21,7 +34,7 @@ if (!resolvedReportDir.startsWith(cwd + '/') && resolvedReportDir !== cwd) {
   process.exit(1);
 }
 
-mkdirSync(join(REPORT_DIR, 'seo'), { recursive: true });
+mkdirSync(join(resolvedReportDir, 'seo'), { recursive: true });
 
 const browser = await chromium.launch({ headless: true });
 const bypassHeaders = BYPASS ? {
@@ -29,16 +42,19 @@ const bypassHeaders = BYPASS ? {
   'x-vercel-set-bypass-cookie': 'true'
 } : {};
 
-const context = await browser.newContext({
-  viewport: { width: 1440, height: 900 },
-  extraHTTPHeaders: bypassHeaders
-});
-const page = await context.newPage();
+let context;
+let data;
+try {
+  context = await browser.newContext({
+    viewport: { width: 1440, height: 900 },
+    extraHTTPHeaders: bypassHeaders
+  });
+  const page = await context.newPage();
 
-console.log(`[seo] fetching ${URL_ENV.split('?')[0]}...`);
-await page.goto(URL_ENV, { waitUntil: 'networkidle', timeout: 30000 });
+  console.log(`[seo] fetching ${URL_ENV.split('?')[0]}...`);
+  await page.goto(URL_ENV, { waitUntil: 'networkidle', timeout: 30000 });
 
-const data = await page.evaluate(() => {
+  data = await page.evaluate(() => {
   const meta = (selector) => document.querySelector(selector)?.getAttribute('content') ?? null;
   const attr = (selector, attribute) => document.querySelector(selector)?.getAttribute(attribute) ?? null;
 
@@ -97,10 +113,11 @@ const data = await page.evaluate(() => {
     linksWithBlank,
     favicon: attr('link[rel*="icon"]', 'href')
   };
-});
-
-await context.close();
-await browser.close();
+  });
+} finally {
+  if (context) await context.close().catch(() => {});
+  await browser.close().catch(() => {});
+}
 
 // Validate og:image: resolve relative URLs against the page URL, reuse the
 // bypass header on protected previews, cap size + redirects, and time out.
@@ -124,10 +141,14 @@ if (data.og['og:image']) {
     let redirects = 0;
     let nextUrl = resolvedHref;
     while (true) {
+      // Only forward the bypass header to same-origin requests; an og:image
+      // hosted on a CDN or third-party domain must NOT receive the secret.
+      const reqOrigin = new globalThis.URL(nextUrl).origin;
+      const reqHeaders = reqOrigin === baseOrigin ? bypassHeaders : {};
       res = await fetch(nextUrl, {
         redirect: 'manual',
         signal: controller.signal,
-        headers: bypassHeaders
+        headers: reqHeaders
       });
       if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
         if (++redirects > OG_MAX_REDIRECTS) {
@@ -237,7 +258,7 @@ const report = {
   }
 };
 
-writeFileSync(join(REPORT_DIR, 'seo', 'report.json'), JSON.stringify(report, null, 2));
+writeFileSync(join(resolvedReportDir, 'seo', 'report.json'), JSON.stringify(report, null, 2));
 
 console.log(`\n[seo] ${findings.length} findings:`);
 console.log(`  blockers: ${findings.filter(f => f.severity === 'blocker').length}`);

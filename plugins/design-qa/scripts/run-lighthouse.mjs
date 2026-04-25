@@ -68,7 +68,7 @@ async function runProfile(profile) {
       throw new Error(`Lighthouse returned no result for ${profile}`);
     }
 
-    const dir = join(REPORT_DIR, 'lighthouse', profile);
+    const dir = join(resolvedReportDir, 'lighthouse', profile);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'report.html'), runnerResult.report[0]);
     writeFileSync(join(dir, 'report.json'), runnerResult.report[1]);
@@ -103,15 +103,18 @@ async function runProfile(profile) {
   }
 }
 
-mkdirSync(join(REPORT_DIR, 'lighthouse'), { recursive: true });
+mkdirSync(join(resolvedReportDir, 'lighthouse'), { recursive: true });
 const results = {};
 results.mobile = await runProfile('mobile');
 results.desktop = await runProfile('desktop');
 
-writeFileSync(join(REPORT_DIR, 'lighthouse', 'summary.json'), JSON.stringify(results, null, 2));
+writeFileSync(join(resolvedReportDir, 'lighthouse', 'summary.json'), JSON.stringify(results, null, 2));
 
 console.log('\n[lighthouse] summary:');
 for (const [profile, r] of Object.entries(results)) {
   console.log(`  ${profile}: perf=${r.scores.performance} a11y=${r.scores.accessibility} bp=${r.scores.bestPractices} seo=${r.scores.seo}`);
-  console.log(`    LCP=${Math.round(r.metrics.lcp)}ms CLS=${r.metrics.cls?.toFixed(3)} TBT=${Math.round(r.metrics.tbt)}ms`);
+  const lcp = r.metrics.lcp != null ? `${Math.round(r.metrics.lcp)}ms` : '—';
+  const cls = r.metrics.cls != null ? r.metrics.cls.toFixed(3) : '—';
+  const tbt = r.metrics.tbt != null ? `${Math.round(r.metrics.tbt)}ms` : '—';
+  console.log(`    LCP=${lcp} CLS=${cls} TBT=${tbt}`);
 }

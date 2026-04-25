@@ -17,24 +17,26 @@ const url = tryRead(join(REPORT_DIR, 'manifest.json'))?.url || 'unknown';
 sections.push(`# Design QA: ${url}`);
 sections.push(`*Reviewed ${new Date().toISOString()} · report: ${REPORT_DIR}*\n`);
 
-// Lighthouse
+// Lighthouse — guard each profile so a mobile-only or desktop-only run still renders
 const lh = tryRead(join(REPORT_DIR, 'lighthouse', 'summary.json'));
 if (lh) {
+  const m = lh.mobile ?? { metrics: {}, scores: {}, opportunities: [] };
+  const d = lh.desktop ?? { metrics: {}, scores: {}, opportunities: [] };
   sections.push('## Core Web Vitals\n');
   sections.push('| Metric | Mobile | Desktop |');
   sections.push('|---|---|---|');
-  sections.push(`| LCP | ${ms(lh.mobile.metrics.lcp)} ${flag(lh.mobile.metrics.lcp, 2500, 4000)} | ${ms(lh.desktop.metrics.lcp)} ${flag(lh.desktop.metrics.lcp, 2500, 4000)} |`);
-  sections.push(`| INP | ${ms(lh.mobile.metrics.inp)} | ${ms(lh.desktop.metrics.inp)} |`);
-  sections.push(`| CLS | ${num(lh.mobile.metrics.cls, 3)} ${flag(lh.mobile.metrics.cls, 0.1, 0.25)} | ${num(lh.desktop.metrics.cls, 3)} ${flag(lh.desktop.metrics.cls, 0.1, 0.25)} |`);
-  sections.push(`| TBT | ${ms(lh.mobile.metrics.tbt)} | ${ms(lh.desktop.metrics.tbt)} |`);
-  sections.push(`| Perf | ${lh.mobile.scores.performance} ${scoreFlag(lh.mobile.scores.performance)} | ${lh.desktop.scores.performance} ${scoreFlag(lh.desktop.scores.performance)} |`);
-  sections.push(`| A11y | ${lh.mobile.scores.accessibility} ${scoreFlag(lh.mobile.scores.accessibility)} | ${lh.desktop.scores.accessibility} ${scoreFlag(lh.desktop.scores.accessibility)} |`);
-  sections.push(`| BP | ${lh.mobile.scores.bestPractices} | ${lh.desktop.scores.bestPractices} |`);
-  sections.push(`| SEO | ${lh.mobile.scores.seo} | ${lh.desktop.scores.seo} |`);
+  sections.push(`| LCP | ${ms(m.metrics.lcp)} ${flag(m.metrics.lcp, 2500, 4000)} | ${ms(d.metrics.lcp)} ${flag(d.metrics.lcp, 2500, 4000)} |`);
+  sections.push(`| INP | ${ms(m.metrics.inp)} | ${ms(d.metrics.inp)} |`);
+  sections.push(`| CLS | ${num(m.metrics.cls, 3)} ${flag(m.metrics.cls, 0.1, 0.25)} | ${num(d.metrics.cls, 3)} ${flag(d.metrics.cls, 0.1, 0.25)} |`);
+  sections.push(`| TBT | ${ms(m.metrics.tbt)} | ${ms(d.metrics.tbt)} |`);
+  sections.push(`| Perf | ${m.scores.performance ?? '—'} ${scoreFlag(m.scores.performance)} | ${d.scores.performance ?? '—'} ${scoreFlag(d.scores.performance)} |`);
+  sections.push(`| A11y | ${m.scores.accessibility ?? '—'} ${scoreFlag(m.scores.accessibility)} | ${d.scores.accessibility ?? '—'} ${scoreFlag(d.scores.accessibility)} |`);
+  sections.push(`| BP | ${m.scores.bestPractices ?? '—'} | ${d.scores.bestPractices ?? '—'} |`);
+  sections.push(`| SEO | ${m.scores.seo ?? '—'} | ${d.scores.seo ?? '—'} |`);
 
-  if (lh.mobile.opportunities?.length > 0) {
+  if (m.opportunities?.length > 0) {
     sections.push('\n### Top mobile opportunities');
-    lh.mobile.opportunities.slice(0, 3).forEach(o => {
+    m.opportunities.slice(0, 5).forEach(o => {
       sections.push(`- **${o.title}** — ${ms(o.savingsMs)} savings${o.savingsBytes ? ` (${kb(o.savingsBytes)})` : ''}`);
     });
   }
