@@ -23,29 +23,33 @@ if (lh) {
   const m = lh.mobile ?? { metrics: {}, scores: {}, opportunities: [] };
   const d = lh.desktop ?? { metrics: {}, scores: {}, opportunities: [] };
   const mobileSuspect = lh.mobile?.instrumentationSuspect === true;
-  const suspectMark = (metric) =>
-    mobileSuspect && (lh.mobile?.suspectMetrics || []).includes(metric) ? ' ⚠️' : '';
+  const suspectMetrics = new Set(lh.mobile?.suspectMetrics || []);
+  const suspectMark = (metric) => suspectMetrics.has(metric) ? ' ⚠️' : '';
+  // For suspect metrics, omit the threshold flag — keeping ❌ next to ⚠️
+  // reads as "still failing the gate" when in fact we've demoted the metric.
+  const mobileFlag = (metric, value, good, bad) =>
+    suspectMetrics.has(metric) ? '' : flag(value, good, bad);
 
   sections.push('## Core Web Vitals\n');
   if (mobileSuspect) {
-    sections.push(`> ⚠️ **Mobile metrics flagged instrumentation-suspect** (${(lh.mobile.suspectMetrics || []).join(', ')} > 8× desktop). ${lh.mobile.suspectNote || 'Consider re-running with Lighthouse blockedUrlPatterns for known-flaky third-parties before treating mobile as authoritative.'}`);
+    sections.push(`> ⚠️ **Mobile metrics flagged instrumentation-suspect** (${escapeMd((lh.mobile.suspectMetrics || []).join(', '))} > 8× desktop). ${escapeMd(lh.mobile.suspectNote || 'Consider re-running with Lighthouse blockedUrlPatterns for known-flaky third-parties before treating mobile as authoritative.')}`);
     sections.push('');
   }
   sections.push('| Metric | Mobile | Desktop |');
   sections.push('|---|---|---|');
-  sections.push(`| LCP | ${ms(m.metrics.lcp)}${suspectMark('lcp')} ${flag(m.metrics.lcp, 2500, 4000)} | ${ms(d.metrics.lcp)} ${flag(d.metrics.lcp, 2500, 4000)} |`);
+  sections.push(`| LCP | ${ms(m.metrics.lcp)}${suspectMark('lcp')} ${mobileFlag('lcp', m.metrics.lcp, 2500, 4000)} | ${ms(d.metrics.lcp)} ${flag(d.metrics.lcp, 2500, 4000)} |`);
   sections.push(`| INP | ${ms(m.metrics.inp)} | ${ms(d.metrics.inp)} |`);
-  sections.push(`| CLS | ${num(m.metrics.cls, 3)} ${flag(m.metrics.cls, 0.1, 0.25)} | ${num(d.metrics.cls, 3)} ${flag(d.metrics.cls, 0.1, 0.25)} |`);
-  sections.push(`| TBT | ${ms(m.metrics.tbt)}${suspectMark('tbt')} | ${ms(d.metrics.tbt)} |`);
-  sections.push(`| Perf | ${m.scores.performance ?? '—'} ${scoreFlag(m.scores.performance)} | ${d.scores.performance ?? '—'} ${scoreFlag(d.scores.performance)} |`);
-  sections.push(`| A11y | ${m.scores.accessibility ?? '—'} ${scoreFlag(m.scores.accessibility)} | ${d.scores.accessibility ?? '—'} ${scoreFlag(d.scores.accessibility)} |`);
+  sections.push(`| CLS | ${num(m.metrics.cls, 3)} ${mobileFlag('cls', m.metrics.cls, 0.1, 0.25)} | ${num(d.metrics.cls, 3)} ${flag(d.metrics.cls, 0.1, 0.25)} |`);
+  sections.push(`| TBT | ${ms(m.metrics.tbt)}${suspectMark('tbt')} ${mobileFlag('tbt', m.metrics.tbt, 200, 600)} | ${ms(d.metrics.tbt)} ${flag(d.metrics.tbt, 200, 600)} |`);
+  sections.push(`| Perf | ${m.scores.performance ?? '—'} ${m.scores.performance == null || mobileSuspect ? '' : scoreFlag(m.scores.performance)} | ${d.scores.performance ?? '—'} ${d.scores.performance == null ? '' : scoreFlag(d.scores.performance)} |`);
+  sections.push(`| A11y | ${m.scores.accessibility ?? '—'} ${m.scores.accessibility == null ? '' : scoreFlag(m.scores.accessibility)} | ${d.scores.accessibility ?? '—'} ${d.scores.accessibility == null ? '' : scoreFlag(d.scores.accessibility)} |`);
   sections.push(`| BP | ${m.scores.bestPractices ?? '—'} | ${d.scores.bestPractices ?? '—'} |`);
   sections.push(`| SEO | ${m.scores.seo ?? '—'} | ${d.scores.seo ?? '—'} |`);
 
   if (m.opportunities?.length > 0) {
     sections.push('\n### Top mobile opportunities');
     m.opportunities.slice(0, 5).forEach(o => {
-      sections.push(`- **${o.title}** — ${ms(o.savingsMs)} savings${o.savingsBytes ? ` (${kb(o.savingsBytes)})` : ''}`);
+      sections.push(`- **${escapeMd(o.title)}** — ${ms(o.savingsMs)} savings${o.savingsBytes ? ` (${kb(o.savingsBytes)})` : ''}`);
     });
   }
 }
@@ -81,16 +85,16 @@ if (sweep) {
       byType[a.type].push(a);
     }
     for (const [type, items] of Object.entries(byType)) {
-      sections.push(`**${type}** (${items.length})`);
+      sections.push(`**${escapeMd(type)}** (${items.length})`);
       for (const a of items.slice(0, 5)) {
-        sections.push(`- [${a.severity}] ${a.width}px/${a.theme}: ${a.message}`);
+        sections.push(`- [${escapeMd(a.severity)}] ${a.width}px/${escapeMd(a.theme)}: ${escapeMd(a.message)}`);
       }
       if (items.length > 5) sections.push(`- … and ${items.length - 5} more`);
     }
     if (deltaAnomalies.length > 0) {
       sections.push('**breakpoint-delta** (cross-breakpoint)');
       for (const d of deltaAnomalies.slice(0, 5)) {
-        sections.push(`- [${d.severity}] ${d.message}`);
+        sections.push(`- [${escapeMd(d.severity)}] ${escapeMd(d.message)}`);
       }
       if (deltaAnomalies.length > 5) sections.push(`- … and ${deltaAnomalies.length - 5} more`);
     }
@@ -159,3 +163,9 @@ function kb(b) { return b == null ? '—' : `${Math.round(b / 1024)}KB`; }
 function flag(v, good, bad) { if (v == null) return ''; if (v <= good) return '✅'; if (v <= bad) return '⚠️'; return '❌'; }
 function scoreFlag(s) { if (s >= 90) return '✅'; if (s >= 50) return '⚠️'; return '❌'; }
 function truncate(s) { const str = typeof s === 'string' ? s : JSON.stringify(s); return str.length > 80 ? str.slice(0, 77) + '...' : str; }
+// Escape Markdown metacharacters in dynamic strings (suspect notes, anomaly
+// messages, opportunity titles, etc.) so a class/id that happens to contain
+// `*` or `>` doesn't break the surrounding blockquote/list formatting.
+function escapeMd(s) {
+  return String(s ?? '').replace(/([\\`*_{}\[\]()#+\-!|>])/g, '\\$1');
+}

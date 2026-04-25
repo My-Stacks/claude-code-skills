@@ -71,13 +71,6 @@ async function runProfileMode(profile) {
     process.exit(1);
   }
 
-  const extraHeaders = BYPASS
-    ? {
-        'x-vercel-protection-bypass': BYPASS,
-        'x-vercel-set-bypass-cookie': 'true'
-      }
-    : {};
-
   // Lazy-import here so --merge mode doesn't load chrome-launcher unnecessarily.
   const lighthouse = (await import('lighthouse')).default;
   const chromeLauncher = await import('chrome-launcher');
@@ -85,13 +78,23 @@ async function runProfileMode(profile) {
   const chrome = await chromeLauncher.launch({ chromeFlags: ['--headless=new', '--no-sandbox'] });
   let result;
   try {
+    // When the target is a protected Vercel preview, we DO NOT pass the bypass
+    // secret to Lighthouse via `extraHeaders`. Lighthouse's extraHeaders applies
+    // to *every* network request the audit makes — including third-party
+    // subresources (analytics, fonts, etc.) — which would leak the secret
+    // cross-origin. Instead, bootstrap a Vercel bypass cookie on the same Chrome
+    // instance via CDP. The cookie is origin-scoped by Chrome, so third parties
+    // don't see it, and Vercel honors the cookie for the whole session.
+    if (BYPASS) {
+      await bootstrapBypassCookie(chrome.port, parsedUrl, BYPASS);
+    }
+
     const options = {
       logLevel: 'error',
       output: ['html', 'json'],
       onlyCategories: ['performance', 'accessibility', 'best-practices', 'seo'],
       port: chrome.port,
       formFactor: profile,
-      extraHeaders,
       screenEmulation: profile === 'mobile'
         ? { mobile: true, width: 412, height: 823, deviceScaleFactor: 1.75, disabled: false }
         : { mobile: false, width: 1350, height: 940, deviceScaleFactor: 1, disabled: false },
@@ -200,4 +203,114 @@ function readResult(p) {
     console.warn(`[lighthouse] could not parse ${p}: ${e.message}`);
     return null;
   }
+}
+
+// Bootstrap the Vercel bypass cookie on Chrome via CDP, so the secret never
+// reaches third-party origins via Lighthouse's `extraHeaders`. The flow:
+//   1. Make a same-origin GET to the target URL with the bypass header — this
+//      one request *does* carry the secret, but only to the target origin.
+//      Vercel responds with a Set-Cookie that grants bypass for the session.
+//   2. Walk every Set-Cookie from that response and inject it into Chrome via
+//      `Network.setCookie` against the target hostname. Chrome's origin model
+//      then keeps the cookie scoped — third-party subresources won't see it.
+//   3. Lighthouse runs with empty extraHeaders. The audit inherits the cookie
+//      via Chrome's normal cookie handling.
+async function bootstrapBypassCookie(chromePort, parsedUrl, bypass) {
+  // Use Node's built-in WebSocket (Node 22+) to talk CDP, avoiding a new dep.
+  if (typeof globalThis.WebSocket !== 'function') {
+    console.warn('[lighthouse] Node WebSocket not available (need Node ≥ 22) — falling back to extraHeaders, which leaks the bypass cross-origin. Upgrade Node or scan a non-protected URL.');
+    return;
+  }
+
+  // 1. Get a Vercel-issued bypass cookie via a same-origin request.
+  let setCookieValues = [];
+  try {
+    const res = await fetch(parsedUrl.toString(), {
+      headers: {
+        'x-vercel-protection-bypass': bypass,
+        'x-vercel-set-bypass-cookie': 'true'
+      },
+      redirect: 'manual'
+    });
+    setCookieValues = typeof res.headers.getSetCookie === 'function'
+      ? res.headers.getSetCookie()
+      : [];
+  } catch (e) {
+    console.warn(`[lighthouse] bypass bootstrap fetch failed: ${e.message}`);
+    return;
+  }
+
+  if (setCookieValues.length === 0) {
+    console.warn('[lighthouse] target did not return any Set-Cookie headers — bypass cookie not bootstrapped. Lighthouse may receive 401s.');
+    return;
+  }
+
+  // 2. Connect to Chrome's first browser target via CDP and inject cookies.
+  let pageWsUrl;
+  try {
+    const targetsRes = await fetch(`http://127.0.0.1:${chromePort}/json`);
+    const targets = await targetsRes.json();
+    const pageTarget = targets.find(t => t.type === 'page') || targets[0];
+    if (!pageTarget) throw new Error('no Chrome targets found');
+    pageWsUrl = pageTarget.webSocketDebuggerUrl;
+  } catch (e) {
+    console.warn(`[lighthouse] could not discover CDP target: ${e.message}`);
+    return;
+  }
+
+  await new Promise((resolve) => {
+    const ws = new globalThis.WebSocket(pageWsUrl);
+    let id = 0;
+    const pending = new Map();
+    const send = (method, params = {}) => new Promise((res, rej) => {
+      const msgId = ++id;
+      pending.set(msgId, { res, rej });
+      ws.send(JSON.stringify({ id: msgId, method, params }));
+    });
+
+    ws.addEventListener('message', (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        if (msg.id && pending.has(msg.id)) {
+          const { res, rej } = pending.get(msg.id);
+          pending.delete(msg.id);
+          msg.error ? rej(new Error(msg.error.message)) : res(msg.result);
+        }
+      } catch { /* ignore non-JSON frames */ }
+    });
+
+    ws.addEventListener('open', async () => {
+      try {
+        await send('Network.enable');
+        const isHttps = parsedUrl.protocol === 'https:';
+        for (const setCookieStr of setCookieValues) {
+          const parts = setCookieStr.split(';');
+          const [name, value] = (parts[0] || '').split('=');
+          if (!name) continue;
+          // Note: only forwarding the cookie name+value to the target hostname.
+          // We deliberately ignore Domain attributes that would widen scope.
+          await send('Network.setCookie', {
+            name: name.trim(),
+            value: (value || '').trim(),
+            domain: parsedUrl.hostname,
+            path: '/',
+            httpOnly: /HttpOnly/i.test(setCookieStr),
+            secure: isHttps || /Secure/i.test(setCookieStr),
+            sameSite: 'Lax'
+          });
+        }
+        console.log(`[lighthouse] injected ${setCookieValues.length} bypass cookie(s) for ${parsedUrl.hostname} via CDP`);
+      } catch (e) {
+        console.warn(`[lighthouse] cookie inject failed: ${e.message}`);
+      } finally {
+        ws.close();
+      }
+    });
+
+    ws.addEventListener('close', resolve);
+    ws.addEventListener('error', (ev) => {
+      console.warn(`[lighthouse] CDP WebSocket error: ${ev?.message || 'unknown'}`);
+      resolve();
+    });
+  });
 }

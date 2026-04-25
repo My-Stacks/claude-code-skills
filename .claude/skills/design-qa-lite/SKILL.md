@@ -20,7 +20,7 @@ npm i -D @playwright/test @axe-core/playwright axe-core
 npx playwright install --with-deps chromium
 ```
 
-Use minimum when you only need responsive sweep + accessibility. Skip phases 4 and 6 below.
+Use minimum when you don't need Lighthouse. Skip Phase 4 (Core Web Vitals — requires `lighthouse` + `chrome-launcher`) and treat Phase 3's Pa11y sub-step as optional (axe still works without it). Phase 6 (visual regression) works fine with the minimum tier — it relies on Playwright's `toHaveScreenshot`, which is included.
 
 **Full** (+3 deps, ~180 packages — required for Lighthouse + pa11y):
 

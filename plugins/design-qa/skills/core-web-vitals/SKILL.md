@@ -5,7 +5,7 @@ description: Use when measuring Lighthouse / Core Web Vitals (LCP, INP, CLS, TBT
 
 # Core Web Vitals & Lighthouse
 
-Measure performance on `<url>` using `playwright-lighthouse`.
+Measure performance on `<url>` using `${CLAUDE_PLUGIN_ROOT}/bin/run-lighthouse.sh <url>`.
 
 ## Hard rule: never fabricate metrics
 

@@ -120,7 +120,9 @@ fi
 
 echo ""
 echo "design-qa setup complete (tier: $INSTALL_TIER)."
-echo "Verify with: node $PLUGIN_ROOT/bin/verify.js"
+# Pass the tier through so verify.js doesn't fall back to "full" and flag the
+# minimum-tier install as broken on a perfectly valid setup.
+echo "Verify with: DESIGN_QA_INSTALL_TIER=$INSTALL_TIER node $PLUGIN_ROOT/bin/verify.js"
 if [ "$INSTALL_TIER" = "full" ]; then
   echo ""
   echo "Note: \`npm audit\` will report ~50 advisories from Lighthouse's transitive"

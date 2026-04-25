@@ -69,22 +69,31 @@ ${lh ? (() => {
   const mobileSuspect = lh.mobile?.instrumentationSuspect === true;
   const suspectMetrics = new Set(lh.mobile?.suspectMetrics || []);
   const mark = (metric) => suspectMetrics.has(metric) ? ' <span title="Instrumentation-suspect: mobile metric is >8× desktop and is likely a stalled third-party under throttling. Use desktop value as authoritative until you re-run with blockedUrlPatterns.">⚠️</span>' : '';
+  // For suspect metrics, treat the cell as neutral — don't combine ⚠️ with a
+  // red threshold class.
+  const cellCls = (metric, val, good, bad) =>
+    suspectMetrics.has(metric) || val == null ? '' : lhCls(val, good, bad);
+  const scoreClsSafe = (val) => val == null ? '' : scoreCls(val);
   return `
 <section>
   <h2>Core Web Vitals</h2>
   ${mobileSuspect ? `<p class="warn" style="margin: 0 0 12px; padding: 12px; background: #fef3c7; border: 1px solid #f59e0b; border-radius: 6px;"><strong>⚠️ Mobile metrics flagged instrumentation-suspect</strong> — ${escape((lh.mobile.suspectMetrics || []).join(', '))} are >8× desktop, usually a stalled tracker under throttling. ${escape(lh.mobile.suspectNote || '')}</p>` : ''}
   <table>
     <tr><th>Metric</th><th>Mobile</th><th>Desktop</th></tr>
-    <tr><td>LCP</td><td class="${lhCls(m.metrics.lcp, 2500, 4000)}">${ms(m.metrics.lcp)}${mark('lcp')}</td><td class="${lhCls(d.metrics.lcp, 2500, 4000)}">${ms(d.metrics.lcp)}</td></tr>
+    <tr><td>LCP</td><td class="${cellCls('lcp', m.metrics.lcp, 2500, 4000)}">${ms(m.metrics.lcp)}${mark('lcp')}</td><td class="${cellCls('__d', d.metrics.lcp, 2500, 4000)}">${ms(d.metrics.lcp)}</td></tr>
     <tr><td>INP</td><td>${ms(m.metrics.inp)}</td><td>${ms(d.metrics.inp)}</td></tr>
-    <tr><td>CLS</td><td class="${lhCls(m.metrics.cls, 0.1, 0.25)}">${num(m.metrics.cls, 3)}</td><td class="${lhCls(d.metrics.cls, 0.1, 0.25)}">${num(d.metrics.cls, 3)}</td></tr>
-    <tr><td>TBT</td><td>${ms(m.metrics.tbt)}${mark('tbt')}</td><td>${ms(d.metrics.tbt)}</td></tr>
-    <tr><td>Performance</td><td class="${scoreCls(m.scores.performance)}">${m.scores.performance ?? '—'}</td><td class="${scoreCls(d.scores.performance)}">${d.scores.performance ?? '—'}</td></tr>
-    <tr><td>Accessibility</td><td>${m.scores.accessibility ?? '—'}</td><td>${d.scores.accessibility ?? '—'}</td></tr>
+    <tr><td>CLS</td><td class="${cellCls('cls', m.metrics.cls, 0.1, 0.25)}">${num(m.metrics.cls, 3)}</td><td class="${cellCls('__d', d.metrics.cls, 0.1, 0.25)}">${num(d.metrics.cls, 3)}</td></tr>
+    <tr><td>TBT</td><td class="${cellCls('tbt', m.metrics.tbt, 200, 600)}">${ms(m.metrics.tbt)}${mark('tbt')}</td><td class="${cellCls('__d', d.metrics.tbt, 200, 600)}">${ms(d.metrics.tbt)}</td></tr>
+    <tr><td>Performance</td><td class="${mobileSuspect ? '' : scoreClsSafe(m.scores.performance)}">${m.scores.performance ?? '—'}</td><td class="${scoreClsSafe(d.scores.performance)}">${d.scores.performance ?? '—'}</td></tr>
+    <tr><td>Accessibility</td><td class="${scoreClsSafe(m.scores.accessibility)}">${m.scores.accessibility ?? '—'}</td><td class="${scoreClsSafe(d.scores.accessibility)}">${d.scores.accessibility ?? '—'}</td></tr>
     <tr><td>Best Practices</td><td>${m.scores.bestPractices ?? '—'}</td><td>${d.scores.bestPractices ?? '—'}</td></tr>
     <tr><td>SEO</td><td>${m.scores.seo ?? '—'}</td><td>${d.scores.seo ?? '—'}</td></tr>
   </table>
-  <p style="margin-top: 12px;"><a href="lighthouse/mobile/report.html">Mobile Lighthouse →</a> &nbsp; <a href="lighthouse/desktop/report.html">Desktop Lighthouse →</a></p>
+  <p style="margin-top: 12px;">
+    ${lh.mobile ? '<a href="lighthouse/mobile/report.html">Mobile Lighthouse →</a>' : ''}
+    ${lh.mobile && lh.desktop ? ' &nbsp; ' : ''}
+    ${lh.desktop ? '<a href="lighthouse/desktop/report.html">Desktop Lighthouse →</a>' : ''}
+  </p>
 </section>
 `;
 })() : ''}

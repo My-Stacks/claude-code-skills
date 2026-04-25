@@ -190,8 +190,10 @@ for (const w of widths) {
 
           const fillRatio = leafAreaSum / sectionArea;
 
-          // Adjacent-element near-overlap: walk direct interactive siblings and
-          // measure vertical gap between successive ones.
+          // Adjacent-element near-overlap: only compare elements that share
+          // the same parent. Walking every interactive descendant in DOM order
+          // would falsely pair controls from different containers (e.g. the
+          // last button of card A vs the first link of card B).
           const interactives = [...sectionEl.querySelectorAll('a, button, input, select, textarea, [role=button], [role=link]')]
             .filter(el => {
               const r = el.getBoundingClientRect();
@@ -199,8 +201,11 @@ for (const w of widths) {
             });
           let nearOverlap = 0;
           for (let i = 1; i < interactives.length && i < 50; i++) {
-            const a = interactives[i - 1].getBoundingClientRect();
-            const b = interactives[i].getBoundingClientRect();
+            const prev = interactives[i - 1];
+            const curr = interactives[i];
+            if (prev.parentElement !== curr.parentElement) continue;
+            const a = prev.getBoundingClientRect();
+            const b = curr.getBoundingClientRect();
             // Only flag pairs that are stacked vertically AND whose horizontal
             // ranges overlap — sibling links in a row with their own gap aren't
             // a problem.
@@ -251,6 +256,10 @@ for (const w of widths) {
 
       overflow = pageData.overflow;
       const sectionAnomalies = pageData.sections.flatMap(s => s.anomalies);
+      // Persist diagnostics BEFORE the screenshot — a screenshot failure
+      // shouldn't erase analyses that already succeeded for this viewport.
+      manifestEntrySections = pageData.sections;
+      manifestEntryAnomalies = sectionAnomalies;
 
       await page.screenshot({ path: filePath, fullPage: true });
       const flags = [
@@ -258,9 +267,6 @@ for (const w of widths) {
         sectionAnomalies.length > 0 ? `${sectionAnomalies.length} section-anomalies` : null
       ].filter(Boolean);
       console.log('ok' + (flags.length > 0 ? ` [${flags.join(', ')}]` : ''));
-
-      manifestEntrySections = pageData.sections;
-      manifestEntryAnomalies = sectionAnomalies;
     } catch (e) {
       error = e.message;
       console.log(`FAIL: ${e.message.split('\n')[0]}`);
@@ -287,17 +293,19 @@ for (const w of widths) {
 
 await browser.close();
 
-// Cross-breakpoint delta check: track section identity across the matrix and
-// flag any section whose height swings >8× and gets *taller* on narrower
-// viewports (tall-on-narrow is normal; *wider* breakpoints being shorter is
-// the smell — a section the design assumes is, say, 600px on desktop but
-// spirals to 4000px on tablet usually means a flex/grid item is misbehaving).
+// Cross-breakpoint delta check: compare per-section heights *within the same
+// theme* across breakpoints. Mixing light/dark/reduced-motion samples masks
+// real issues and produces false positives — a tall dark section at 320px and
+// a short light section at 1440px shouldn't trigger a breakpoint-delta if
+// each theme is internally stable.
 const SUSPECT_RATIO = 8;
-const heightsByIdentity = new Map();
+const samplesByKey = new Map();
 for (const entry of manifest.entries) {
   for (const section of (entry.sections || [])) {
-    if (!heightsByIdentity.has(section.identity)) heightsByIdentity.set(section.identity, []);
-    heightsByIdentity.get(section.identity).push({
+    const key = `${section.identity}@@${entry.theme}`;
+    if (!samplesByKey.has(key)) samplesByKey.set(key, []);
+    samplesByKey.get(key).push({
+      identity: section.identity,
       width: entry.width,
       theme: entry.theme,
       height: section.height
@@ -306,7 +314,7 @@ for (const entry of manifest.entries) {
 }
 
 const sectionAnomalyDeltas = [];
-for (const [identity, samples] of heightsByIdentity) {
+for (const samples of samplesByKey.values()) {
   if (samples.length < 2) continue;
   const heights = samples.map(s => s.height).filter(h => h > 0);
   if (heights.length < 2) continue;
@@ -316,11 +324,13 @@ for (const [identity, samples] of heightsByIdentity) {
     const tallest = samples.find(s => s.height === max);
     const shortest = samples.find(s => s.height === min);
     if (tallest && shortest && tallest.width < shortest.width) {
+      const { identity, theme } = samples[0];
       sectionAnomalyDeltas.push({
         type: 'breakpoint-delta',
         severity: 'medium',
         identity,
-        message: `Section "${identity}" is ${max}px at ${tallest.width}px viewport but ${min}px at ${shortest.width}px viewport (${(max / min).toFixed(1)}× swing on the narrower side).`,
+        theme,
+        message: `Section "${identity}" (${theme}) is ${max}px at ${tallest.width}px viewport but ${min}px at ${shortest.width}px viewport (${(max / min).toFixed(1)}× swing on the narrower side).`,
         samples
       });
     }
