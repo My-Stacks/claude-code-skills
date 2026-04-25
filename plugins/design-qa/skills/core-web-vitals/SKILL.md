@@ -13,12 +13,23 @@ If the script fails (URL unreachable, auth required, Lighthouse crashes), say so
 
 ## How to invoke
 
-`${CLAUDE_PLUGIN_ROOT}/bin/run-lighthouse.sh <url>` runs:
+`${CLAUDE_PLUGIN_ROOT}/bin/run-lighthouse.sh <url>` runs each profile in its own Node subprocess:
 
-1. **Mobile run.** Profile: Moto G Power, Slow 4G throttling, 4× CPU slowdown. This is Google's default for `web.dev/measure` and the only profile that matters for Core Web Vitals as a search ranking signal.
-2. **Desktop run.** No throttling, 1440×900 viewport.
+1. **Mobile run.** Profile: Moto G Power-shaped emulation, Slow 4G throttling, 4× CPU slowdown. This is Google's default for `web.dev/measure` and the only profile that matters for Core Web Vitals as a search ranking signal.
+2. **Desktop run.** No throttling, 1350×940 emulation.
+3. **Merge step.** A third short Node call combines `lighthouse/mobile/result.json` + `lighthouse/desktop/result.json` into the shared `lighthouse/summary.json` shape, computing the instrumentation-suspect flag along the way.
+
+Why subprocess-per-profile: chrome-launcher state can leak between back-to-back launches in the same Node process, returning null categories on the first profile. Each profile in a fresh subprocess eliminates the leak.
 
 Each run outputs HTML + JSON to `.claude/design-qa/reports/<timestamp>/lighthouse/<profile>/`.
+
+## Instrumentation-suspect filter
+
+A single stalled third-party tracker (Termly, PostHog, Segment, Hotjar) under simulated 4× CPU + Slow 4G can blow up mobile metrics — Kyle observed mobile LCP=48s on a fast static page that desktop measured at 1.4s. Reporting that as a Blocker would mislead reviewers.
+
+The merge step computes `summary.mobile.instrumentationSuspect = true` whenever `mobile metric / desktop metric > 8` for LCP, TBT, FCP, TTI, or speedIndex, and exposes the offending metrics under `summary.mobile.suspectMetrics`. Reporters render the affected mobile cells with a ⚠️ annotation. The CI gates in `report.json` evaluate `lcpUnder4s` and `perfScoreOver50` against **desktop** when mobile is suspect, and surface a `gates.mobileMetricsTrusted: false` advisory.
+
+When mobile metrics matter for the call you're making, re-run with Lighthouse's `blockedUrlPatterns` for the offending domain, or cross-reference with Vercel Speed Insights (real user data, not synthetic).
 
 ## Reading the JSON
 
