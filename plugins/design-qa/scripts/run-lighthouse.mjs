@@ -284,14 +284,21 @@ async function bootstrapBypassCookie(chromePort, parsedUrl, bypass) {
         await send('Network.enable');
         const isHttps = parsedUrl.protocol === 'https:';
         for (const setCookieStr of setCookieValues) {
-          const parts = setCookieStr.split(';');
-          const [name, value] = (parts[0] || '').split('=');
+          const firstPart = setCookieStr.split(';')[0] || '';
+          // Split on the FIRST `=` only — encoded session cookies (base64 with
+          // `==` padding, JWTs, or anything URL-encoded) routinely include `=`
+          // inside the value. A naive split('=') would truncate the value and
+          // produce a corrupted bypass cookie.
+          const eqIdx = firstPart.indexOf('=');
+          if (eqIdx <= 0) continue;
+          const name = firstPart.slice(0, eqIdx).trim();
+          const value = firstPart.slice(eqIdx + 1).trim();
           if (!name) continue;
           // Note: only forwarding the cookie name+value to the target hostname.
           // We deliberately ignore Domain attributes that would widen scope.
           await send('Network.setCookie', {
-            name: name.trim(),
-            value: (value || '').trim(),
+            name,
+            value,
             domain: parsedUrl.hostname,
             path: '/',
             httpOnly: /HttpOnly/i.test(setCookieStr),
