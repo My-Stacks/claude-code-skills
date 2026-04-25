@@ -22,13 +22,21 @@ const lh = tryRead(join(REPORT_DIR, 'lighthouse', 'summary.json'));
 if (lh) {
   const m = lh.mobile ?? { metrics: {}, scores: {}, opportunities: [] };
   const d = lh.desktop ?? { metrics: {}, scores: {}, opportunities: [] };
+  const mobileSuspect = lh.mobile?.instrumentationSuspect === true;
+  const suspectMark = (metric) =>
+    mobileSuspect && (lh.mobile?.suspectMetrics || []).includes(metric) ? ' ⚠️' : '';
+
   sections.push('## Core Web Vitals\n');
+  if (mobileSuspect) {
+    sections.push(`> ⚠️ **Mobile metrics flagged instrumentation-suspect** (${(lh.mobile.suspectMetrics || []).join(', ')} > 8× desktop). ${lh.mobile.suspectNote || 'Consider re-running with Lighthouse blockedUrlPatterns for known-flaky third-parties before treating mobile as authoritative.'}`);
+    sections.push('');
+  }
   sections.push('| Metric | Mobile | Desktop |');
   sections.push('|---|---|---|');
-  sections.push(`| LCP | ${ms(m.metrics.lcp)} ${flag(m.metrics.lcp, 2500, 4000)} | ${ms(d.metrics.lcp)} ${flag(d.metrics.lcp, 2500, 4000)} |`);
+  sections.push(`| LCP | ${ms(m.metrics.lcp)}${suspectMark('lcp')} ${flag(m.metrics.lcp, 2500, 4000)} | ${ms(d.metrics.lcp)} ${flag(d.metrics.lcp, 2500, 4000)} |`);
   sections.push(`| INP | ${ms(m.metrics.inp)} | ${ms(d.metrics.inp)} |`);
   sections.push(`| CLS | ${num(m.metrics.cls, 3)} ${flag(m.metrics.cls, 0.1, 0.25)} | ${num(d.metrics.cls, 3)} ${flag(d.metrics.cls, 0.1, 0.25)} |`);
-  sections.push(`| TBT | ${ms(m.metrics.tbt)} | ${ms(d.metrics.tbt)} |`);
+  sections.push(`| TBT | ${ms(m.metrics.tbt)}${suspectMark('tbt')} | ${ms(d.metrics.tbt)} |`);
   sections.push(`| Perf | ${m.scores.performance ?? '—'} ${scoreFlag(m.scores.performance)} | ${d.scores.performance ?? '—'} ${scoreFlag(d.scores.performance)} |`);
   sections.push(`| A11y | ${m.scores.accessibility ?? '—'} ${scoreFlag(m.scores.accessibility)} | ${d.scores.accessibility ?? '—'} ${scoreFlag(d.scores.accessibility)} |`);
   sections.push(`| BP | ${m.scores.bestPractices ?? '—'} | ${d.scores.bestPractices ?? '—'} |`);
@@ -47,6 +55,11 @@ const sweep = tryRead(join(REPORT_DIR, 'manifest.json'));
 if (sweep) {
   const overflows = sweep.entries.filter(e => e.horizontalOverflow);
   const errors = sweep.entries.filter(e => e.error);
+  const perBreakpointAnomalies = sweep.entries.flatMap(e =>
+    (e.sectionAnomalies || []).map(a => ({ ...a, width: e.width, theme: e.theme }))
+  );
+  const deltaAnomalies = sweep.sectionAnomalyDeltas || [];
+
   sections.push('\n## Responsive sweep\n');
   sections.push(`- Screenshots captured: ${sweep.entries.length}`);
   sections.push(`- Widths with horizontal overflow: ${overflows.length}`);
@@ -54,6 +67,33 @@ if (sweep) {
   if (overflows.length > 0) {
     const widths = [...new Set(overflows.map(o => `${o.width}px`))].join(', ');
     sections.push(`- Affected widths: ${widths}`);
+  }
+  sections.push(`- Section anomalies: ${perBreakpointAnomalies.length} per-breakpoint, ${deltaAnomalies.length} cross-breakpoint deltas`);
+
+  if (perBreakpointAnomalies.length > 0 || deltaAnomalies.length > 0) {
+    sections.push('\n### Section anomalies\n');
+    sections.push('Heuristics: empty bands, collapsed islands, near-overlapping interactives, dramatic breakpoint deltas. Treat as advisory — surface, don\'t gate.\n');
+
+    // Group per-breakpoint by anomaly type for scanability
+    const byType = {};
+    for (const a of perBreakpointAnomalies) {
+      if (!byType[a.type]) byType[a.type] = [];
+      byType[a.type].push(a);
+    }
+    for (const [type, items] of Object.entries(byType)) {
+      sections.push(`**${type}** (${items.length})`);
+      for (const a of items.slice(0, 5)) {
+        sections.push(`- [${a.severity}] ${a.width}px/${a.theme}: ${a.message}`);
+      }
+      if (items.length > 5) sections.push(`- … and ${items.length - 5} more`);
+    }
+    if (deltaAnomalies.length > 0) {
+      sections.push('**breakpoint-delta** (cross-breakpoint)');
+      for (const d of deltaAnomalies.slice(0, 5)) {
+        sections.push(`- [${d.severity}] ${d.message}`);
+      }
+      if (deltaAnomalies.length > 5) sections.push(`- … and ${deltaAnomalies.length - 5} more`);
+    }
   }
 }
 

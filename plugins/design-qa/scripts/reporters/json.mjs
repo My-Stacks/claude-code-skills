@@ -44,7 +44,12 @@ const gates = {
   lcpUnder4s: true,
   perfScoreOver50: true,
   noOverflowAtStandardWidths: true,
-  noCorruptArtifacts: true
+  noCorruptArtifacts: true,
+  // Whether the mobile Lighthouse run looks trustworthy. When a third-party
+  // tracker stalls under simulated 4× CPU + Slow 4G, mobile metrics can be
+  // wildly off vs desktop. The lighthouse runner sets instrumentationSuspect
+  // when mobile metric / desktop metric > 8 — gates demote to advisory.
+  mobileMetricsTrusted: true
 };
 
 // Corrupt artifacts fail the gate so a broken run can't pass CI silently.
@@ -54,8 +59,17 @@ if (corrupt.length > 0) {
 }
 
 if (combined.lighthouse) {
-  if (combined.lighthouse.mobile.metrics.lcp > 4000) gates.lcpUnder4s = false;
-  if (combined.lighthouse.mobile.scores.performance < 50) gates.perfScoreOver50 = false;
+  const mobileSuspect = combined.lighthouse.mobile?.instrumentationSuspect === true;
+  gates.mobileMetricsTrusted = !mobileSuspect;
+
+  // When mobile is instrumentation-suspect, evaluate the metric gates against
+  // desktop only — better than blocking a PR on a stalled third-party.
+  const lhSource = mobileSuspect && combined.lighthouse.desktop
+    ? combined.lighthouse.desktop
+    : combined.lighthouse.mobile;
+
+  if (lhSource?.metrics?.lcp != null && lhSource.metrics.lcp > 4000) gates.lcpUnder4s = false;
+  if (lhSource?.scores?.performance != null && lhSource.scores.performance < 50) gates.perfScoreOver50 = false;
 }
 
 if (combined.axe?.byImpact?.critical > 0) gates.noBlockers = false;
@@ -67,8 +81,24 @@ if (combined.responsiveSweep) {
   if (standardOverflows.length > 0) gates.noOverflowAtStandardWidths = false;
 }
 
+// Section anomalies are surfaced but don't gate by default — heuristics with
+// false-positive risk shouldn't block CI. Reporters render them prominently.
+const sectionAnomalies = (combined.responsiveSweep?.entries || [])
+  .flatMap(e => (e.sectionAnomalies || []).map(a => ({ ...a, width: e.width, theme: e.theme })));
+const sectionAnomalyDeltas = combined.responsiveSweep?.sectionAnomalyDeltas || [];
+combined.sectionAnomalies = {
+  perBreakpoint: sectionAnomalies,
+  crossBreakpointDeltas: sectionAnomalyDeltas,
+  totalCount: sectionAnomalies.length + sectionAnomalyDeltas.length
+};
+
 combined.gates = gates;
-combined.passed = Object.values(gates).every(v => v);
+// `passed` ignores `mobileMetricsTrusted` since that's an advisory flag, not a
+// pass/fail criterion — a suspect mobile run shouldn't block when desktop is
+// fine.
+combined.passed = Object.entries(gates)
+  .filter(([k]) => k !== 'mobileMetricsTrusted')
+  .every(([, v]) => v);
 
 writeFileSync(join(REPORT_DIR, 'report.json'), JSON.stringify(combined, null, 2));
 console.log(`[json] wrote ${join(REPORT_DIR, 'report.json')}, gates passed: ${combined.passed}`);

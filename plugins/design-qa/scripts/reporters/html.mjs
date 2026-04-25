@@ -63,23 +63,31 @@ const html = `<!doctype html>
 
 <main>
 
-${lh ? `
+${lh ? (() => {
+  const m = lh.mobile ?? { metrics: {}, scores: {} };
+  const d = lh.desktop ?? { metrics: {}, scores: {} };
+  const mobileSuspect = lh.mobile?.instrumentationSuspect === true;
+  const suspectMetrics = new Set(lh.mobile?.suspectMetrics || []);
+  const mark = (metric) => suspectMetrics.has(metric) ? ' <span title="Instrumentation-suspect: mobile metric is >8× desktop and is likely a stalled third-party under throttling. Use desktop value as authoritative until you re-run with blockedUrlPatterns.">⚠️</span>' : '';
+  return `
 <section>
   <h2>Core Web Vitals</h2>
+  ${mobileSuspect ? `<p class="warn" style="margin: 0 0 12px; padding: 12px; background: #fef3c7; border: 1px solid #f59e0b; border-radius: 6px;"><strong>⚠️ Mobile metrics flagged instrumentation-suspect</strong> — ${escape((lh.mobile.suspectMetrics || []).join(', '))} are >8× desktop, usually a stalled tracker under throttling. ${escape(lh.mobile.suspectNote || '')}</p>` : ''}
   <table>
     <tr><th>Metric</th><th>Mobile</th><th>Desktop</th></tr>
-    <tr><td>LCP</td><td class="${lhCls(lh.mobile.metrics.lcp, 2500, 4000)}">${ms(lh.mobile.metrics.lcp)}</td><td class="${lhCls(lh.desktop.metrics.lcp, 2500, 4000)}">${ms(lh.desktop.metrics.lcp)}</td></tr>
-    <tr><td>INP</td><td>${ms(lh.mobile.metrics.inp)}</td><td>${ms(lh.desktop.metrics.inp)}</td></tr>
-    <tr><td>CLS</td><td class="${lhCls(lh.mobile.metrics.cls, 0.1, 0.25)}">${num(lh.mobile.metrics.cls, 3)}</td><td class="${lhCls(lh.desktop.metrics.cls, 0.1, 0.25)}">${num(lh.desktop.metrics.cls, 3)}</td></tr>
-    <tr><td>TBT</td><td>${ms(lh.mobile.metrics.tbt)}</td><td>${ms(lh.desktop.metrics.tbt)}</td></tr>
-    <tr><td>Performance</td><td class="${scoreCls(lh.mobile.scores.performance)}">${lh.mobile.scores.performance}</td><td class="${scoreCls(lh.desktop.scores.performance)}">${lh.desktop.scores.performance}</td></tr>
-    <tr><td>Accessibility</td><td>${lh.mobile.scores.accessibility}</td><td>${lh.desktop.scores.accessibility}</td></tr>
-    <tr><td>Best Practices</td><td>${lh.mobile.scores.bestPractices}</td><td>${lh.desktop.scores.bestPractices}</td></tr>
-    <tr><td>SEO</td><td>${lh.mobile.scores.seo}</td><td>${lh.desktop.scores.seo}</td></tr>
+    <tr><td>LCP</td><td class="${lhCls(m.metrics.lcp, 2500, 4000)}">${ms(m.metrics.lcp)}${mark('lcp')}</td><td class="${lhCls(d.metrics.lcp, 2500, 4000)}">${ms(d.metrics.lcp)}</td></tr>
+    <tr><td>INP</td><td>${ms(m.metrics.inp)}</td><td>${ms(d.metrics.inp)}</td></tr>
+    <tr><td>CLS</td><td class="${lhCls(m.metrics.cls, 0.1, 0.25)}">${num(m.metrics.cls, 3)}</td><td class="${lhCls(d.metrics.cls, 0.1, 0.25)}">${num(d.metrics.cls, 3)}</td></tr>
+    <tr><td>TBT</td><td>${ms(m.metrics.tbt)}${mark('tbt')}</td><td>${ms(d.metrics.tbt)}</td></tr>
+    <tr><td>Performance</td><td class="${scoreCls(m.scores.performance)}">${m.scores.performance ?? '—'}</td><td class="${scoreCls(d.scores.performance)}">${d.scores.performance ?? '—'}</td></tr>
+    <tr><td>Accessibility</td><td>${m.scores.accessibility ?? '—'}</td><td>${d.scores.accessibility ?? '—'}</td></tr>
+    <tr><td>Best Practices</td><td>${m.scores.bestPractices ?? '—'}</td><td>${d.scores.bestPractices ?? '—'}</td></tr>
+    <tr><td>SEO</td><td>${m.scores.seo ?? '—'}</td><td>${d.scores.seo ?? '—'}</td></tr>
   </table>
   <p style="margin-top: 12px;"><a href="lighthouse/mobile/report.html">Mobile Lighthouse →</a> &nbsp; <a href="lighthouse/desktop/report.html">Desktop Lighthouse →</a></p>
 </section>
-` : ''}
+`;
+})() : ''}
 
 ${axe ? `
 <section>
@@ -113,7 +121,43 @@ ${seo ? `
 </section>
 ` : ''}
 
-${sweep ? `
+${sweep ? (() => {
+  const perBpAnomalies = sweep.entries.flatMap(e =>
+    (e.sectionAnomalies || []).map(a => ({ ...a, width: e.width, theme: e.theme }))
+  );
+  const deltaAnomalies = sweep.sectionAnomalyDeltas || [];
+  const anomaliesByType = perBpAnomalies.reduce((acc, a) => {
+    (acc[a.type] = acc[a.type] || []).push(a);
+    return acc;
+  }, {});
+  return `
+${perBpAnomalies.length > 0 || deltaAnomalies.length > 0 ? `
+<section>
+  <h2>Section anomalies · advisory</h2>
+  <p>Heuristics: empty bands, collapsed islands, near-overlapping interactives, dramatic breakpoint deltas. Surface, don't gate.</p>
+  ${Object.entries(anomaliesByType).map(([type, items]) => `
+    <h3 style="margin-top:16px;font-size:13px;text-transform:uppercase;letter-spacing:0.04em;color:#555;">${escape(type)} <span style="font-weight:400;color:#888;">(${items.length})</span></h3>
+    ${items.slice(0, 10).map(a => `
+      <div style="border-top:1px solid #f0f0f0;padding:8px 0;font-size:13px;">
+        <span class="badge ${a.severity === 'high' ? 'crit' : a.severity === 'medium' ? 'moderate' : 'minor'}">${escape(a.severity)}</span>
+        <strong>${a.width}px / ${escape(a.theme)}</strong>
+        <div style="margin-top:4px;color:#444;">${escape(a.message)}</div>
+      </div>
+    `).join('')}
+    ${items.length > 10 ? `<div style="font-size:12px;color:#888;margin-top:4px;">… and ${items.length - 10} more</div>` : ''}
+  `).join('')}
+  ${deltaAnomalies.length > 0 ? `
+    <h3 style="margin-top:16px;font-size:13px;text-transform:uppercase;letter-spacing:0.04em;color:#555;">breakpoint-delta <span style="font-weight:400;color:#888;">(${deltaAnomalies.length} cross-breakpoint)</span></h3>
+    ${deltaAnomalies.slice(0, 10).map(d => `
+      <div style="border-top:1px solid #f0f0f0;padding:8px 0;font-size:13px;">
+        <span class="badge moderate">${escape(d.severity)}</span>
+        <div style="margin-top:4px;color:#444;">${escape(d.message)}</div>
+      </div>
+    `).join('')}
+  ` : ''}
+</section>
+` : ''}
+
 <section>
   <h2>Responsive sweep · ${sweep.entries.length} screenshots</h2>
   <p>Overflow widths: ${[...new Set(sweep.entries.filter(e => e.horizontalOverflow).map(e => e.width))].join(', ') || 'none ✅'}</p>
@@ -123,13 +167,14 @@ ${sweep ? `
         <img src="screenshots/${escape(e.file)}" alt="${escape(e.deviceLabel)} ${escape(e.theme)}" loading="lazy">
         <div class="label">
           <span>${e.width}px · ${escape(e.theme)}</span>
-          <span>${e.horizontalOverflow ? '❌ overflow' : '✅'}</span>
+          <span>${e.horizontalOverflow ? '❌ overflow' : '✅'}${(e.sectionAnomalies?.length || 0) > 0 ? ` · ⚠️ ${e.sectionAnomalies.length}` : ''}</span>
         </div>
       </div>
     `).join('')}
   </div>
 </section>
-` : ''}
+`;
+})() : ''}
 
 </main>
 </body>
