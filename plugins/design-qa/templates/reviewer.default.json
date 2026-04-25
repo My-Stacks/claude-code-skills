@@ -1,0 +1,30 @@
+{
+  "$schema": "https://stacklist.com/schemas/design-qa-reviewer-v1.json",
+  "strictness": "balanced",
+  "brand": {
+    "name": "Project",
+    "voice": ["clear", "direct", "no jargon"],
+    "tokens": {
+      "spacing": [4, 8, 12, 16, 20, 24, 32, 40, 48, 64, 80, 96],
+      "radius": [0, 2, 4, 6, 8, 12, 16, 9999],
+      "fontFamilies": [],
+      "fontSizes": [12, 13, 14, 15, 16, 18, 20, 24, 30, 36, 48, 60, 72]
+    },
+    "antiPatterns": [
+      "gradient buttons",
+      "emoji as icons",
+      "faux-3D shadows",
+      "unnecessary glassmorphism",
+      "auto-playing video"
+    ]
+  },
+  "pageTypePriorities": {
+    "marketing": ["typography", "hero clarity", "CTA hierarchy", "social proof"],
+    "product": ["accessibility", "interaction states", "error handling", "data density"],
+    "checkout": ["accessibility", "error states", "trust signals", "performance"],
+    "auth": ["error states", "field validation", "social-login affordance"],
+    "settings": ["scannability", "destructive-action affordance", "save/cancel clarity"]
+  },
+  "excludeRules": [],
+  "hooks": true
+}

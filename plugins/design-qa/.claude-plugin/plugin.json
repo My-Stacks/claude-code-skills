@@ -1,0 +1,77 @@
+{
+  "name": "design-qa",
+  "version": "0.1.0",
+  "description": "Headless responsive UI review across breakpoints, themes, a11y, Core Web Vitals, SEO, and visual regression. Built for Vercel preview deploys.",
+  "author": {
+    "name": "Stack Lab",
+    "url": "https://stacklist.com"
+  },
+  "homepage": "https://github.com/stacks-inc/claude-code-skills/tree/main/plugins/design-qa",
+  "repository": "https://github.com/stacks-inc/claude-code-skills",
+  "license": "MIT",
+  "keywords": [
+    "design-review",
+    "responsive",
+    "accessibility",
+    "lighthouse",
+    "visual-regression",
+    "playwright",
+    "vercel"
+  ],
+  "userConfig": {
+    "vercelBypassSecret": {
+      "type": "string",
+      "description": "Vercel Protection Bypass for Automation secret. Used as x-vercel-protection-bypass header to access protected preview deploys.",
+      "sensitive": true,
+      "required": false
+    },
+    "argosToken": {
+      "type": "string",
+      "description": "Argos CI token for visual regression baselines. Get from argos-ci.com.",
+      "sensitive": true,
+      "required": false
+    },
+    "browserDriver": {
+      "type": "string",
+      "description": "Browser driver. 'playwright-mcp' (default) uses Microsoft Playwright MCP. 'agent-browser' uses Vercel agent-browser CLI for token-efficient runs and real Mobile Safari.",
+      "default": "playwright-mcp",
+      "enum": ["playwright-mcp", "agent-browser"],
+      "required": false
+    },
+    "breakpointPreset": {
+      "type": "string",
+      "description": "Breakpoint matrix to sweep. 'fast' = 5 widths. 'agency-default' = 18 widths covering grey areas. 'thorough' = 18 widths + ultra-wide + foldable outer + landscape.",
+      "default": "agency-default",
+      "enum": ["fast", "agency-default", "thorough"],
+      "required": false
+    },
+    "reviewerConfigPath": {
+      "type": "string",
+      "description": "Path (relative to project root) to the reviewer persona config. Defaults to .claude/design-qa/reviewer.json.",
+      "default": ".claude/design-qa/reviewer.json",
+      "required": false
+    },
+    "authStrategy": {
+      "type": "string",
+      "description": "How the QA agent authenticates to protected app routes.",
+      "default": "none",
+      "enum": ["none", "clerk", "auth-js", "supabase", "custom-api", "custom-ui"],
+      "required": false
+    },
+    "argosUploadOnReview": {
+      "type": "boolean",
+      "description": "Auto-upload screenshots to Argos at the end of /design-qa:review. Requires argosToken.",
+      "default": false,
+      "required": false
+    }
+  },
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest", "--headless", "--isolated"],
+      "env": {
+        "VERCEL_AUTOMATION_BYPASS_SECRET": "${user_config.vercelBypassSecret}"
+      }
+    }
+  }
+}
