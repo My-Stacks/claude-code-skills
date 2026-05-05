@@ -29,7 +29,7 @@ A single stalled third-party tracker (Termly, PostHog, Segment, Hotjar) under si
 
 The merge step computes `summary.mobile.instrumentationSuspect = true` whenever `mobile metric / desktop metric > 8` for LCP, TBT, FCP, TTI, or speedIndex, and exposes the offending metrics under `summary.mobile.suspectMetrics`. Reporters render the affected mobile cells with a ⚠️ annotation. The CI gates in `report.json` evaluate `lcpUnder4s` and `perfScoreOver50` against **desktop** when mobile is suspect, and surface a `gates.mobileMetricsTrusted: false` advisory.
 
-When mobile metrics matter for the call you're making, re-run with Lighthouse's `blockedUrlPatterns` for the offending domain, or cross-reference with Vercel Speed Insights (real user data, not synthetic).
+When mobile metrics matter for the call you're making, re-run with the offending domain blocked, or cross-reference with Vercel Speed Insights (real user data, not synthetic). The wrapper forwards `DESIGN_QA_BLOCKED_URL_PATTERNS` (comma-separated URL substrings, Lighthouse pattern syntax) to `lighthouse({ blockedUrlPatterns })` — e.g. `DESIGN_QA_BLOCKED_URL_PATTERNS="termly.io,posthog.com,segment.io,hotjar" ${CLAUDE_PLUGIN_ROOT}/bin/run-lighthouse.sh <url>`.
 
 ## Reading the JSON
 

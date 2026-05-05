@@ -38,7 +38,32 @@ npx playwright install --with-deps chromium
 ### Phase 0: Prep
 
 - Read `.claude/design-qa/reviewer.json` if it exists. If absent, use balanced strictness defaults.
-- If reviewing a Vercel preview, set `VERCEL_AUTOMATION_BYPASS_SECRET` env var. Forward it as `extraHTTPHeaders: { 'x-vercel-protection-bypass': SECRET, 'x-vercel-set-bypass-cookie': 'true' }` on every Playwright context — never append it to the URL as a query param (the secret would land in reports, server logs, and the Chrome process list).
+- If reviewing a Vercel preview, set `VERCEL_AUTOMATION_BYPASS_SECRET` env var. **Do NOT forward it as `extraHTTPHeaders`** — Playwright attaches `extraHTTPHeaders` to *every* request including third-party CDNs, fonts, analytics, and trackers, leaking the secret cross-origin. Instead, bootstrap an origin-scoped session cookie once and reuse it via `context.addCookies()`:
+
+  ```js
+  // Run once before the audit. Vercel issues a session cookie when you send
+  // the bypass header with x-vercel-set-bypass-cookie: true.
+  const res = await fetch(URL, {
+    headers: {
+      'x-vercel-protection-bypass': process.env.VERCEL_AUTOMATION_BYPASS_SECRET,
+      'x-vercel-set-bypass-cookie': 'true'
+    },
+    redirect: 'manual'
+  });
+  const setCookies = res.headers.getSetCookie?.() ?? [];
+  const { hostname } = new URL(URL);
+  const bypassCookies = setCookies.map(s => {
+    const first = s.split(';')[0];
+    // Split on the FIRST `=` only — base64/JWT cookie values include `=`.
+    const i = first.indexOf('=');
+    return { name: first.slice(0, i), value: first.slice(i + 1), domain: hostname, path: '/' };
+  });
+
+  // Then on every Playwright context:
+  await context.addCookies(bypassCookies);
+  ```
+
+  Never append the secret as a URL query param either — it would land in reports, server logs, and the Chrome process list.
 - Create report directory: `.claude/design-qa/reports/<ISO-timestamp>/`.
 
 ### Phase 1: Interaction & flow
@@ -64,7 +89,7 @@ Walk top-level sections (`main > section`, falling back to direct children of `<
 - **`empty-band`** (high) — section height > 600px AND fill-ratio < 0.30 (where fill ratio = sum of leaf-element rect areas ÷ section bounding rect area). Indicates an empty hero, broken flex/grid, or a content block that didn't render.
 - **`collapsed-island`** (medium) — section rendered at < 40px. Hydration failure or empty config.
 - **`near-overlap`** (medium) — adjacent interactive elements (`a`, `button`, `input`, `[role=button]`) with vertical gap < 8px and overlapping horizontal range. Missing margin/padding token.
-- **`breakpoint-delta`** (medium, computed across the matrix after the loop) — a section's max/min height ratio across breakpoints is > 8× *and* the tallest sample is at a narrower viewport than the shortest. Tall-on-narrow is normal; tall-on-narrow-when-the-wider-breakpoint-is-shorter is the smell.
+- **`breakpoint-delta`** (medium, computed across the matrix after the loop) — a section's max/min height ratio across breakpoints is > 8× *and* the tallest sample is at a **wider** viewport than the shortest. Stacked-mobile / row-desktop swings legitimately push past 8× in the opposite direction; flagging those produces noise on every responsive page. The valuable signal is "section grows on wider screens" — desktop-only content appearing above a breakpoint, or layout that fails to scale down.
 
 Surface these as advisories. **Do not gate CI on them** — they're heuristics with false-positive risk.
 
@@ -81,27 +106,41 @@ Run Pa11y separately at the same widths for second-opinion coverage. If reviewin
 
 ### Phase 4: Core Web Vitals
 
-**Drive Lighthouse via `chrome-launcher`, NOT `playwright-lighthouse`.** Spawn each profile in its own Node subprocess — chrome-launcher state can leak between back-to-back launches in the same process and the first profile's `lhr.categories.*` come back null.
+**Drive Lighthouse via `chrome-launcher`, NOT `playwright-lighthouse`.**
 
 ```js
 import lighthouse from 'lighthouse';
 import * as chromeLauncher from 'chrome-launcher';
 
-const chrome = await chromeLauncher.launch({ chromeFlags: ['--headless=new', '--no-sandbox'] });
+// Default to a sandboxed Chrome. --no-sandbox is only safe in CI/root containers
+// — on a dev machine auditing arbitrary URLs it removes a real defense layer.
+const chromeFlags = ['--headless=new'];
+if (process.env.CI === 'true' || process.getuid?.() === 0) chromeFlags.push('--no-sandbox');
+
+const chrome = await chromeLauncher.launch({ chromeFlags });
 try {
+  // For protected previews, do NOT pass the bypass via Lighthouse `extraHeaders`
+  // — those apply to every request the audit makes (fonts, analytics, CDNs)
+  // and leak the secret cross-origin. Instead, bootstrap a Vercel session
+  // cookie on the same Chrome instance via CDP (Network.setCookie). The cookie
+  // is origin-scoped, so third parties never see it. See the plugin's
+  // `scripts/run-lighthouse.mjs` (`bootstrapBypassCookie`) for the reference
+  // implementation — it fetches the cookie via a same-origin fetch with
+  // `x-vercel-set-bypass-cookie: true`, then injects each Set-Cookie into
+  // Chrome via the DevTools Protocol before Lighthouse runs.
+
   const result = await lighthouse(URL, {
     port: chrome.port,
     formFactor: 'mobile',          // or 'desktop'
-    onlyCategories: ['performance', 'accessibility', 'best-practices', 'seo'],
-    extraHeaders: { 'x-vercel-protection-bypass': BYPASS, 'x-vercel-set-bypass-cookie': 'true' },
-    // Pass bypass via headers — never via query string.
+    onlyCategories: ['performance', 'accessibility', 'best-practices', 'seo']
+    // Optional: blockedUrlPatterns: ['termly.io', 'posthog.com'] for instrumentation-suspect re-runs.
   });
 } finally {
   await chrome.kill();
 }
 ```
 
-Wrap mobile and desktop in `try/finally` so Chrome reaps even if Lighthouse throws.
+Wrap mobile and desktop in `try/finally` so Chrome reaps even if Lighthouse throws. Run each profile in its own Node subprocess — chrome-launcher state can leak between back-to-back launches in the same process and the first profile's `lhr.categories.*` come back null.
 
 **Instrumentation-suspect filter.** A single stalled third-party tracker (Termly, PostHog, Segment, Hotjar) under simulated 4× CPU + Slow 4G can blow up mobile metrics — observed mobile LCP=48s on a fast static page that desktop measured at 1.4s. After both profiles complete, compute `mobileSuspect = mobile.lcp / desktop.lcp > 8` (also check TBT, FCP, TTI, speedIndex). When suspect, render the affected mobile metric with a `⚠️ instrumentation-suspect` annotation, demote it from Blocker to Medium, and evaluate the metric gate against desktop instead. Do NOT silently drop the mobile run — the user should know mobile was flagged.
 

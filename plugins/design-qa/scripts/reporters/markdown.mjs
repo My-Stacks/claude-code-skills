@@ -38,7 +38,7 @@ if (lh) {
   sections.push('| Metric | Mobile | Desktop |');
   sections.push('|---|---|---|');
   sections.push(`| LCP | ${ms(m.metrics.lcp)}${suspectMark('lcp')} ${mobileFlag('lcp', m.metrics.lcp, 2500, 4000)} | ${ms(d.metrics.lcp)} ${flag(d.metrics.lcp, 2500, 4000)} |`);
-  sections.push(`| INP | ${ms(m.metrics.inp)} | ${ms(d.metrics.inp)} |`);
+  sections.push(`| INP | ${ms(m.metrics.inp)} ${mobileFlag('inp', m.metrics.inp, 200, 500)} | ${ms(d.metrics.inp)} ${flag(d.metrics.inp, 200, 500)} |`);
   sections.push(`| CLS | ${num(m.metrics.cls, 3)} ${mobileFlag('cls', m.metrics.cls, 0.1, 0.25)} | ${num(d.metrics.cls, 3)} ${flag(d.metrics.cls, 0.1, 0.25)} |`);
   sections.push(`| TBT | ${ms(m.metrics.tbt)}${suspectMark('tbt')} ${mobileFlag('tbt', m.metrics.tbt, 200, 600)} | ${ms(d.metrics.tbt)} ${flag(d.metrics.tbt, 200, 600)} |`);
   sections.push(`| Perf | ${m.scores.performance ?? '—'} ${m.scores.performance == null || mobileSuspect ? '' : scoreFlag(m.scores.performance)} | ${d.scores.performance ?? '—'} ${d.scores.performance == null ? '' : scoreFlag(d.scores.performance)} |`);

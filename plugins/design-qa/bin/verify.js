@@ -7,6 +7,14 @@
 
 const TIER = process.env.DESIGN_QA_INSTALL_TIER || 'full';
 
+// Mirror install.sh's tier validation. Without this, a typo like `minimum_`
+// silently falls through to the full-tier check list and marks a clean
+// minimum install as broken.
+if (TIER !== 'minimum' && TIER !== 'full') {
+  console.error(`DESIGN_QA_INSTALL_TIER must be 'minimum' or 'full'; got '${TIER}'`);
+  process.exit(1);
+}
+
 const minimumChecks = [
   { name: '@playwright/test', test: () => require.resolve('@playwright/test') },
   { name: '@axe-core/playwright', test: () => require.resolve('@axe-core/playwright') },
@@ -25,11 +33,7 @@ const checks = TIER === 'minimum'
 
 const optional = [
   { name: '@argos-ci/playwright', test: () => require.resolve('@argos-ci/playwright') },
-  { name: '@argos-ci/cli', test: () => require.resolve('@argos-ci/cli') },
-  // playwright-lighthouse is INTENTIONALLY no longer used — we drive Lighthouse
-  // via chrome-launcher directly. Surface it as informational so an existing
-  // install isn't flagged as a problem.
-  { name: 'playwright-lighthouse (no longer used by the plugin)', test: () => require.resolve('playwright-lighthouse') }
+  { name: '@argos-ci/cli', test: () => require.resolve('@argos-ci/cli') }
 ];
 
 let failures = 0;
@@ -61,6 +65,13 @@ for (const { name, test } of optional) {
     console.log(`  · ${name} (not installed)`);
   }
 }
+
+// Surface an outdated playwright-lighthouse install only when it's actually
+// present — the plugin drives Lighthouse via chrome-launcher directly.
+try {
+  require.resolve('playwright-lighthouse');
+  console.log('\n  ℹ️  playwright-lighthouse is installed but the plugin no longer uses it; safe to remove.');
+} catch { /* not installed, nothing to say */ }
 
 // Check Playwright browsers
 try {

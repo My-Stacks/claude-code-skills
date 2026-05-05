@@ -12,7 +12,7 @@
 //                              lighthouse/summary.json with an outlier guard.
 
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, resolve, relative, isAbsolute } from 'node:path';
 
 const REPORT_DIR = process.env.DESIGN_QA_REPORT_DIR;
 if (!REPORT_DIR) {
@@ -22,7 +22,10 @@ if (!REPORT_DIR) {
 
 const cwd = process.cwd();
 const resolvedReportDir = resolve(cwd, REPORT_DIR);
-if (!resolvedReportDir.startsWith(cwd + '/') && resolvedReportDir !== cwd) {
+// Use path.relative so the containment check is platform-agnostic — a literal
+// `/` separator breaks on Windows where path.resolve emits backslashes.
+const rel = relative(cwd, resolvedReportDir);
+if (rel.startsWith('..') || isAbsolute(rel)) {
   console.error(`DESIGN_QA_REPORT_DIR must stay inside the workspace; got ${resolvedReportDir}`);
   process.exit(1);
 }
@@ -75,8 +78,27 @@ async function runProfileMode(profile) {
   const lighthouse = (await import('lighthouse')).default;
   const chromeLauncher = await import('chrome-launcher');
 
-  const chrome = await chromeLauncher.launch({ chromeFlags: ['--headless=new', '--no-sandbox'] });
-  let result;
+  // --no-sandbox is required when Chromium runs as root (CI containers,
+  // Docker), but it's a real foot-gun on a dev machine auditing arbitrary URLs
+  // because it removes the Linux sandbox layer. Default to sandboxed; opt in
+  // via env or auto-detect when we know we have to (CI / running as root).
+  const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+  const noSandbox =
+    process.env.DESIGN_QA_CHROME_NO_SANDBOX === '1' ||
+    process.env.CI === 'true' ||
+    isRoot;
+  const chromeFlags = ['--headless=new'];
+  if (noSandbox) chromeFlags.push('--no-sandbox');
+
+  // Comma-separated URL substrings (Lighthouse pattern syntax) to block during
+  // the audit — the documented escape hatch for instrumentation-suspect runs
+  // (a stalled tracker under simulated 4× CPU + Slow 4G inflates mobile metrics).
+  const blockedUrlPatterns = (process.env.DESIGN_QA_BLOCKED_URL_PATTERNS || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  const chrome = await chromeLauncher.launch({ chromeFlags });
   try {
     // When the target is a protected Vercel preview, we DO NOT pass the bypass
     // secret to Lighthouse via `extraHeaders`. Lighthouse's extraHeaders applies
@@ -94,6 +116,7 @@ async function runProfileMode(profile) {
       output: ['html', 'json'],
       onlyCategories: ['performance', 'accessibility', 'best-practices', 'seo'],
       port: chrome.port,
+      ...(blockedUrlPatterns.length > 0 ? { blockedUrlPatterns } : {}),
       formFactor: profile,
       screenEmulation: profile === 'mobile'
         ? { mobile: true, width: 412, height: 823, deviceScaleFactor: 1.75, disabled: false }
@@ -115,7 +138,7 @@ async function runProfileMode(profile) {
     writeFileSync(join(dir, 'report.json'), runnerResult.report[1]);
 
     const lhr = runnerResult.lhr;
-    result = {
+    const result = {
       profile,
       scores: {
         performance: Math.round((lhr.categories.performance?.score ?? 0) * 100),
@@ -146,6 +169,14 @@ async function runProfileMode(profile) {
     const tbt = result.metrics.tbt != null ? `${Math.round(result.metrics.tbt)}ms` : '—';
     console.log(`[lighthouse] ${profile}: perf=${result.scores.performance} a11y=${result.scores.accessibility} bp=${result.scores.bestPractices} seo=${result.scores.seo}`);
     console.log(`[lighthouse]   LCP=${lcp} CLS=${cls} TBT=${tbt}`);
+  } catch (e) {
+    // The shell wrapper iterates `for profile in mobile desktop` and exits on
+    // the first non-zero status (set -euo pipefail). If we swallowed this, the
+    // missing result.json would silently fall through to the merge step and
+    // get treated as "scan ran but produced nothing."
+    console.error(`[lighthouse] ${profile} run failed: ${e.message}`);
+    process.exitCode = 1;
+    throw e;
   } finally {
     try { await chrome.kill(); } catch { /* already exited */ }
   }
@@ -190,6 +221,15 @@ async function runMerge() {
   if (mobile?.instrumentationSuspect) {
     console.warn(`[lighthouse] ⚠️  mobile metrics flagged instrumentation-suspect: ${mobile.suspectMetrics.join(', ')}`);
   }
+
+  // Hard fail when both profiles are missing/unparsable. Otherwise the
+  // reporters fall through to a green report — gates use optional chaining
+  // (lhSource?.metrics?.lcp > 4000) which evaluates to false when lhSource is
+  // null, so a fully-broken Lighthouse run would silently mark CI green.
+  if (!mobile && !desktop) {
+    console.error('[lighthouse] both mobile and desktop results are missing or unparsable — refusing to write a passing summary.');
+    process.exit(1);
+  }
 }
 
 function readResult(p) {
@@ -217,9 +257,14 @@ function readResult(p) {
 //      via Chrome's normal cookie handling.
 async function bootstrapBypassCookie(chromePort, parsedUrl, bypass) {
   // Use Node's built-in WebSocket (Node 22+) to talk CDP, avoiding a new dep.
+  // Hard fail when WebSocket is missing — falling back to Lighthouse's
+  // extraHeaders would leak the bypass secret to every third-party origin
+  // (analytics, fonts, CDNs). Worse, an earlier version of this code claimed
+  // to "fall back" but actually returned and ran fully unauthenticated against
+  // a 401 page, which the merge step then silently marked green.
   if (typeof globalThis.WebSocket !== 'function') {
-    console.warn('[lighthouse] Node WebSocket not available (need Node ≥ 22) — falling back to extraHeaders, which leaks the bypass cross-origin. Upgrade Node or scan a non-protected URL.');
-    return;
+    console.error('[lighthouse] Node WebSocket is required for the Vercel bypass cookie bootstrap (Node ≥ 22). Upgrade Node, or unset VERCEL_AUTOMATION_BYPASS_SECRET / DESIGN_QA_BYPASS to scan a non-protected URL.');
+    process.exit(1);
   }
 
   // 1. Get a Vercel-issued bypass cookie via a same-origin request.
@@ -236,13 +281,13 @@ async function bootstrapBypassCookie(chromePort, parsedUrl, bypass) {
       ? res.headers.getSetCookie()
       : [];
   } catch (e) {
-    console.warn(`[lighthouse] bypass bootstrap fetch failed: ${e.message}`);
-    return;
+    console.error(`[lighthouse] bypass bootstrap fetch failed: ${e.message}`);
+    process.exit(1);
   }
 
   if (setCookieValues.length === 0) {
-    console.warn('[lighthouse] target did not return any Set-Cookie headers — bypass cookie not bootstrapped. Lighthouse may receive 401s.');
-    return;
+    console.error('[lighthouse] target did not return any Set-Cookie headers — bypass cookie not bootstrapped, refusing to run a guaranteed-401 audit.');
+    process.exit(1);
   }
 
   // 2. Connect to Chrome's first browser target via CDP and inject cookies.
@@ -258,14 +303,23 @@ async function bootstrapBypassCookie(chromePort, parsedUrl, bypass) {
     return;
   }
 
-  await new Promise((resolve) => {
+  let injectedCount = 0;
+  let injectFailure = null;
+  await new Promise((resolve, reject) => {
     const ws = new globalThis.WebSocket(pageWsUrl);
     let id = 0;
     const pending = new Map();
     const send = (method, params = {}) => new Promise((res, rej) => {
       const msgId = ++id;
       pending.set(msgId, { res, rej });
-      ws.send(JSON.stringify({ id: msgId, method, params }));
+      try {
+        ws.send(JSON.stringify({ id: msgId, method, params }));
+      } catch (err) {
+        // ws.send can throw synchronously (CLOSING/CLOSED state). Without this
+        // the outer Promise never settled — the bootstrap call would hang.
+        pending.delete(msgId);
+        rej(err);
+      }
     });
 
     ws.addEventListener('message', (ev) => {
@@ -282,7 +336,6 @@ async function bootstrapBypassCookie(chromePort, parsedUrl, bypass) {
     ws.addEventListener('open', async () => {
       try {
         await send('Network.enable');
-        const isHttps = parsedUrl.protocol === 'https:';
         for (const setCookieStr of setCookieValues) {
           const firstPart = setCookieStr.split(';')[0] || '';
           // Split on the FIRST `=` only — encoded session cookies (base64 with
@@ -294,21 +347,23 @@ async function bootstrapBypassCookie(chromePort, parsedUrl, bypass) {
           const name = firstPart.slice(0, eqIdx).trim();
           const value = firstPart.slice(eqIdx + 1).trim();
           if (!name) continue;
-          // Note: only forwarding the cookie name+value to the target hostname.
-          // We deliberately ignore Domain attributes that would widen scope.
-          await send('Network.setCookie', {
+          // Pass `url` so Chrome derives domain/path/secure from the origin —
+          // forcing domain/sameSite/path breaks `__Host-` prefixed cookies and
+          // overrides any path-scoping Vercel applied. CDP reports back
+          // `success: false` when a cookie is rejected; surface that instead
+          // of declaring success regardless.
+          const result = await send('Network.setCookie', {
+            url: parsedUrl.origin,
             name,
-            value,
-            domain: parsedUrl.hostname,
-            path: '/',
-            httpOnly: /HttpOnly/i.test(setCookieStr),
-            secure: isHttps || /Secure/i.test(setCookieStr),
-            sameSite: 'Lax'
+            value
           });
+          if (result?.success === false) {
+            throw new Error(`Chrome rejected cookie "${name}" via Network.setCookie`);
+          }
+          injectedCount++;
         }
-        console.log(`[lighthouse] injected ${setCookieValues.length} bypass cookie(s) for ${parsedUrl.hostname} via CDP`);
       } catch (e) {
-        console.warn(`[lighthouse] cookie inject failed: ${e.message}`);
+        injectFailure = e;
       } finally {
         ws.close();
       }
@@ -316,8 +371,13 @@ async function bootstrapBypassCookie(chromePort, parsedUrl, bypass) {
 
     ws.addEventListener('close', resolve);
     ws.addEventListener('error', (ev) => {
-      console.warn(`[lighthouse] CDP WebSocket error: ${ev?.message || 'unknown'}`);
-      resolve();
+      reject(new Error(`CDP WebSocket error: ${ev?.message || 'unknown'}`));
     });
   });
+
+  if (injectFailure) {
+    console.error(`[lighthouse] cookie inject failed: ${injectFailure.message}`);
+    process.exit(1);
+  }
+  console.log(`[lighthouse] injected ${injectedCount} bypass cookie(s) for ${parsedUrl.hostname} via CDP`);
 }

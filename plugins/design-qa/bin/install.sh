@@ -72,13 +72,15 @@ install_dev() {
 }
 
 # Tier: minimum + full (Playwright Chromium + axe-core)
+TOTAL_STEPS=$([ "$INSTALL_TIER" = "full" ] && echo 4 || echo 2)
+
 echo ""
-echo "[1] Installing Playwright + Chromium..."
+echo "[1/$TOTAL_STEPS] Installing Playwright + Chromium..."
 install_dev "@playwright/test"
 npx playwright install --with-deps chromium
 
 echo ""
-echo "[2] Installing axe-core..."
+echo "[2/$TOTAL_STEPS] Installing axe-core..."
 install_dev "@axe-core/playwright"
 install_dev "axe-core"
 
@@ -87,12 +89,12 @@ if [ "$INSTALL_TIER" = "full" ]; then
   # drives Lighthouse via chrome-launcher directly to avoid the wsEndpoint
   # foot-gun in current Playwright).
   echo ""
-  echo "[3] Installing Lighthouse..."
+  echo "[3/$TOTAL_STEPS] Installing Lighthouse..."
   install_dev "lighthouse"
   install_dev "chrome-launcher"
 
   echo ""
-  echo "[4] Installing Pa11y..."
+  echo "[4/$TOTAL_STEPS] Installing Pa11y..."
   install_dev "pa11y"
 else
   echo ""

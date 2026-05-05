@@ -62,9 +62,13 @@ if (combined.lighthouse) {
   const mobileSuspect = combined.lighthouse.mobile?.instrumentationSuspect === true;
   gates.mobileMetricsTrusted = !mobileSuspect;
 
-  // When mobile is instrumentation-suspect, evaluate the metric gates against
-  // desktop only — better than blocking a PR on a stalled third-party.
-  const lhSource = mobileSuspect && combined.lighthouse.desktop
+  // Pick the authoritative source for the metric gates:
+  //   - If mobile is instrumentation-suspect, use desktop (a stalled tracker
+  //     shouldn't block a PR).
+  //   - If mobile is null (run failed but didn't fail hard), fall back to
+  //     desktop so we still gate on something real instead of skipping.
+  //   - Otherwise use mobile, which Google ranks against.
+  const lhSource = (mobileSuspect || !combined.lighthouse.mobile) && combined.lighthouse.desktop
     ? combined.lighthouse.desktop
     : combined.lighthouse.mobile;
 

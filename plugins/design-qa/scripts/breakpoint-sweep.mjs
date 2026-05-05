@@ -4,7 +4,7 @@
 
 import { chromium, devices } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, resolve, relative, isAbsolute } from 'node:path';
 
 const URL = process.env.DESIGN_QA_URL;
 const PRESET = process.env.DESIGN_QA_PRESET || 'agency-default';
@@ -18,9 +18,52 @@ if (!URL) {
 
 const cwd = process.cwd();
 const resolvedReportDir = resolve(cwd, REPORT_DIR);
-if (!resolvedReportDir.startsWith(cwd + '/') && resolvedReportDir !== cwd) {
+const rel = relative(cwd, resolvedReportDir);
+if (rel.startsWith('..') || isAbsolute(rel)) {
   console.error(`DESIGN_QA_REPORT_DIR must stay inside the workspace; got ${resolvedReportDir}`);
   process.exit(1);
+}
+
+// When auditing a protected Vercel preview, bootstrap an origin-scoped session
+// cookie ONCE up front. Forwarding the bypass secret via `extraHTTPHeaders` on
+// every Playwright context would attach it to every request the page makes —
+// fonts, analytics, trackers, CDNs — leaking the secret cross-origin. The
+// cookie pattern stays scoped to the target hostname.
+let bypassCookies = [];
+if (BYPASS) {
+  let parsedUrl;
+  try { parsedUrl = new globalThis.URL(URL); } catch {
+    console.error(`DESIGN_QA_URL is not a valid URL: ${URL}`); process.exit(1);
+  }
+  try {
+    const res = await fetch(parsedUrl.toString(), {
+      headers: {
+        'x-vercel-protection-bypass': BYPASS,
+        'x-vercel-set-bypass-cookie': 'true'
+      },
+      redirect: 'manual'
+    });
+    const setCookies = typeof res.headers.getSetCookie === 'function'
+      ? res.headers.getSetCookie() : [];
+    for (const setCookieStr of setCookies) {
+      const firstPart = setCookieStr.split(';')[0] || '';
+      // Split on the FIRST `=` only — base64-padded / JWT cookie values include `=`.
+      const eqIdx = firstPart.indexOf('=');
+      if (eqIdx <= 0) continue;
+      const name = firstPart.slice(0, eqIdx).trim();
+      const value = firstPart.slice(eqIdx + 1).trim();
+      if (!name) continue;
+      bypassCookies.push({ name, value, domain: parsedUrl.hostname, path: '/' });
+    }
+    if (bypassCookies.length === 0) {
+      console.error('[sweep] target did not return any Set-Cookie headers — refusing to run a guaranteed-401 sweep against a protected preview.');
+      process.exit(1);
+    }
+    console.log(`[sweep] bootstrapped ${bypassCookies.length} bypass cookie(s) for ${parsedUrl.hostname}`);
+  } catch (e) {
+    console.error(`[sweep] bypass cookie bootstrap failed: ${e.message}`);
+    process.exit(1);
+  }
 }
 
 const PRESETS = {
@@ -106,12 +149,9 @@ for (const w of widths) {
       hasTouch: hint.touch,
       userAgent: hint.userAgent,
       colorScheme: theme.colorScheme,
-      reducedMotion: theme.reducedMotion,
-      extraHTTPHeaders: BYPASS ? {
-        'x-vercel-protection-bypass': BYPASS,
-        'x-vercel-set-bypass-cookie': 'true'
-      } : {}
+      reducedMotion: theme.reducedMotion
     });
+    if (bypassCookies.length > 0) await context.addCookies(bypassCookies);
     const page = await context.newPage();
 
     let overflow = null;
@@ -157,7 +197,9 @@ for (const w of widths) {
           const main = document.querySelector('main') || document.body;
           const sections = main.querySelectorAll(':scope > section');
           if (sections.length > 0) return [...sections];
-          return [...main.children].filter(el => el.nodeType === 1);
+          // `Element.children` is already an HTMLCollection of element nodes —
+          // no nodeType filter needed.
+          return [...main.children];
         })();
 
         const isInteractive = (el) =>
@@ -188,30 +230,43 @@ for (const w of widths) {
             }
           }
 
-          const fillRatio = leafAreaSum / sectionArea;
+          // Cap fillRatio at 1.0. Leaf rects can overlap (a card's title and
+          // body both render inside the same container), pushing the sum
+          // above the section area. Without the cap reports could read
+          // "184% filled" — confusing and undermines the empty-band check.
+          const fillRatio = Math.min(1, leafAreaSum / sectionArea);
 
           // Adjacent-element near-overlap: only compare elements that share
           // the same parent. Walking every interactive descendant in DOM order
           // would falsely pair controls from different containers (e.g. the
-          // last button of card A vs the first link of card B).
-          const interactives = [...sectionEl.querySelectorAll('a, button, input, select, textarea, [role=button], [role=link]')]
+          // last button of card A vs the first link of card B). Sort siblings
+          // by visual position (top, then left) so flex `order:` / grid
+          // placement that scrambles DOM order doesn't produce noise.
+          const allInteractives = [...sectionEl.querySelectorAll('a, button, input, select, textarea, [role=button], [role=link]')]
             .filter(el => {
               const r = el.getBoundingClientRect();
               return r.width > 0 && r.height > 0;
+            })
+            .sort((a, b) => {
+              const ar = a.getBoundingClientRect();
+              const br = b.getBoundingClientRect();
+              return ar.top - br.top || ar.left - br.left;
             });
+          const NEAR_OVERLAP_CAP = 50;
+          const interactives = allInteractives.slice(0, NEAR_OVERLAP_CAP);
+          const nearOverlapTruncated = allInteractives.length > NEAR_OVERLAP_CAP;
           let nearOverlap = 0;
-          for (let i = 1; i < interactives.length && i < 50; i++) {
+          for (let i = 1; i < interactives.length; i++) {
             const prev = interactives[i - 1];
             const curr = interactives[i];
             if (prev.parentElement !== curr.parentElement) continue;
             const a = prev.getBoundingClientRect();
             const b = curr.getBoundingClientRect();
-            // Only flag pairs that are stacked vertically AND whose horizontal
-            // ranges overlap — sibling links in a row with their own gap aren't
-            // a problem.
+            // Stacked vertically AND horizontal ranges overlap. Negative gaps
+            // mean true visual overlap — flag those, don't filter them out.
             const horizontallyOverlap = a.right > b.left && b.right > a.left;
             const gap = b.top - a.bottom;
-            if (horizontallyOverlap && gap >= 0 && gap < 8) nearOverlap++;
+            if (horizontallyOverlap && gap < 8) nearOverlap++;
           }
 
           // Stable identity for cross-breakpoint comparison: section index +
@@ -247,12 +302,20 @@ for (const w of widths) {
             height: Math.round(rect.height),
             fillRatio: Number(fillRatio.toFixed(3)),
             leafCount,
+            interactiveCount: allInteractives.length,
+            interactiveTruncated: nearOverlapTruncated,
             anomalies
           };
         });
 
         return { overflow, sections: sectionInfo };
       });
+
+      const truncatedSections = pageData.sections.filter(s => s.interactiveTruncated);
+      if (truncatedSections.length > 0) {
+        // Surface so the reader knows near-overlap counts may understate.
+        console.log(`[sweep] near-overlap: truncated ${truncatedSections.length} section(s) at the 50-interactive cap (${truncatedSections.map(s => `${s.identity}=${s.interactiveCount}`).join(', ')})`);
+      }
 
       overflow = pageData.overflow;
       const sectionAnomalies = pageData.sections.flatMap(s => s.anomalies);
@@ -314,7 +377,7 @@ for (const entry of manifest.entries) {
 }
 
 const sectionAnomalyDeltas = [];
-for (const samples of samplesByKey.values()) {
+for (const [key, samples] of samplesByKey.entries()) {
   if (samples.length < 2) continue;
   const heights = samples.map(s => s.height).filter(h => h > 0);
   if (heights.length < 2) continue;
@@ -323,14 +386,24 @@ for (const samples of samplesByKey.values()) {
   if (min > 0 && max / min > SUSPECT_RATIO) {
     const tallest = samples.find(s => s.height === max);
     const shortest = samples.find(s => s.height === min);
-    if (tallest && shortest && tallest.width < shortest.width) {
-      const { identity, theme } = samples[0];
+    // Flip the direction. Original heuristic flagged
+    // tallest.width < shortest.width — i.e. tall at narrow, short at wide. But
+    // that's the *normal* stacked-mobile / row-desktop pattern: a 12-item grid
+    // legitimately swings 8× in height when it stacks. Flagging it produced
+    // noise on every responsive page. Invert: only flag tallest.width >
+    // shortest.width — tall at WIDE, short at NARROW. That direction implies
+    // desktop-only content (sidebar, banner) appearing only above a breakpoint
+    // or layout that fails to scale down — a real signal worth the medium tag.
+    if (tallest && shortest && tallest.width > shortest.width) {
+      // Identity from the Map key — the per-sample object is fragile (insertion
+      // order from forEach is stable today but not contractually guaranteed).
+      const [identity, theme] = key.split('@@');
       sectionAnomalyDeltas.push({
         type: 'breakpoint-delta',
         severity: 'medium',
         identity,
         theme,
-        message: `Section "${identity}" (${theme}) is ${max}px at ${tallest.width}px viewport but ${min}px at ${shortest.width}px viewport (${(max / min).toFixed(1)}× swing on the narrower side).`,
+        message: `Section "${identity}" (${theme}) is ${max}px at ${tallest.width}px viewport but ${min}px at ${shortest.width}px viewport (${(max / min).toFixed(1)}× swing — section grows on wider viewports, opposite of normal stacking).`,
         samples
       });
     }

@@ -41,4 +41,12 @@ See `TROUBLESHOOTING.md` for context.
 
 ## After install
 
-Run `node ${CLAUDE_PLUGIN_ROOT}/bin/verify.js` and report the result. Verify honors the same `DESIGN_QA_INSTALL_TIER` so it doesn't flag missing optional deps in the minimum tier.
+Run verify with the same tier the install used — verify honors `DESIGN_QA_INSTALL_TIER` and otherwise defaults to `full`, which would falsely flag a clean minimum install as broken. The variable doesn't persist across shells, so set it inline:
+
+```bash
+DESIGN_QA_INSTALL_TIER=minimum node ${CLAUDE_PLUGIN_ROOT}/bin/verify.js
+# or, for the default full tier:
+node ${CLAUDE_PLUGIN_ROOT}/bin/verify.js
+```
+
+Report the result.
