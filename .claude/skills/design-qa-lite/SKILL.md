@@ -51,12 +51,15 @@ npx playwright install --with-deps chromium
     redirect: 'manual'
   });
   const setCookies = res.headers.getSetCookie?.() ?? [];
-  const { hostname } = new URL(URL);
+  const origin = new URL(URL).origin;
   const bypassCookies = setCookies.map(s => {
     const first = s.split(';')[0];
     // Split on the FIRST `=` only — base64/JWT cookie values include `=`.
     const i = first.indexOf('=');
-    return { name: first.slice(0, i), value: first.slice(i + 1), domain: hostname, path: '/' };
+    // Use `url` (origin-scoped) instead of forcing `domain` + `path: '/'`.
+    // Forcing domain rejects __Host-prefixed cookies and overrides any
+    // path scoping Vercel applied; `url` lets Chrome derive scope correctly.
+    return { name: first.slice(0, i), value: first.slice(i + 1), url: origin };
   });
 
   // Then on every Playwright context:
@@ -112,10 +115,12 @@ Run Pa11y separately at the same widths for second-opinion coverage. If reviewin
 import lighthouse from 'lighthouse';
 import * as chromeLauncher from 'chrome-launcher';
 
-// Default to a sandboxed Chrome. --no-sandbox is only safe in CI/root containers
-// — on a dev machine auditing arbitrary URLs it removes a real defense layer.
+// Default to a sandboxed Chrome. --no-sandbox is opt-in via the
+// DESIGN_QA_CHROME_NO_SANDBOX env var — required when Chromium runs as root
+// in a CI container, but on a dev machine auditing arbitrary URLs it removes
+// a real defense layer. Set DESIGN_QA_CHROME_NO_SANDBOX=1 in CI explicitly.
 const chromeFlags = ['--headless=new'];
-if (process.env.CI === 'true' || process.getuid?.() === 0) chromeFlags.push('--no-sandbox');
+if (process.env.DESIGN_QA_CHROME_NO_SANDBOX === '1') chromeFlags.push('--no-sandbox');
 
 const chrome = await chromeLauncher.launch({ chromeFlags });
 try {

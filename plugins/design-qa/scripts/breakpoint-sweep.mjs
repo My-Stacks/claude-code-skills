@@ -53,7 +53,10 @@ if (BYPASS) {
       const name = firstPart.slice(0, eqIdx).trim();
       const value = firstPart.slice(eqIdx + 1).trim();
       if (!name) continue;
-      bypassCookies.push({ name, value, domain: parsedUrl.hostname, path: '/' });
+      // Origin-scoped via `url` rather than forcing { domain, path: '/' }.
+      // The forced shape rejects __Host-prefixed cookies and overrides any
+      // path scoping Vercel applied; `url` lets Playwright derive scope.
+      bypassCookies.push({ name, value, url: parsedUrl.origin });
     }
     if (bypassCookies.length === 0) {
       console.error('[sweep] target did not return any Set-Cookie headers — refusing to run a guaranteed-401 sweep against a protected preview.');
@@ -239,29 +242,38 @@ for (const w of widths) {
           // Adjacent-element near-overlap: only compare elements that share
           // the same parent. Walking every interactive descendant in DOM order
           // would falsely pair controls from different containers (e.g. the
-          // last button of card A vs the first link of card B). Sort siblings
-          // by visual position (top, then left) so flex `order:` / grid
-          // placement that scrambles DOM order doesn't produce noise.
-          const allInteractives = [...sectionEl.querySelectorAll('a, button, input, select, textarea, [role=button], [role=link]')]
-            .filter(el => {
-              const r = el.getBoundingClientRect();
-              return r.width > 0 && r.height > 0;
-            })
-            .sort((a, b) => {
-              const ar = a.getBoundingClientRect();
-              const br = b.getBoundingClientRect();
-              return ar.top - br.top || ar.left - br.left;
-            });
+          // last button of card A vs the first link of card B). Sort by visual
+          // position (top, then left) so flex `order:` / grid placement that
+          // scrambles DOM order doesn't produce noise.
+          //
+          // Cap-then-measure: getBoundingClientRect forces layout and a
+          // section can have hundreds of interactives (long pricing tables,
+          // virtualized lists). Iterate the NodeList and stop as soon as we
+          // hit the cap so we don't measure every element on the page.
           const NEAR_OVERLAP_CAP = 50;
-          const interactives = allInteractives.slice(0, NEAR_OVERLAP_CAP);
-          const nearOverlapTruncated = allInteractives.length > NEAR_OVERLAP_CAP;
+          const nodeList = sectionEl.querySelectorAll('a, button, input, select, textarea, [role=button], [role=link]');
+          const measured = [];
+          let nearOverlapTruncated = false;
+          let interactiveCount = 0;
+          for (const el of nodeList) {
+            const rect = el.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) continue;
+            interactiveCount++;
+            if (measured.length >= NEAR_OVERLAP_CAP) {
+              nearOverlapTruncated = true;
+              break;
+            }
+            measured.push({ el, rect });
+          }
+          measured.sort((a, b) => a.rect.top - b.rect.top || a.rect.left - b.rect.left);
+          const interactives = measured;
           let nearOverlap = 0;
           for (let i = 1; i < interactives.length; i++) {
             const prev = interactives[i - 1];
             const curr = interactives[i];
-            if (prev.parentElement !== curr.parentElement) continue;
-            const a = prev.getBoundingClientRect();
-            const b = curr.getBoundingClientRect();
+            if (prev.el.parentElement !== curr.el.parentElement) continue;
+            const a = prev.rect;
+            const b = curr.rect;
             // Stacked vertically AND horizontal ranges overlap. Negative gaps
             // mean true visual overlap — flag those, don't filter them out.
             const horizontallyOverlap = a.right > b.left && b.right > a.left;
@@ -302,7 +314,7 @@ for (const w of widths) {
             height: Math.round(rect.height),
             fillRatio: Number(fillRatio.toFixed(3)),
             leafCount,
-            interactiveCount: allInteractives.length,
+            interactiveCount,
             interactiveTruncated: nearOverlapTruncated,
             anomalies
           };
@@ -314,7 +326,9 @@ for (const w of widths) {
       const truncatedSections = pageData.sections.filter(s => s.interactiveTruncated);
       if (truncatedSections.length > 0) {
         // Surface so the reader knows near-overlap counts may understate.
-        console.log(`[sweep] near-overlap: truncated ${truncatedSections.length} section(s) at the 50-interactive cap (${truncatedSections.map(s => `${s.identity}=${s.interactiveCount}`).join(', ')})`);
+        // interactiveCount is the count we measured before stopping at the cap,
+        // not the total in the section — but >=cap is enough to act on.
+        console.log(`[sweep] near-overlap: truncated ${truncatedSections.length} section(s) at the 50-interactive cap (${truncatedSections.map(s => s.identity).join(', ')})`);
       }
 
       overflow = pageData.overflow;

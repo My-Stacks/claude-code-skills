@@ -33,19 +33,37 @@ When mobile metrics matter for the call you're making, re-run with the offending
 
 ## Reading the JSON
 
-Pull these fields:
+The merge step writes `lighthouse/summary.json` with a flat wrapper shape — read from that, not from the raw Lighthouse `report.json` (which lives at `lighthouse/<profile>/report.json` for drill-down).
 
-| Field | JSON path |
+```jsonc
+// lighthouse/summary.json
+{
+  "mobile": {
+    "scores": { "performance": 71, "accessibility": 96, "bestPractices": 100, "seo": 100 },
+    "metrics": { "lcp": 3200, "inp": 142, "cls": 0.04, "tbt": 210, "fcp": 1800, "tti": 4100, "speedIndex": 2900 },
+    "opportunities": [{ "id": "...", "title": "...", "savingsMs": 1400, "savingsBytes": 180000 }],
+    "instrumentationSuspect": false,    // true when mobile metric / desktop > 8×
+    "suspectMetrics": []                 // populated when suspect (e.g. ['lcp', 'tbt'])
+  },
+  "desktop": { /* same shape */ }
+}
+```
+
+| Field | Path on summary.json |
 |---|---|
-| LCP | `audits.largest-contentful-paint.numericValue` (ms) |
-| INP | `audits.interaction-to-next-paint.numericValue` (ms, may be null if no interactions captured) |
-| CLS | `audits.cumulative-layout-shift.numericValue` |
-| TBT | `audits.total-blocking-time.numericValue` (ms) |
-| FCP | `audits.first-contentful-paint.numericValue` (ms) |
-| Perf score | `categories.performance.score` (0-1) |
-| A11y score | `categories.accessibility.score` |
-| Best Practices | `categories.best-practices.score` |
-| SEO | `categories.seo.score` |
+| LCP | `mobile.metrics.lcp` (ms; same path on `desktop`) |
+| INP | `mobile.metrics.inp` (ms, may be null if no interactions) |
+| CLS | `mobile.metrics.cls` |
+| TBT | `mobile.metrics.tbt` (ms) |
+| FCP | `mobile.metrics.fcp` (ms) |
+| Perf score | `mobile.scores.performance` (0–100, already scaled) |
+| A11y score | `mobile.scores.accessibility` |
+| Best Practices | `mobile.scores.bestPractices` |
+| SEO | `mobile.scores.seo` |
+| Top opportunities | `mobile.opportunities[]` (already top-5, sorted by savings) |
+| Suspect mobile run | `mobile.instrumentationSuspect`, `mobile.suspectMetrics` |
+
+When `instrumentationSuspect` is true, `report.json` flips `gates.mobileMetricsTrusted` to `false` and evaluates `gates.lcpUnder4s` / `gates.perfScoreOver50` against `desktop` instead — the advisory bit is non-blocking, the metric gates use the trustworthy source.
 
 ## Thresholds (Google's official Web Vitals as of 2026)
 
