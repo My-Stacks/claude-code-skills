@@ -78,8 +78,10 @@ If the diff exceeds ~80K characters, the skill warns and asks the user to scope 
 | Anthropic | claude-sonnet-4-6 | $3.00 | $15.00 |
 | Anthropic | claude-opus-4-6 | $5.00 | $25.00 |
 | Anthropic | claude-haiku-4-5 | $1.00 | $5.00 |
-| OpenAI | gpt-5.5 | $2.50 | $15.00 |
+| OpenAI | gpt-5.5 | TBD* | TBD* |
 | Gemini | gemini-3-flash-preview | $0.50 | $3.00 |
+
+*gpt-5.5 pricing not yet verified against platform.openai.com/pricing — cost reports for OpenAI calls may be inaccurate until updated.
 
 Prices may change. These are used for cost estimates only.
 

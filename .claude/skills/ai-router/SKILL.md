@@ -65,7 +65,7 @@ STATUS=$(curl -sS -o /tmp/ai-router-resp -w "%{http_code}" --max-time 10 --conne
 **OpenAI:**
 ```bash
 python3 -c "import json; print(json.dumps({'model':'gpt-5.5','max_completion_tokens':64,'messages':[{'role':'user','content':'hi'}]}))" > /tmp/ai-router-val.json
-STATUS=$(curl -sS -o /tmp/ai-router-resp -w "%{http_code}" --max-time 30 --connect-timeout 5 \
+STATUS=$(curl -sS -o /tmp/ai-router-resp -w "%{http_code}" --max-time 15 --connect-timeout 5 \
   https://api.openai.com/v1/chat/completions \
   -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
   -d @/tmp/ai-router-val.json)
@@ -431,8 +431,10 @@ After every API call, extract token usage from the `---USAGE---` line and calcul
 | Anthropic | claude-sonnet-4-6 | $3.00 | $15.00 |
 | Anthropic | claude-opus-4-6 | $5.00 | $25.00 |
 | Anthropic | claude-haiku-4-5 | $1.00 | $5.00 |
-| OpenAI | gpt-5.5 | $2.50 | $15.00 |
+| OpenAI | gpt-5.5 | TBD* | TBD* |
 | Gemini | gemini-3-flash-preview | $0.50 | $3.00 |
+
+*gpt-5.5 pricing not yet verified against platform.openai.com/pricing — cost reports for OpenAI calls may be inaccurate until updated.
 
 Prices may change. See REFERENCE.md for latest known rates.
 
