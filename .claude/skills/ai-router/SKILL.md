@@ -1,6 +1,6 @@
 ---
 name: ai-router
-version: "1.1"
+version: "1.2"
 description: "Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs."
 trigger: /ai-router
 ---
@@ -23,7 +23,7 @@ File: `~/.orchestrator-config.json`
   "openai_api_key": "sk-...",
   "gemini_api_key": "AIza...",
   "default_anthropic_model": "claude-sonnet-4-6",
-  "default_openai_model": "gpt-5.4",
+  "default_openai_model": "gpt-5.5",
   "default_gemini_model": "gemini-3-flash-preview"
 }
 ```
@@ -64,8 +64,8 @@ STATUS=$(curl -sS -o /tmp/ai-router-resp -w "%{http_code}" --max-time 10 --conne
 
 **OpenAI:**
 ```bash
-python3 -c "import json; print(json.dumps({'model':'gpt-5.4','max_completion_tokens':1,'messages':[{'role':'user','content':'hi'}]}))" > /tmp/ai-router-val.json
-STATUS=$(curl -sS -o /tmp/ai-router-resp -w "%{http_code}" --max-time 10 --connect-timeout 5 \
+python3 -c "import json; print(json.dumps({'model':'gpt-5.5','max_completion_tokens':64,'messages':[{'role':'user','content':'hi'}]}))" > /tmp/ai-router-val.json
+STATUS=$(curl -sS -o /tmp/ai-router-resp -w "%{http_code}" --max-time 30 --connect-timeout 5 \
   https://api.openai.com/v1/chat/completions \
   -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
   -d @/tmp/ai-router-val.json)
@@ -263,7 +263,7 @@ Show current configuration with redacted keys.
 | Provider | Key | Model | Status |
 |----------|-----|-------|--------|
 | Anthropic | sk-ant-...qAAA | claude-sonnet-4-6 | Active |
-| OpenAI | sk-pro...DcA | gpt-5.4 | Active |
+| OpenAI | sk-pro...DcA | gpt-5.5 | Active |
 | Gemini | — | — | Not configured |
 
 Config: ~/.orchestrator-config.json
@@ -338,12 +338,12 @@ import json, subprocess, os
 config = json.load(open(os.path.expanduser("~/.orchestrator-config.json")))
 body = json.dumps({
     "model": config["default_openai_model"],
-    "max_completion_tokens": 4096,
+    "max_completion_tokens": 16384,
     "messages": [{"role": "user", "content": PROMPT}]
 })
 
 result = subprocess.run([
-    "curl", "-sS", "--max-time", "120", "--connect-timeout", "10",
+    "curl", "-sS", "--max-time", "300", "--connect-timeout", "10",
     "-o", "/tmp/ai-router-resp.json", "-w", "%{http_code}",
     "https://api.openai.com/v1/chat/completions",
     "-H", f"Authorization: Bearer {config['openai_api_key']}",
@@ -431,7 +431,7 @@ After every API call, extract token usage from the `---USAGE---` line and calcul
 | Anthropic | claude-sonnet-4-6 | $3.00 | $15.00 |
 | Anthropic | claude-opus-4-6 | $5.00 | $25.00 |
 | Anthropic | claude-haiku-4-5 | $1.00 | $5.00 |
-| OpenAI | gpt-5.4 | $2.50 | $15.00 |
+| OpenAI | gpt-5.5 | $2.50 | $15.00 |
 | Gemini | gemini-3-flash-preview | $0.50 | $3.00 |
 
 Prices may change. See REFERENCE.md for latest known rates.
