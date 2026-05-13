@@ -1,11 +1,28 @@
 #!/usr/bin/env bash
 # install.sh — one-time per-machine setup for design-qa
-# Installs Playwright Chromium, axe, lighthouse, pa11y, and (optionally) agent-browser + Argos CLI.
+#
+# Two install tiers, controlled by DESIGN_QA_INSTALL_TIER:
+#   - minimum: Playwright + axe only. Skips Lighthouse + Pa11y. Use this for
+#     responsive sweeps and accessibility passes when you don't need perf
+#     measurement (and want to avoid the ~180-package transitive footprint
+#     that Lighthouse pulls in).
+#   - full (default): minimum + Lighthouse + chrome-launcher + Pa11y. The
+#     full audit pipeline.
+#
+# Note on `npm audit`: the full tier surfaces ~50 transitive advisories
+# coming from Lighthouse's deep dependency chain. None affect runtime since
+# these are dev-time tools, but the noise is real — see TROUBLESHOOTING.md.
 
 set -euo pipefail
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 BROWSER_DRIVER="${DESIGN_QA_BROWSER_DRIVER:-playwright-mcp}"
+INSTALL_TIER="${DESIGN_QA_INSTALL_TIER:-full}"
+
+case "$INSTALL_TIER" in
+  minimum|full) ;;
+  *) echo "DESIGN_QA_INSTALL_TIER must be 'minimum' or 'full'; got '$INSTALL_TIER'" >&2; exit 1 ;;
+esac
 
 # Resolve the agent-browser version. The default is `latest` so the install
 # stays usable out-of-the-box, but production-leaning users should pin to a
@@ -16,8 +33,9 @@ BROWSER_DRIVER="${DESIGN_QA_BROWSER_DRIVER:-playwright-mcp}"
 AGENT_BROWSER_VERSION="${DESIGN_QA_AGENT_BROWSER_VERSION:-latest}"
 
 echo "design-qa setup starting..."
-echo "  plugin root: $PLUGIN_ROOT"
+echo "  plugin root:    $PLUGIN_ROOT"
 echo "  browser driver: $BROWSER_DRIVER"
+echo "  install tier:   $INSTALL_TIER"
 
 # Detect package manager. Prefer the Corepack-style `packageManager` field —
 # it's authoritative when present and beats lockfile sniffing on fresh repos.
@@ -53,33 +71,40 @@ install_dev() {
   fi
 }
 
-# 1. Playwright + Chromium
+# Tier: minimum + full (Playwright Chromium + axe-core)
+TOTAL_STEPS=$([ "$INSTALL_TIER" = "full" ] && echo 4 || echo 2)
+
 echo ""
-echo "[1/5] Installing Playwright + Chromium..."
+echo "[1/$TOTAL_STEPS] Installing Playwright + Chromium..."
 install_dev "@playwright/test"
 npx playwright install --with-deps chromium
 
-# 2. axe-core
 echo ""
-echo "[2/5] Installing axe-core..."
+echo "[2/$TOTAL_STEPS] Installing axe-core..."
 install_dev "@axe-core/playwright"
 install_dev "axe-core"
 
-# 3. Lighthouse
-echo ""
-echo "[3/5] Installing Lighthouse..."
-install_dev "playwright-lighthouse"
-install_dev "lighthouse"
-install_dev "chrome-launcher"
+if [ "$INSTALL_TIER" = "full" ]; then
+  # Lighthouse — chrome-launcher only (no playwright-lighthouse: the plugin
+  # drives Lighthouse via chrome-launcher directly to avoid the wsEndpoint
+  # foot-gun in current Playwright).
+  echo ""
+  echo "[3/$TOTAL_STEPS] Installing Lighthouse..."
+  install_dev "lighthouse"
+  install_dev "chrome-launcher"
 
-# 4. Pa11y
-echo ""
-echo "[4/5] Installing Pa11y..."
-install_dev "pa11y"
+  echo ""
+  echo "[4/$TOTAL_STEPS] Installing Pa11y..."
+  install_dev "pa11y"
+else
+  echo ""
+  echo "[skipping Lighthouse + Pa11y — minimum tier]"
+  echo "  Re-run with DESIGN_QA_INSTALL_TIER=full to add them."
+fi
 
-# 5. Optional drivers
+# Optional drivers (independent of tier)
 echo ""
-echo "[5/5] Optional installs..."
+echo "[optional installs]"
 if [ "$BROWSER_DRIVER" = "agent-browser" ]; then
   echo "  installing agent-browser@${AGENT_BROWSER_VERSION} with --ignore-scripts..."
   # --ignore-scripts blocks postinstall hooks, which limits the blast radius if
@@ -96,5 +121,13 @@ if [ -n "${DESIGN_QA_ARGOS_TOKEN:-}" ]; then
 fi
 
 echo ""
-echo "design-qa setup complete."
-echo "Verify with: node $PLUGIN_ROOT/bin/verify.js"
+echo "design-qa setup complete (tier: $INSTALL_TIER)."
+# Pass the tier through so verify.js doesn't fall back to "full" and flag the
+# minimum-tier install as broken on a perfectly valid setup.
+echo "Verify with: DESIGN_QA_INSTALL_TIER=$INSTALL_TIER node $PLUGIN_ROOT/bin/verify.js"
+if [ "$INSTALL_TIER" = "full" ]; then
+  echo ""
+  echo "Note: \`npm audit\` will report ~50 advisories from Lighthouse's transitive"
+  echo "deps. These are dev-time tools and don't ship to your runtime. See"
+  echo "TROUBLESHOOTING.md for context."
+fi

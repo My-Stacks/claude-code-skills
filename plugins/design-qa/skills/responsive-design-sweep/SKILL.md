@@ -61,9 +61,25 @@ The script `${CLAUDE_PLUGIN_ROOT}/bin/run-sweep.sh <url> <preset>` handles all o
 
 You should call this script rather than driving Playwright MCP one width at a time — it's much faster and uses far fewer tokens.
 
+## Section anomalies (heuristic sub-pass)
+
+`scrollWidth > clientWidth` only catches horizontal overflow. It misses the failure modes that show up as visual mistakes: huge empty bands between sections, hydration-collapsed islands, near-overlapping interactives, and dramatic per-section breakpoint deltas.
+
+The runner walks top-level sections (`main > section`, falling back to direct children of `<main>`) on every captured viewport and emits findings under `manifest.entries[].sectionAnomalies[]`:
+
+- **`empty-band`** (high) — section height > 600px AND content fill ratio < 0.30. The page's design probably calls for a hero or content block that didn't render, or a flex/grid container is over-stretching.
+- **`collapsed-island`** (medium) — section rendered at < 40px. Hydration failure, missing data, or empty config.
+- **`near-overlap`** (medium) — adjacent interactive elements (`a`, `button`, `input`) with vertical gap < 8px. Likely a missing margin/padding token.
+
+After the sweep loop, the runner also computes cross-breakpoint deltas under `manifest.sectionAnomalyDeltas[]`:
+
+- **`breakpoint-delta`** (medium) — a section's max/min height ratio across the breakpoint matrix is > 8× *and* the tallest sample is at a narrower viewport than the shortest. Tall-on-narrow is normal; tall-on-narrow-when-wider-is-shorter usually means a layout primitive is misbehaving.
+
+These are heuristics — surface them to the user, but **don't gate CI on them**. The reporters render them in their own "Section anomalies" block flagged as advisory.
+
 ## After the sweep
 
-Read `manifest.json`. For each entry where `horizontalOverflow: true`, this is a Blocker if the width is ≤ 1440. Surface them.
+Read `manifest.json`. For each entry where `horizontalOverflow: true`, this is a Blocker if the width is ≤ 1440. Surface them. Then fold in the per-breakpoint and cross-breakpoint section-anomaly findings (above) as Medium / High advisories — they are not blockers by default, but they often surface real visual bugs the static analyses miss.
 
 For each width, view the screenshots side by side (light/dark) and look for:
 - Touch targets <44×44 (a11y) — only at widths ≤ 768.

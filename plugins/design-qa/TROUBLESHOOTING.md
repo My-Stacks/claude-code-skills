@@ -139,6 +139,34 @@ A reporter only includes a section if the corresponding sub-report exists. If yo
 
 The HTML report uses relative paths (`screenshots/foo.png`). It must stay in the report directory. Don't move just the HTML.
 
+## Install + dependencies
+
+### `npm audit` shows dozens of vulnerabilities after running install.sh
+
+The full install tier pulls in `lighthouse`, which has a deep transitive dependency chain (Puppeteer, deprecated middleware libraries, etc.). On a fresh install this commonly surfaces ~50 advisories.
+
+These are **dev-time tools that never ship to your runtime**. Workarounds:
+
+- Scope CI audits to runtime deps only: `npm audit --omit=dev`.
+- Drop to the minimum tier: `DESIGN_QA_INSTALL_TIER=minimum bash ${CLAUDE_PLUGIN_ROOT}/bin/install.sh`. Lighthouse + Pa11y are skipped; you keep responsive sweeps + accessibility scans.
+- Don't add design-qa deps to your `package.json` at all — install Playwright/axe/Lighthouse in a sibling tooling repo and point the plugin at it via the workspace.
+
+### Lighthouse runs return null categories on the first profile
+
+The plugin's `run-lighthouse.sh` invokes `node` once per profile (mobile and desktop) so each Lighthouse run gets a fresh process. If you wrote a custom harness that runs both profiles in the same Node process, chrome-launcher can leak state between back-to-back launches and the first profile's `lhr.categories.*` come back null. Spawn each profile in its own subprocess.
+
+### Mobile Lighthouse returns wildly inflated metrics (LCP > 30s, perf score < 10)
+
+A single stalled third-party tracker (Termly, PostHog, Segment, Hotjar) under simulated 4× CPU + Slow 4G can blow up mobile metrics. The plugin's lighthouse merge step flags this automatically when `mobile metric / desktop metric > 8` and surfaces it in reports as ⚠️ instrumentation-suspect; the CI gates fall back to desktop scores in that case.
+
+To get trustworthy mobile metrics, either re-run the same page through Vercel Speed Insights (real user data, not synthetic), or pass `blockedUrlPatterns` to Lighthouse for the offending domain.
+
+### agent-browser configured but the runners still use Playwright
+
+`userConfig.browserDriver: "agent-browser"` is currently a configuration slot only. The plugin runner scripts (`run-axe.sh`, `run-lighthouse.sh`, `run-seo.sh`, `run-sweep.sh`, `run-pa11y.sh`) use Playwright regardless. Wiring `agent-browser` into the runners is on the deferred list — the option is preserved in `plugin.json` so future versions can light it up without a config migration.
+
+If you want to use `agent-browser` interactively today, drive it directly from a session — its `eval --json` flag returns `{success, data: {origin, result}}` (envelope, not a flat value), which is easy to mis-parse and silently lose data.
+
 ## Still stuck
 
 Open an issue at https://github.com/stacks-inc/claude-code-skills/issues with:
