@@ -17,7 +17,7 @@ This file is not needed for `route`, `config`, or `setup` commands. Load on dema
 | Provider | Default Model | Strengths | Context |
 |----------|--------------|-----------|---------|
 | Anthropic | claude-sonnet-4-6 | Structured output, instruction following, code | 200K |
-| OpenAI | gpt-5.4 | Broad knowledge, creative writing, multimodal, reasoning | 1M |
+| OpenAI | gpt-5.5 | Broad knowledge, creative writing, multimodal, reasoning | 1M |
 | Gemini | gemini-3-flash-preview | Speed, long context, multimodal, cost efficiency | 1M |
 
 ### Model Override
@@ -78,8 +78,10 @@ If the diff exceeds ~80K characters, the skill warns and asks the user to scope 
 | Anthropic | claude-sonnet-4-6 | $3.00 | $15.00 |
 | Anthropic | claude-opus-4-6 | $5.00 | $25.00 |
 | Anthropic | claude-haiku-4-5 | $1.00 | $5.00 |
-| OpenAI | gpt-5.4 | $2.50 | $15.00 |
+| OpenAI | gpt-5.5 | ~$2.50* | ~$15.00* |
 | Gemini | gemini-3-flash-preview | $0.50 | $3.00 |
+
+*gpt-5.5 pricing approximated from gpt-5.4 rates, not yet verified against platform.openai.com/pricing — OpenAI cost reports are estimates (shown with ~) until updated.
 
 Prices may change. These are used for cost estimates only.
 
