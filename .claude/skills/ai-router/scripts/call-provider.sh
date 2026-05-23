@@ -97,8 +97,11 @@ validate_positive_int max-tokens "$MAX_TOKENS"
 validate_positive_int timeout "$TIMEOUT"
 
 TMPDIR_BASE="${AI_ROUTER_TMPDIR:-${TMPDIR:-/tmp}}"
-BODY_FILE=$(mktemp "$TMPDIR_BASE/ai-router-body-XXXXXX.json")
-RESP_FILE=$(mktemp "$TMPDIR_BASE/ai-router-resp-XXXXXX.json")
+# BSD mktemp (macOS) rejects templates with characters after the trailing X's
+# (`ai-router-body-XXXXXX.json` fails with "too few X's"). Trailing-only X's
+# work on both BSD and GNU.
+BODY_FILE=$(mktemp "$TMPDIR_BASE/ai-router-body.XXXXXX")
+RESP_FILE=$(mktemp "$TMPDIR_BASE/ai-router-resp.XXXXXX")
 trap 'rm -f "$BODY_FILE" "$RESP_FILE"' EXIT
 
 # Build request body from stdin via python json.dumps (safe escaping).

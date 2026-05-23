@@ -39,7 +39,8 @@ TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 RUN_ID=${AI_ROUTER_RUN_ID:-$(python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null || echo "run-$(date +%s)-$$")}
 
 TMPDIR_BASE="${AI_ROUTER_TMPDIR:-${TMPDIR:-/tmp}}"
-WRAPPED=$(mktemp "$TMPDIR_BASE/ai-router-comment-XXXXXX.md")
+# Trailing-only X's for BSD mktemp compatibility (see call-provider.sh).
+WRAPPED=$(mktemp "$TMPDIR_BASE/ai-router-comment.XXXXXX")
 trap 'rm -f "$WRAPPED"' EXIT
 
 {

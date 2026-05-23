@@ -7,14 +7,15 @@
 #   BOTH_READY              — ai-router + CodeRabbit both posted
 #   ONLY_AI_ROUTER_READY    — CodeRabbit was skipped; ai-router posted
 #   WAITING have_ai=… have_cr=… elapsed=…s
-#   TIMEOUT have_ai=… have_cr=…
-#   FAILED:<status>         — shadow process failed AND no ai-router comment posted
+#   TIMEOUT have_ai=… have_cr=…       (partial both.json written if anything matched)
+#   FAILED:<status>                   — process died or exited without posting
 #
-# Side-effect on terminal states (BOTH_READY / ONLY_AI_ROUTER_READY):
-#   writes <state-dir>/both.json with the matched comment bodies + URLs.
+# Side-effects:
+#   BOTH_READY / ONLY_AI_ROUTER_READY / TIMEOUT (when have_ai==1) — writes
+#   <state-dir>/both.json with the matched comment object(s).
 #
 # Exit codes:
-#   0  WAITING or terminal-ready (parent reads stdout to dispatch)
+#   0  WAITING or terminal-ready
 #   1  FAILED
 #   2  TIMEOUT
 #   3  missing dependency
@@ -35,60 +36,83 @@ RUN_ID=$(cat "$STATE/run_id")
 STARTED=$(cat "$STATE/started_at")
 WAIT_FOR_CR=$(cat "$STATE/wait_for_cr" 2>/dev/null || echo true)
 SHADOW_STATUS=$(cat "$STATE/shadow.status")
+SHADOW_PID=$(cat "$STATE/shadow.pid" 2>/dev/null || echo "")
 
 REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
 
 # `gh api --paginate` emits [...][...] (one array per page); `jq -s '[.[][]]'`
-# slurps and flattens into a single array that downstream filters iterate.
-COMMENTS=$(gh api "repos/$REPO/issues/$PR/comments" --paginate | jq -s '[.[][]]')
+# slurps and flattens. `?since=` bounds the result to items at-or-after our
+# spawn time, sharply reducing GitHub-API work on PRs with long histories.
+COMMENTS=$(gh api "repos/$REPO/issues/$PR/comments?since=$STARTED&per_page=100" --paginate 2>/dev/null | jq -s '[.[][]]' || echo '[]')
+CR_REVIEWS=$(gh api "repos/$REPO/pulls/$PR/reviews?per_page=100" --paginate 2>/dev/null | jq -s '[.[][]]' || echo '[]')
 
 AIROUTER=$(jq --arg rid "$RUN_ID" \
   '[.[] | select(.body | contains("run-id=" + $rid))] | last // null' <<<"$COMMENTS")
 
-# CodeRabbit posts both via PR-issue comments AND via the pulls/reviews endpoint
-# (formal reviews). Check both so we don't time out waiting for a comment that
-# arrived as a review.
-CR_REVIEWS=$(gh api "repos/$REPO/pulls/$PR/reviews" --paginate 2>/dev/null | jq -s '[.[][]]' || echo '[]')
+# CodeRabbit posts via issue-comments AND pulls/reviews endpoints; check both.
 CODERABBIT=$(jq --arg started "$STARTED" \
-  '[.[] | select((.user.login // "")=="coderabbitai[bot]" or (.user.login // "")=="coderabbitai") | select(.created_at > $started)] | last // null' <<<"$COMMENTS")
+  '[.[] | select((.user.login // "")=="coderabbitai[bot]" or (.user.login // "")=="coderabbitai") | select((.created_at // "") > $started)] | last // null' <<<"$COMMENTS")
 CR_REVIEW=$(jq --arg started "$STARTED" \
   '[.[] | select((.user.login // "")=="coderabbitai[bot]" or (.user.login // "")=="coderabbitai") | select((.submitted_at // "") > $started)] | last // null' <<<"$CR_REVIEWS")
 
 HAVE_AI=0; [[ "$AIROUTER" != "null" ]] && HAVE_AI=1
 HAVE_CR=0
 [[ "$CODERABBIT" != "null" || "$CR_REVIEW" != "null" ]] && HAVE_CR=1
-# Prefer the issue-comment object (has body+html_url); fall back to review object.
+# Prefer the issue-comment shape (has body + html_url); fall back to review.
 [[ "$CODERABBIT" == "null" ]] && CODERABBIT=$CR_REVIEW
 
-# If the shadow failed but the ai-router comment IS already on the PR (the
-# headless instance posted before exiting non-zero), surface as ready rather
-# than FAILED.
+write_both() {
+  # $1: include CR? (true|false)
+  local include_cr=$1
+  if [[ "$include_cr" == "true" && "$CODERABBIT" != "null" ]]; then
+    jq -n --argjson a "$AIROUTER" --argjson c "$CODERABBIT" \
+      '{ai_router:{body:$a.body, url:($a.html_url // null), id:$a.id},
+        coderabbit:{body:$c.body, url:($c.html_url // null), id:$c.id}}' \
+      > "$STATE/both.json"
+  elif [[ "$AIROUTER" != "null" ]]; then
+    jq -n --argjson a "$AIROUTER" \
+      '{ai_router:{body:$a.body, url:($a.html_url // null), id:$a.id}}' \
+      > "$STATE/both.json"
+  fi
+}
+
+# 1. Shadow process died WITHOUT posting an ai-router comment → FAILED.
+#    Cross-check shadow.pid liveness so we don't wait the full 30 min if the
+#    headless instance was OOM-killed (status stays at "running" indefinitely).
+process_alive=true
+if [[ -n "$SHADOW_PID" && "$SHADOW_PID" =~ ^[0-9]+$ ]]; then
+  kill -0 "$SHADOW_PID" 2>/dev/null || process_alive=false
+fi
+
 if [[ "$SHADOW_STATUS" == failed:* && $HAVE_AI -eq 0 ]]; then
   echo "FAILED:$SHADOW_STATUS"
   exit 1
 fi
+if [[ "$SHADOW_STATUS" == "running" && "$process_alive" == "false" && $HAVE_AI -eq 0 ]]; then
+  echo "FAILED:process-exited-without-status"
+  exit 1
+fi
+if [[ "$SHADOW_STATUS" == "done" && $HAVE_AI -eq 0 ]]; then
+  echo "FAILED:shadow-exited-without-posting"
+  exit 1
+fi
 
-# Terminal: both required and both present.
+# 2. Terminal: both required and both present.
 if [[ "$WAIT_FOR_CR" == "true" && $HAVE_AI -eq 1 && $HAVE_CR -eq 1 ]]; then
-  jq -n --argjson a "$AIROUTER" --argjson c "$CODERABBIT" \
-    '{ai_router:{body:$a.body,url:($a.html_url // null),id:$a.id},
-      coderabbit:{body:$c.body,url:($c.html_url // null),id:$c.id}}' \
-    > "$STATE/both.json"
+  write_both true
   echo "BOTH_READY"
   exit 0
 fi
 
-# Terminal: CodeRabbit skipped, ai-router present.
+# 3. Terminal: CodeRabbit skipped, ai-router present.
 if [[ "$WAIT_FOR_CR" == "false" && $HAVE_AI -eq 1 ]]; then
-  jq -n --argjson a "$AIROUTER" \
-    '{ai_router:{body:$a.body,url:($a.html_url // null),id:$a.id}}' \
-    > "$STATE/both.json"
+  write_both false
   echo "ONLY_AI_ROUTER_READY"
   exit 0
 fi
 
-# Compute elapsed via python3 (portable ISO-8601 across BSD/GNU date).
-# Fail loudly on parse error — never silently mask the timeout.
+# 4. Compute elapsed via python3 (portable ISO-8601 across BSD/GNU date).
+#    Fail loudly on parse error — never silently mask the timeout.
 START_S=$(python3 -c '
 import sys, datetime
 s = sys.argv[1].rstrip("Z")
@@ -104,7 +128,11 @@ NOW=$(date -u +%s)
 ELAPSED=$(( NOW - START_S ))
 TIMEOUT_S=${AI_ROUTER_SHADOW_TIMEOUT:-1800}
 
+# 5. Timeout. Write partial both.json so the parent can surface whatever did land.
 if (( ELAPSED > TIMEOUT_S )); then
+  if (( HAVE_AI == 1 )); then
+    write_both "$( [[ "$WAIT_FOR_CR" == "true" && $HAVE_CR -eq 1 ]] && echo true || echo false )"
+  fi
   echo "TIMEOUT have_ai=$HAVE_AI have_cr=$HAVE_CR elapsed=${ELAPSED}s"
   exit 2
 fi

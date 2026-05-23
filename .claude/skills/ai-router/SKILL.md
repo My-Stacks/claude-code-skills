@@ -46,7 +46,9 @@ If missing, run setup:
 3. Require at least one key. If all skipped: "At least one API key is required."
 4. **Validate each key BEFORE writing the config** so invalid keys never land on disk:
    ```bash
-   AI_ROUTER_CONFIG=/tmp/ai-router-pending.json   # transient probe target
+   PROBE=$(umask 077; mktemp "${TMPDIR:-/tmp}/ai-router-probe.XXXXXX")
+   trap 'rm -f "$PROBE"' EXIT
+   AI_ROUTER_CONFIG="$PROBE"
    # write a one-key probe config, run validate-key.sh <provider>, drop key if non-zero
    ```
    Exit 0 = valid; non-zero = warn "[Provider] key invalid (HTTP [code]). Skipping." and drop from the candidate set.
@@ -219,14 +221,20 @@ Flow:
    ```
    If empty: tell user "No PR for branch `<name>`. Push and open one first." and stop.
 
-2. **Detect CodeRabbit** on the repo — CodeRabbit posts via BOTH the issue-comments endpoint AND the pulls/reviews endpoint, so check both:
+2. **Detect CodeRabbit** by checking the SAME endpoints the poller polls (issue comments on THIS PR + formal reviews on THIS PR). A repo-wide check would false-positive on a CodeRabbit comment from any past PR and trap us at the 30-min timeout.
    ```bash
    REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
-   CR_ISSUE=$(gh api "repos/$REPO/issues/comments?per_page=100" \
-     --jq '[.[] | select((.user.login // "")=="coderabbitai[bot]" or (.user.login // "")=="coderabbitai")] | length')
-   CR_REVIEWS=$(gh api "repos/$REPO/pulls/comments?per_page=100" 2>/dev/null \
-     --jq '[.[] | select((.user.login // "")=="coderabbitai[bot]" or (.user.login // "")=="coderabbitai")] | length' || echo 0)
-   (( CR_ISSUE + CR_REVIEWS > 0 )) || WAIT_FOR_CR=false
+   CR_ISSUE=$(gh api "repos/$REPO/issues/$PR/comments?per_page=100" --paginate \
+     --jq '[.[] | select((.user.login // "")=="coderabbitai[bot]" or (.user.login // "")=="coderabbitai")] | length' 2>/dev/null || echo 0)
+   CR_REVIEWS=$(gh api "repos/$REPO/pulls/$PR/reviews?per_page=100" --paginate \
+     --jq '[.[] | select((.user.login // "")=="coderabbitai[bot]" or (.user.login // "")=="coderabbitai")] | length' 2>/dev/null || echo 0)
+   if (( CR_ISSUE + CR_REVIEWS == 0 )); then
+     # Fall back to a recent-activity probe on the repo (last 100 issue-comments)
+     # so a brand-new PR with no CR history yet still benefits from CR detection.
+     CR_RECENT=$(gh api "repos/$REPO/issues/comments?per_page=100" \
+       --jq '[.[] | select((.user.login // "")=="coderabbitai[bot]" or (.user.login // "")=="coderabbitai")] | length' 2>/dev/null || echo 0)
+     (( CR_RECENT > 0 )) || WAIT_FOR_CR=false
+   fi
    ```
    If `WAIT_FOR_CR=false`: tell user "CodeRabbit not detected on this repo — polling for ai-router only."
 
@@ -255,18 +263,23 @@ Flow:
 
 ### `/ai-router shadow-cancel`
 
-```bash
-# Find THIS repo's most-recent state dir (don't grab another repo's shadow).
-REPO_SLUG=$(gh repo view --json nameWithOwner -q .nameWithOwner | tr '/' '-')
-SHADOW_BASE="${AI_ROUTER_SHADOW_DIR:-${AI_ROUTER_TMPDIR:-${TMPDIR:-/tmp}}/ai-router-shadow}"
-STATE=$(ls -dt "$SHADOW_BASE/${REPO_SLUG}-pr"*/ 2>/dev/null | head -1 | sed 's:/$::')
-[ -z "$STATE" ] && echo "No active shadow for this repo." && exit 0
+Two-step procedure (the parent assistant runs step 1 as a tool call, then step 2 as shell):
 
-# Delete cron, kill process group, clear state
-[ -f "$STATE/cron.id" ] && CronDelete "$(cat "$STATE/cron.id")"
-[ -f "$STATE/shadow.pgid" ] && kill -TERM -"$(cat "$STATE/shadow.pgid")" 2>/dev/null
-rm -rf "$STATE"
-```
+1. **Find state dir for this repo + delete the cron via the `CronDelete` tool:**
+   ```bash
+   REPO_SLUG=$(gh repo view --json nameWithOwner -q .nameWithOwner | tr '/' '-')
+   SHADOW_BASE="${AI_ROUTER_SHADOW_DIR:-${AI_ROUTER_TMPDIR:-${TMPDIR:-/tmp}}/ai-router-shadow}"
+   STATE=$(ls -dt "$SHADOW_BASE/${REPO_SLUG}-pr"*/ 2>/dev/null | grep -v '\.stale\.' | head -1 | sed 's:/$::')
+   [ -z "$STATE" ] && echo "No active shadow for this repo." && exit 0
+   [ -f "$STATE/cron.id" ] && echo "Cron to delete: $(cat "$STATE/cron.id")"
+   ```
+   Then the assistant invokes `CronDelete` (the Claude Code tool, not a shell command) with the printed ID.
+
+2. **Kill the process group + clear state:**
+   ```bash
+   [ -f "$STATE/shadow.pgid" ] && kill -TERM -"$(cat "$STATE/shadow.pgid")" 2>/dev/null || true
+   rm -rf "$STATE"
+   ```
 
 ### Shadow Handoff Format
 
