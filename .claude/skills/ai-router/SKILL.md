@@ -44,15 +44,16 @@ If missing, run setup:
    > "OpenAI API key (sk-...): "
    > "Gemini API key (AIza...): "
 3. Require at least one key. If all skipped: "At least one API key is required."
-4. Write config with restrictive permissions:
+4. **Validate each key BEFORE writing the config** so invalid keys never land on disk:
    ```bash
-   (umask 077 && python3 -c "import json; print(json.dumps(CONFIG))" > ~/.orchestrator-config.json)
+   AI_ROUTER_CONFIG=/tmp/ai-router-pending.json   # transient probe target
+   # write a one-key probe config, run validate-key.sh <provider>, drop key if non-zero
    ```
-5. Validate each provided key:
+   Exit 0 = valid; non-zero = warn "[Provider] key invalid (HTTP [code]). Skipping." and drop from the candidate set.
+5. After validation, write the surviving keys to the real config with restrictive permissions:
    ```bash
-   bash ~/.claude/skills/ai-router/scripts/validate-key.sh <provider>
+   (umask 077 && python3 -c "import json,sys; print(json.dumps(CONFIG))" > ~/.orchestrator-config.json)
    ```
-   Exit 0 = valid. Non-zero = warn: "[Provider] key invalid (HTTP [code]). Skipping."
 6. Confirm: "ai-router configured. [N] provider(s) active: [list]."
 
 ## Commands
@@ -101,7 +102,7 @@ Recommend Claude Code model tier and whether to also call externals:
 
 **Output format:**
 
-```
+```text
 ## Route: [task summary]
 
 **Claude Code:** Switch to [Model] -> run `/model [model-name]`
@@ -122,7 +123,7 @@ Send a prompt to a single external model.
 3. Call the API via `scripts/call-provider.sh`.
 4. Display the response with provider attribution.
 
-```
+```text
 ## [Provider] ([model])
 
 [response content]
@@ -218,12 +219,16 @@ Flow:
    ```
    If empty: tell user "No PR for branch `<name>`. Push and open one first." and stop.
 
-2. **Detect CodeRabbit** on the repo:
+2. **Detect CodeRabbit** on the repo — CodeRabbit posts via BOTH the issue-comments endpoint AND the pulls/reviews endpoint, so check both:
    ```bash
-   gh api "repos/$(gh repo view --json nameWithOwner -q .nameWithOwner)/issues/comments?per_page=100" \
-     --jq '[.[] | select(.user.login=="coderabbitai[bot]")] | length'
+   REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+   CR_ISSUE=$(gh api "repos/$REPO/issues/comments?per_page=100" \
+     --jq '[.[] | select((.user.login // "")=="coderabbitai[bot]" or (.user.login // "")=="coderabbitai")] | length')
+   CR_REVIEWS=$(gh api "repos/$REPO/pulls/comments?per_page=100" 2>/dev/null \
+     --jq '[.[] | select((.user.login // "")=="coderabbitai[bot]" or (.user.login // "")=="coderabbitai")] | length' || echo 0)
+   (( CR_ISSUE + CR_REVIEWS > 0 )) || WAIT_FOR_CR=false
    ```
-   If 0: set `WAIT_FOR_CR=false` and tell user "CodeRabbit not detected on this repo — polling for ai-router only."
+   If `WAIT_FOR_CR=false`: tell user "CodeRabbit not detected on this repo — polling for ai-router only."
 
 3. **Confirm** with a single Y/N: "Shadow-review PR #N. Spawns a headless claude in background, polls every 3 min, 30 min timeout. OK?"
 
@@ -233,7 +238,7 @@ Flow:
    ```
 
 5. **Schedule the poll** via `CronCreate` with cron `*/3 * * * *`. Save the cron ID to `$STATE/cron.id`. Use this prompt verbatim (substituting `<PR>` and `<STATE>`):
-   ```
+   ```text
    Run: bash ~/.claude/skills/ai-router/scripts/shadow-poll.sh <STATE>
 
    Read the first line of stdout:
@@ -251,9 +256,11 @@ Flow:
 ### `/ai-router shadow-cancel`
 
 ```bash
-# Find the running state dir (most recent)
-STATE=$(ls -dt /tmp/ai-router-shadow/*/ 2>/dev/null | head -1 | sed 's:/$::')
-[ -z "$STATE" ] && echo "No active shadow." && exit 0
+# Find THIS repo's most-recent state dir (don't grab another repo's shadow).
+REPO_SLUG=$(gh repo view --json nameWithOwner -q .nameWithOwner | tr '/' '-')
+SHADOW_BASE="${AI_ROUTER_SHADOW_DIR:-${AI_ROUTER_TMPDIR:-${TMPDIR:-/tmp}}/ai-router-shadow}"
+STATE=$(ls -dt "$SHADOW_BASE/${REPO_SLUG}-pr"*/ 2>/dev/null | head -1 | sed 's:/$::')
+[ -z "$STATE" ] && echo "No active shadow for this repo." && exit 0
 
 # Delete cron, kill process group, clear state
 [ -f "$STATE/cron.id" ] && CronDelete "$(cat "$STATE/cron.id")"
@@ -290,7 +297,7 @@ Rendered by the parent assistant when the poll returns `BOTH_READY` or `ONLY_AI_
 
 `post-review.sh` wraps every PR comment with a signature marker block so the poll can identify the comment from a specific shadow run:
 
-```
+```html
 <!-- ai-router:review:v<MAJ.MIN> ts=<ISO-UTC> run-id=<uuid> -->
 <!-- providers: anthropic,openai,gemini -->
 
@@ -326,7 +333,7 @@ Side-by-side responses without synthesis. Otherwise identical to `ensemble`. Out
 
 Show config with redacted keys (first 6 + last 4 chars; first 3 + `...` if short):
 
-```
+```text
 ## AI Router Config
 
 | Provider | Key | Model | Status |
@@ -363,16 +370,18 @@ echo "$PROMPT" | bash "$SCRIPT" anthropic
 # With overrides:
 echo "$PROMPT" | bash "$SCRIPT" openai --model gpt-5.5 --max-tokens 8192 --timeout 300
 
-# Ensemble (parallel — issue these as three separate Bash tool calls):
-echo "$PROMPT" | bash "$SCRIPT" anthropic > /tmp/ai-router-claude.out  2>/tmp/ai-router-claude.err  &
-echo "$PROMPT" | bash "$SCRIPT" openai    > /tmp/ai-router-gpt.out     2>/tmp/ai-router-gpt.err     &
-echo "$PROMPT" | bash "$SCRIPT" gemini    > /tmp/ai-router-gemini.out  2>/tmp/ai-router-gemini.err  &
+# Ensemble (parallel — issue these as three separate Bash tool calls).
+# Use a per-run temp dir so concurrent invocations never clobber each other:
+RUN=$(mktemp -d "${TMPDIR:-/tmp}/ai-router-run-XXXXXX")
+echo "$PROMPT" | bash "$SCRIPT" anthropic > "$RUN/claude.out"  2>"$RUN/claude.err"  &
+echo "$PROMPT" | bash "$SCRIPT" openai    > "$RUN/gpt.out"     2>"$RUN/gpt.err"     &
+echo "$PROMPT" | bash "$SCRIPT" gemini    > "$RUN/gemini.out"  2>"$RUN/gemini.err"  &
 wait
 ```
 
 Stdout shape:
 
-```
+```text
 <response text>
 ---USAGE---
 {"input":N,"output":N,"provider":"...","model":"..."}
@@ -410,13 +419,13 @@ To use a non-default model for one call: pass `--model <id>` after the provider.
 
 After every API call, parse the `---USAGE---` JSON line and compute cost from the table in REFERENCE.md.
 
-```
+```text
 cost = (input_tokens / 1_000_000 * input_rate) + (output_tokens / 1_000_000 * output_rate)
 ```
 
 Append a cost summary to every API response:
 
-```
+```text
 ---
 **Cost:** Claude $0.0045 (312 in / 189 out) | GPT $0.0038 (298 in / 201 out) | Gemini $0.0008 (305 in / 195 out) | **Total: $0.0091**
 ```

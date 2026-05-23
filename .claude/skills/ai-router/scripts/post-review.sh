@@ -34,8 +34,9 @@ SKILL_VER=$(awk -F'"' '/^version:/ {print $2; exit}' "$SKILL_MD" 2>/dev/null || 
 SKILL_VER=${SKILL_VER:-1.3}
 
 TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-RUN_ID=${AI_ROUTER_RUN_ID:-$(uuidgen 2>/dev/null | tr 'A-Z' 'a-z')}
-RUN_ID=${RUN_ID:-run-$(date +%s)}
+# UUID via python3 — uuidgen isn't on every system and its output format is
+# inconsistent across distros.
+RUN_ID=${AI_ROUTER_RUN_ID:-$(python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null || echo "run-$(date +%s)-$$")}
 
 TMPDIR_BASE="${AI_ROUTER_TMPDIR:-${TMPDIR:-/tmp}}"
 WRAPPED=$(mktemp "$TMPDIR_BASE/ai-router-comment-XXXXXX.md")

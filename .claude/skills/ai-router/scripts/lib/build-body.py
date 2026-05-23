@@ -19,7 +19,10 @@ def main() -> int:
     try:
         max_tokens = int(max_tokens_s)
     except ValueError:
-        print(f"max_tokens must be int, got: {max_tokens_s!r}", file=sys.stderr)
+        print(f"max_tokens must be a positive int, got: {max_tokens_s!r}", file=sys.stderr)
+        return 64
+    if max_tokens <= 0:
+        print(f"max_tokens must be a positive int, got: {max_tokens!r}", file=sys.stderr)
         return 64
 
     prompt = sys.stdin.read()

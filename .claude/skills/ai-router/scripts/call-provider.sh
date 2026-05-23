@@ -46,11 +46,16 @@ EOF
 [[ $# -lt 1 ]] && usage
 PROVIDER=$1; shift
 
+require_value() {
+  local flag=$1 remaining=$2
+  (( remaining >= 2 )) || { echo "$flag requires a value" >&2; usage; }
+}
+
 while (( $# > 0 )); do
   case "$1" in
-    --model)       MODEL=$2; shift 2 ;;
-    --max-tokens)  MAX_TOKENS=$2; shift 2 ;;
-    --timeout)     TIMEOUT=$2; shift 2 ;;
+    --model)       require_value --model "$#";       MODEL=$2;      shift 2 ;;
+    --max-tokens)  require_value --max-tokens "$#";  MAX_TOKENS=$2; shift 2 ;;
+    --timeout)     require_value --timeout "$#";     TIMEOUT=$2;    shift 2 ;;
     -h|--help)     usage ;;
     *) echo "unknown flag: $1" >&2; usage ;;
   esac
@@ -59,6 +64,11 @@ done
 # Validate model name (whitelist).
 validate_model() {
   [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "invalid model id: $1" >&2; exit 64; }
+}
+
+validate_positive_int() {
+  local label=$1 value=$2
+  [[ "$value" =~ ^[1-9][0-9]*$ ]] || { echo "$label must be a positive integer, got: $value" >&2; exit 64; }
 }
 
 # Dependency check.
@@ -83,6 +93,8 @@ esac
 [[ -z "$KEY" ]]   && { echo "$PROVIDER: not configured (missing key in $(config_path))" >&2; exit 2; }
 [[ -z "$MODEL" ]] && { echo "$PROVIDER: no model in config and none passed via --model" >&2; exit 64; }
 validate_model "$MODEL"
+validate_positive_int max-tokens "$MAX_TOKENS"
+validate_positive_int timeout "$TIMEOUT"
 
 TMPDIR_BASE="${AI_ROUTER_TMPDIR:-${TMPDIR:-/tmp}}"
 BODY_FILE=$(mktemp "$TMPDIR_BASE/ai-router-body-XXXXXX.json")
@@ -92,6 +104,7 @@ trap 'rm -f "$BODY_FILE" "$RESP_FILE"' EXIT
 # Build request body from stdin via python json.dumps (safe escaping).
 python3 "$SCRIPT_DIR/lib/build-body.py" "$PROVIDER" "$MODEL" "$MAX_TOKENS" > "$BODY_FILE"
 
+rc=0
 case "$PROVIDER" in
   anthropic)
     STATUS=$(do_post \
@@ -116,7 +129,6 @@ case "$PROVIDER" in
     ;;
 esac
 
-rc=${rc:-0}
 if (( rc != 0 )); then
   if [[ -s "$RESP_FILE" ]]; then
     echo "$PROVIDER: HTTP $STATUS" >&2
@@ -126,30 +138,56 @@ if (( rc != 0 )); then
   exit "$rc"
 fi
 
-# Parse response by provider.
+# Parse response by provider. Use .get() chains so safety-blocked responses,
+# empty choices, or error-shaped 2xx payloads degrade gracefully to empty text
+# rather than crashing with KeyError/IndexError.
 python3 - "$PROVIDER" "$MODEL" "$RESP_FILE" <<'PY'
 import json, sys
 
 provider, model, resp_path = sys.argv[1:]
-with open(resp_path) as f:
-    r = json.load(f)
+try:
+    with open(resp_path) as f:
+        r = json.load(f)
+except Exception as e:
+    print(f"{provider}: response not valid JSON ({e})", file=sys.stderr)
+    sys.exit(4)
+
+text = ""
+usage = {"input": 0, "output": 0}
 
 if provider == "anthropic":
-    text = "".join(b.get("text", "") for b in r.get("content", []) if b.get("type") == "text")
-    u = r.get("usage", {})
+    blocks = r.get("content") or []
+    text = "".join(b.get("text", "") for b in blocks if isinstance(b, dict) and b.get("type") == "text")
+    u = r.get("usage") or {}
     usage = {"input": u.get("input_tokens", 0), "output": u.get("output_tokens", 0)}
 elif provider == "openai":
-    text = r["choices"][0]["message"]["content"]
-    u = r.get("usage", {})
+    choices = r.get("choices") or []
+    if choices:
+        msg = (choices[0] or {}).get("message") or {}
+        text = msg.get("content") or ""
+    u = r.get("usage") or {}
     usage = {"input": u.get("prompt_tokens", 0), "output": u.get("completion_tokens", 0)}
 elif provider == "gemini":
-    parts = r["candidates"][0]["content"]["parts"]
-    text = "".join(p.get("text", "") for p in parts)
-    u = r.get("usageMetadata", {})
+    cands = r.get("candidates") or []
+    if cands:
+        parts = ((cands[0] or {}).get("content") or {}).get("parts") or []
+        text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
+    u = r.get("usageMetadata") or {}
     usage = {"input": u.get("promptTokenCount", 0), "output": u.get("candidatesTokenCount", 0)}
 else:
     print(f"unknown provider in parser: {provider}", file=sys.stderr)
     sys.exit(64)
+
+if not text:
+    finish = ""
+    if provider == "openai" and (r.get("choices") or []):
+        finish = ((r["choices"][0] or {}).get("finish_reason")) or ""
+    elif provider == "anthropic":
+        finish = r.get("stop_reason") or ""
+    elif provider == "gemini" and (r.get("candidates") or []):
+        finish = ((r["candidates"][0] or {}).get("finishReason")) or ""
+    print(f"{provider}: empty response text (finish_reason={finish!r}); shape may be safety-blocked or error envelope returned as 2xx", file=sys.stderr)
+    # Still exit 0 — caller can decide whether empty text is acceptable.
 
 usage["provider"] = provider
 usage["model"] = model

@@ -90,7 +90,7 @@ gh api repos/OWNER/REPO/issues/<PR>/comments \
 
 `scripts/post-review.sh` prepends every PR comment with:
 
-```
+```html
 <!-- ai-router:review:v<MAJ.MIN> ts=<ISO-UTC> run-id=<uuid> -->
 <!-- providers: anthropic,openai,gemini -->
 
