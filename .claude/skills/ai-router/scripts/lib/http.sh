@@ -17,12 +17,18 @@ do_post() {
     echo "do_post: mktemp failed" >&2; return 64
   }
   chmod 600 "$cfg"
-  # Cleanup on every return path.
-  local _cleanup
-  _cleanup="rm -f '$cfg'"
-  trap "$_cleanup" RETURN
+  # Cleanup on every return path. Single-quoted trap body uses $cfg from the
+  # function's local scope at trap-time, so AI_ROUTER_TMPDIR metacharacters
+  # can't reshape the trap command.
+  trap 'rm -f -- "$cfg"' RETURN
 
   while (( $# > 0 )) && [[ "$1" != "--" ]]; do
+    # Reject control chars (CR/LF/NUL) in header values — a malformed header
+    # could otherwise inject a new curl --config directive on a fresh line.
+    if [[ "$1" == *$'\n'* || "$1" == *$'\r'* || "$1" == *$'\0'* ]]; then
+      echo "do_post: header contains control character" >&2
+      return 64
+    fi
     # curl config "header" syntax escapes \ and "; safe for keys/version strings.
     local h=${1//\\/\\\\}
     h=${h//\"/\\\"}

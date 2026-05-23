@@ -52,9 +52,20 @@ If missing, run setup:
    # write a one-key probe config, run validate-key.sh <provider>, drop key if non-zero
    ```
    Exit 0 = valid; non-zero = warn "[Provider] key invalid (HTTP [code]). Skipping." and drop from the candidate set.
-5. After validation, write the surviving keys to the real config with restrictive permissions:
+5. After validation, write the surviving keys to the real config with restrictive permissions. Pass the config object on stdin so no secrets land in argv:
    ```bash
-   (umask 077 && python3 -c "import json,sys; print(json.dumps(CONFIG))" > ~/.orchestrator-config.json)
+   umask 077
+   python3 -c 'import json,sys; json.dump(json.load(sys.stdin), open(sys.argv[1], "w"))' \
+     ~/.orchestrator-config.json <<JSON
+   {
+     "anthropic_api_key": "$ANTHROPIC_KEY",
+     "openai_api_key": "$OPENAI_KEY",
+     "gemini_api_key": "$GEMINI_KEY",
+     "default_anthropic_model": "claude-sonnet-4-6",
+     "default_openai_model": "gpt-5.5",
+     "default_gemini_model": "gemini-3-flash-preview"
+   }
+   JSON
    ```
 6. Confirm: "ai-router configured. [N] provider(s) active: [list]."
 

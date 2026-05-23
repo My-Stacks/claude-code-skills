@@ -24,6 +24,10 @@ PR=$1
 BODY_FILE=$2
 PROVIDERS=${3:-${AI_ROUTER_PROVIDERS:-anthropic,openai,gemini}}
 
+# Strict PR validation — the script is allow-listed in permissions.allow, so a
+# bad caller could otherwise post to an unintended PR. Matches shadow-spawn.sh.
+[[ "$PR" =~ ^[1-9][0-9]*$ ]] || { echo "invalid PR number: $PR (must be positive integer)" >&2; exit 2; }
+
 [[ -r "$BODY_FILE" ]] || { echo "cannot read: $BODY_FILE" >&2; exit 2; }
 command -v gh >/dev/null 2>&1 || { echo "missing dependency: gh" >&2; exit 3; }
 

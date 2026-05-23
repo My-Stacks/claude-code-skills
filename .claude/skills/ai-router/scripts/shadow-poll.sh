@@ -31,6 +31,16 @@ for bin in gh jq python3; do
   command -v "$bin" >/dev/null 2>&1 || { echo "missing dependency: $bin" >&2; exit 3; }
 done
 
+# Require the core state files. Under `set -euo pipefail` a missing file would
+# silently abort the poll without ever emitting the documented first-line
+# status — the cron would die without surfacing anything.
+for required in pr run_id started_at shadow.status; do
+  if [[ ! -r "$STATE/$required" ]]; then
+    echo "FAILED:missing-state-$required"
+    exit 1
+  fi
+done
+
 PR=$(cat "$STATE/pr")
 RUN_ID=$(cat "$STATE/run_id")
 STARTED=$(cat "$STATE/started_at")
@@ -77,8 +87,11 @@ write_both() {
 }
 
 # 1. Shadow process died WITHOUT posting an ai-router comment → FAILED.
-#    Cross-check shadow.pid liveness so we don't wait the full 30 min if the
-#    headless instance was OOM-killed (status stays at "running" indefinitely).
+#    PID liveness is a best-effort fallback for the case where the headless
+#    instance was hard-killed without writing status. PID reuse is possible
+#    on long-running hosts, so we trust shadow.status first (which is now
+#    written reliably even on non-zero exit — see lib/shadow-runner.sh) and
+#    only use kill -0 as a secondary signal.
 process_alive=true
 if [[ -n "$SHADOW_PID" && "$SHADOW_PID" =~ ^[0-9]+$ ]]; then
   kill -0 "$SHADOW_PID" 2>/dev/null || process_alive=false
@@ -129,7 +142,9 @@ ELAPSED=$(( NOW - START_S ))
 TIMEOUT_S=${AI_ROUTER_SHADOW_TIMEOUT:-1800}
 
 # 5. Timeout. Write partial both.json so the parent can surface whatever did land.
-if (( ELAPSED > TIMEOUT_S )); then
+#    `>=` so the documented 30-min wall is honored on the tick that crosses it,
+#    not the one after (3-min overshoot).
+if (( ELAPSED >= TIMEOUT_S )); then
   if (( HAVE_AI == 1 )); then
     write_both "$( [[ "$WAIT_FOR_CR" == "true" && $HAVE_CR -eq 1 ]] && echo true || echo false )"
   fi
