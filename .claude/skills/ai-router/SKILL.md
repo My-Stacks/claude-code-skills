@@ -1,7 +1,7 @@
 ---
 name: ai-router
-version: "1.2"
-description: "Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs."
+version: "1.3"
+description: "Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Headless-safe with --post-to-pr for shadow review."
 trigger: /ai-router
 ---
 
@@ -11,7 +11,9 @@ Compare against this file's version in frontmatter.
 
 # AI Router Skill
 
-Route tasks to the best Claude Code model tier, and optionally call external model APIs (Anthropic, OpenAI, Gemini) for ensemble responses. Requires `curl` and `jq`.
+Route tasks to the best Claude Code model tier, and optionally call external model APIs (Anthropic, OpenAI, Gemini) for ensemble responses. Requires `curl`, `jq`, `python3`, and (for `--post-to-pr` / `shadow-review`) `gh`.
+
+External API calls go through `scripts/call-provider.sh` so they pass Claude Code's auto-mode classifier with a single `permissions.allow` rule per script.
 
 ## Config
 
@@ -36,53 +38,22 @@ On first invocation, check for `~/.orchestrator-config.json`.
 
 If missing, run setup:
 
-1. Check dependencies: `command -v jq >/dev/null 2>&1` and `command -v curl >/dev/null 2>&1`. If missing, tell user to install and stop.
+1. Check dependencies: `command -v jq && command -v curl && command -v python3`. If missing, tell user to install and stop.
 2. Prompt for each API key (Enter to skip):
    > "Anthropic API key (sk-ant-...): "
    > "OpenAI API key (sk-...): "
    > "Gemini API key (AIza...): "
 3. Require at least one key. If all skipped: "At least one API key is required."
-4. Validate each provided key with a minimal API call (see Validation section below).
-5. Write config with restrictive permissions:
+4. Write config with restrictive permissions:
    ```bash
    (umask 077 && python3 -c "import json; print(json.dumps(CONFIG))" > ~/.orchestrator-config.json)
    ```
+5. Validate each provided key:
+   ```bash
+   bash ~/.claude/skills/ai-router/scripts/validate-key.sh <provider>
+   ```
+   Exit 0 = valid. Non-zero = warn: "[Provider] key invalid (HTTP [code]). Skipping."
 6. Confirm: "ai-router configured. [N] provider(s) active: [list]."
-
-### Key Validation
-
-Use python3 for safe JSON construction. Write request body to a temp file, use `curl -sS -o /tmp/resp -w "%{http_code}"` to capture both body and status.
-
-**Anthropic:**
-```bash
-python3 -c "import json; print(json.dumps({'model':'claude-haiku-4-5','max_tokens':1,'messages':[{'role':'user','content':'hi'}]}))" > /tmp/ai-router-val.json
-STATUS=$(curl -sS -o /tmp/ai-router-resp -w "%{http_code}" --max-time 10 --connect-timeout 5 \
-  https://api.anthropic.com/v1/messages \
-  -H "x-api-key: $KEY" -H "anthropic-version: 2023-06-01" -H "content-type: application/json" \
-  -d @/tmp/ai-router-val.json)
-```
-
-**OpenAI:**
-```bash
-python3 -c "import json; print(json.dumps({'model':'gpt-5.5','max_completion_tokens':64,'messages':[{'role':'user','content':'hi'}]}))" > /tmp/ai-router-val.json
-STATUS=$(curl -sS -o /tmp/ai-router-resp -w "%{http_code}" --max-time 15 --connect-timeout 5 \
-  https://api.openai.com/v1/chat/completions \
-  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-  -d @/tmp/ai-router-val.json)
-```
-
-**Gemini:**
-```bash
-python3 -c "import json; print(json.dumps({'contents':[{'parts':[{'text':'hi'}]}]}))" > /tmp/ai-router-val.json
-STATUS=$(curl -sS -o /tmp/ai-router-resp -w "%{http_code}" --max-time 10 --connect-timeout 5 \
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent" \
-  -H "Content-Type: application/json" -H "x-goog-api-key: $KEY" \
-  -d @/tmp/ai-router-val.json)
-```
-
-200 = valid. Anything else = warn and skip: "Anthropic key invalid (HTTP [code]). Skipping."
-
-Clean up temp files after validation.
 
 ## Commands
 
@@ -93,7 +64,9 @@ Clean up temp files after validation.
 | `/ai-router route <task>` | Suggest best model tier | No |
 | `/ai-router ask <prompt>` | Send to one external model | Yes |
 | `/ai-router ensemble <prompt>` | Send to all configured models, synthesize | Yes |
-| `/ai-router review` | Ensemble PR review | Yes |
+| `/ai-router review [<pr>] [--post-to-pr <pr>]` | Ensemble PR review; optionally post to PR | Yes |
+| `/ai-router shadow-review` | Spawn a headless background review, poll for comments | Yes |
+| `/ai-router shadow-cancel` | Stop a running shadow-review | No |
 | `/ai-router compare <prompt>` | Side-by-side without synthesis | Yes |
 | `/ai-router config` | Show current config (redacted keys) | No |
 
@@ -106,16 +79,17 @@ After setup, show the command menu:
 > `/ai-router route <task>` — suggest best model for a task
 > `/ai-router ask <prompt>` — send to one external model
 > `/ai-router ensemble <prompt>` — multi-model synthesis
-> `/ai-router review` — ensemble PR review
+> `/ai-router review` — ensemble PR review (add `--post-to-pr <#>` to post)
+> `/ai-router shadow-review` — background review + PR-comment polling
 > `/ai-router compare <prompt>` — side-by-side responses
 > `/ai-router config` — show config
-> `/ai-router setup` — reconfigure keys (validates and overwrites config)
+> `/ai-router setup` — reconfigure keys
 
 ---
 
 ## `/ai-router route <task>`
 
-Analyze the task description and recommend model tiers using this matrix:
+Recommend Claude Code model tier and whether to also call externals:
 
 | Signal words | CC Model | External | Reason |
 |-------------|----------|----------|--------|
@@ -135,7 +109,7 @@ Analyze the task description and recommend model tiers using this matrix:
 **Why:** [one line reasoning]
 ```
 
-If the current CC model already matches the recommendation, say so: "Already on [Model] — good fit for this task."
+If already on the right model: "Already on [Model] — good fit for this task."
 
 ---
 
@@ -143,12 +117,10 @@ If the current CC model already matches the recommendation, say so: "Already on 
 
 Send a prompt to a single external model.
 
-1. Read config. Validate the provider key exists and is not null/empty before calling.
-2. If only one provider configured, use it. If multiple, ask: "Which provider? (anthropic/openai/gemini)" — or auto-route using the routing matrix.
-3. Call the API (see API Call Templates below).
+1. Read config; ensure the chosen provider's key is set.
+2. If multiple configured: ask "Which provider? (anthropic/openai/gemini)" or auto-route via the matrix above.
+3. Call the API via `scripts/call-provider.sh`.
 4. Display the response with provider attribution.
-
-**Output format:**
 
 ```
 ## [Provider] ([model])
@@ -162,9 +134,9 @@ Send a prompt to a single external model.
 
 Send to all configured providers in parallel, then synthesize.
 
-1. Read config. Identify active providers (key exists and is not null/empty).
-2. If only one provider: fall back to `/ai-router ask` behavior.
-3. Run all API calls in parallel using separate Bash tool calls where supported; otherwise run sequentially.
+1. Read config; identify active providers (key present and non-empty).
+2. If only one provider: fall back to `ask` behavior.
+3. Run all API calls in parallel (separate Bash tool calls).
 4. Synthesize using the Ensemble Synthesis format.
 
 ### Ensemble Synthesis Format
@@ -187,25 +159,32 @@ Send to all configured providers in parallel, then synthesize.
 [Synthesized best answer]
 ```
 
-Omit sections with no content. If a provider failed, note it: "Gemini: unavailable (HTTP 429)."
+Omit sections with no content. If a provider failed: "Gemini: unavailable (HTTP 429)."
 
 ---
 
-## `/ai-router review`
+## `/ai-router review [<pr-number>] [--post-to-pr <pr>]`
 
-Ensemble PR review. Gathers diff context, sends to all configured models, synthesizes.
+Ensemble PR review. Gathers diff context, sends to all configured models, synthesizes. Optionally posts the synthesis as a PR comment.
 
-1. Get the diff to review (in priority order):
-   - If user provides a PR number: `gh pr diff <number>`
-   - If on a branch: `git diff $(git merge-base HEAD main)..HEAD`
-   - If staged changes exist: `git diff --cached`
-   - Last resort: `git diff HEAD~1` (check `git rev-list --count HEAD` > 1 first)
-2. Check diff size. If > 80K characters, warn user and ask to scope (specific files or truncate).
-3. Construct a review prompt using the full rubric:
+1. Get the diff to review (priority order):
+   - PR number given: `gh pr diff <number>`
+   - On a branch: `git diff $(git merge-base HEAD main)..HEAD`
+   - Staged: `git diff --cached`
+   - Last resort: `git diff HEAD~1` (if `git rev-list --count HEAD` > 1)
+2. If diff > 80K characters, warn and ask to scope.
+3. Construct the review prompt with the full rubric:
    > "Review this code diff. Evaluate: (1) Correctness — logic errors, off-by-one, null handling, race conditions. (2) Security — injection, auth bypass, secrets exposure, OWASP top 10. (3) Performance — N+1 queries, unnecessary allocations, missing indexes. (4) Maintainability — naming, complexity, dead code, missing error handling. (5) Tests — coverage gaps, flaky patterns, missing edge cases. Be specific with file and line references. Categorize each finding as critical, suggestion, or nit."
 4. Prepend the diff to the prompt.
 5. Send to all configured providers in parallel.
-6. Synthesize using the PR Review Synthesis format.
+6. Synthesize using the PR Review Synthesis format below into a temp markdown file.
+7. If `--post-to-pr <#>` (or a PR was resolved and the user passed `--post`):
+   ```bash
+   bash ~/.claude/skills/ai-router/scripts/post-review.sh <pr-number> <synth-file>
+   ```
+8. **Always print** the final markdown to stdout — required for headless mode (`claude -p`) where there is no interactive output.
+
+**Headless contract:** `claude -p "/ai-router review 42 --post-to-pr 42"` exits 0 iff (a) ≥1 provider returned 200 and (b) the PR comment posted. Providers rendered in stable order: Anthropic → OpenAI → Gemini.
 
 ### PR Review Synthesis Format
 
@@ -227,16 +206,106 @@ Ensemble PR review. Gathers diff context, sends to all configured models, synthe
 
 ---
 
+## `/ai-router shadow-review`
+
+Run an ensemble PR review in a background headless Claude Code instance ("shadow") that has zero context bleed from the active session. The shadow posts the synthesized review to the PR as a comment; the active session polls the PR every 3 minutes for both the ai-router comment AND any CodeRabbit comment, then surfaces a synthesized handoff when both arrive.
+
+Flow:
+
+1. **Detect PR** for the current branch:
+   ```bash
+   gh pr view --json number,headRefName,url -q '.number'
+   ```
+   If empty: tell user "No PR for branch `<name>`. Push and open one first." and stop.
+
+2. **Detect CodeRabbit** on the repo:
+   ```bash
+   gh api "repos/$(gh repo view --json nameWithOwner -q .nameWithOwner)/issues/comments?per_page=100" \
+     --jq '[.[] | select(.user.login=="coderabbitai[bot]")] | length'
+   ```
+   If 0: set `WAIT_FOR_CR=false` and tell user "CodeRabbit not detected on this repo — polling for ai-router only."
+
+3. **Confirm** with a single Y/N: "Shadow-review PR #N. Spawns a headless claude in background, polls every 3 min, 30 min timeout. OK?"
+
+4. **Spawn:**
+   ```bash
+   STATE=$(bash ~/.claude/skills/ai-router/scripts/shadow-spawn.sh <PR> --wait-for-cr <true|false>)
+   ```
+
+5. **Schedule the poll** via `CronCreate` with cron `*/3 * * * *`. Save the cron ID to `$STATE/cron.id`. Use this prompt verbatim (substituting `<PR>` and `<STATE>`):
+   ```
+   Run: bash ~/.claude/skills/ai-router/scripts/shadow-poll.sh <STATE>
+
+   Read the first line of stdout:
+   - BOTH_READY            → load <STATE>/both.json, render Shadow Handoff (see SKILL.md), CronDelete <cron-id>, summarize the two reviews in chat.
+   - ONLY_AI_ROUTER_READY  → load <STATE>/both.json, render Shadow Handoff with CodeRabbit omitted, CronDelete <cron-id>.
+   - WAITING               → do nothing, stay quiet.
+   - TIMEOUT               → surface partial results from <STATE>/both.json if present plus last 50 lines of <STATE>/shadow.log; ask user to keep waiting or stop; do NOT auto-delete the cron.
+   - FAILED:<status>       → show last 50 lines of <STATE>/shadow.log, CronDelete.
+   ```
+
+6. **Print to user:** "Shadow review running for PR #N (state: `$STATE`). Polling every 3 min. I'll surface results when ready. Stop early with `/ai-router shadow-cancel`."
+
+7. **Return control immediately.** The user keeps working; the cron fires when there's news.
+
+### `/ai-router shadow-cancel`
+
+```bash
+# Find the running state dir (most recent)
+STATE=$(ls -dt /tmp/ai-router-shadow/*/ 2>/dev/null | head -1 | sed 's:/$::')
+[ -z "$STATE" ] && echo "No active shadow." && exit 0
+
+# Delete cron, kill process group, clear state
+[ -f "$STATE/cron.id" ] && CronDelete "$(cat "$STATE/cron.id")"
+[ -f "$STATE/shadow.pgid" ] && kill -TERM -"$(cat "$STATE/shadow.pgid")" 2>/dev/null
+rm -rf "$STATE"
+```
+
+### Shadow Handoff Format
+
+Rendered by the parent assistant when the poll returns `BOTH_READY` or `ONLY_AI_ROUTER_READY`. Synthesis is done in-session from `$STATE/both.json` — no extra API calls.
+
+```markdown
+## Shadow Review #<PR> — reviews are in
+**AI Router ensemble** ([link])   ← link is `both.json` .ai_router.url
+**CodeRabbit** ([link])           ← omit this line if CodeRabbit was skipped
+
+### Where they agree
+- <bullets from the intersection: same file/line, same finding category>
+
+### AI Router caught (CodeRabbit did not)
+- <bullets, with file:line>
+
+### CodeRabbit caught (AI Router did not)
+- <bullets, with file:line>
+
+### Conflicts
+- <if one says ship and the other flags critical, surface here>
+
+### Recommended next step
+<1-2 sentences>
+```
+
+### Comment Signature
+
+`post-review.sh` wraps every PR comment with a signature marker block so the poll can identify the comment from a specific shadow run:
+
+```
+<!-- ai-router:review:v<MAJ.MIN> ts=<ISO-UTC> run-id=<uuid> -->
+<!-- providers: anthropic,openai,gemini -->
+
+<review markdown>
+
+<!-- /ai-router:review:v<MAJ.MIN> run-id=<uuid> -->
+```
+
+The `run-id` field is the contract — `shadow-poll.sh` matches `contains("run-id=<uuid>")` for the exact spawn. Re-running shadow-review on the same PR creates a new comment with a new `run-id`.
+
+---
+
 ## `/ai-router compare <prompt>`
 
-Side-by-side responses without synthesis.
-
-1. Read config. Identify active providers.
-2. If only one provider: show single response with a note that compare requires 2+ providers.
-3. Send to all configured providers in parallel.
-4. Display each response under its own heading. No synthesis.
-
-**Output format:**
+Side-by-side responses without synthesis. Otherwise identical to `ensemble`. Output:
 
 ```markdown
 ## Compare: [topic]
@@ -255,7 +324,7 @@ Side-by-side responses without synthesis.
 
 ## `/ai-router config`
 
-Show current configuration with redacted keys.
+Show config with redacted keys (first 6 + last 4 chars; first 3 + `...` if short):
 
 ```
 ## AI Router Config
@@ -263,201 +332,99 @@ Show current configuration with redacted keys.
 | Provider | Key | Model | Status |
 |----------|-----|-------|--------|
 | Anthropic | sk-ant-...qAAA | claude-sonnet-4-6 | Active |
-| OpenAI | sk-pro...DcA | gpt-5.5 | Active |
-| Gemini | — | — | Not configured |
+| OpenAI    | sk-pro...DcA   | gpt-5.5           | Active |
+| Gemini    | —              | —                 | Not configured |
 
 Config: ~/.orchestrator-config.json
 ```
-
-Redact keys: if length > 12, show first 6 + last 4 characters. If shorter, show first 3 + "...". Show "Not configured" for missing/null providers.
 
 ---
 
 ## `/ai-router setup`
 
-Re-run the first-run setup flow. Before overwriting, back up existing config:
+Re-run first-run setup. Back up existing config first:
 ```bash
 cp ~/.orchestrator-config.json ~/.orchestrator-config.json.bak
 ```
-Confirm with user: "This will overwrite your current config (backup saved to .bak). Continue?"
+Confirm: "This will overwrite your current config (backup saved to .bak). Continue?"
 
 ---
 
-## API Call Templates
+## API Calls
 
-Use python3 for safe JSON construction. Write request body to a temp file, call curl with the file. This avoids shell injection and control character issues.
-
-**Before any API call**, validate the provider key from config:
-```bash
-KEY=$(python3 -c "import json; c=json.load(open('$HOME/.orchestrator-config.json')); k=c.get('anthropic_api_key',''); print(k if k else '')")
-[ -z "$KEY" ] && echo "Anthropic not configured" && exit 1
-```
-
-### Anthropic
+All provider calls go through `scripts/call-provider.sh`. Pipe the prompt on stdin; read response from stdout; parse the trailing `---USAGE---` JSON line for cost.
 
 ```bash
-python3 << 'PYEOF'
-import json, subprocess, os
+SCRIPT="$HOME/.claude/skills/ai-router/scripts/call-provider.sh"
 
-config = json.load(open(os.path.expanduser("~/.orchestrator-config.json")))
-body = json.dumps({
-    "model": config["default_anthropic_model"],
-    "max_tokens": 4096,
-    "messages": [{"role": "user", "content": PROMPT}]
-})
+# Single call:
+echo "$PROMPT" | bash "$SCRIPT" anthropic
 
-result = subprocess.run([
-    "curl", "-sS", "--max-time", "120", "--connect-timeout", "10",
-    "-o", "/tmp/ai-router-resp.json", "-w", "%{http_code}",
-    "https://api.anthropic.com/v1/messages",
-    "-H", f"x-api-key: {config['anthropic_api_key']}",
-    "-H", "anthropic-version: 2023-06-01",
-    "-H", "content-type: application/json",
-    "-d", body
-], capture_output=True, text=True)
+# With overrides:
+echo "$PROMPT" | bash "$SCRIPT" openai --model gpt-5.5 --max-tokens 8192 --timeout 300
 
-status = result.stdout.strip()
-if status != "200":
-    print(f"Anthropic error: HTTP {status}")
-    print(open("/tmp/ai-router-resp.json").read()[:500])
-else:
-    resp = json.load(open("/tmp/ai-router-resp.json"))
-    print(resp["content"][0]["text"])
-    print("---USAGE---")
-    u = resp.get("usage", {})
-    print(json.dumps({"input": u.get("input_tokens", 0), "output": u.get("output_tokens", 0)}))
-PYEOF
+# Ensemble (parallel — issue these as three separate Bash tool calls):
+echo "$PROMPT" | bash "$SCRIPT" anthropic > /tmp/ai-router-claude.out  2>/tmp/ai-router-claude.err  &
+echo "$PROMPT" | bash "$SCRIPT" openai    > /tmp/ai-router-gpt.out     2>/tmp/ai-router-gpt.err     &
+echo "$PROMPT" | bash "$SCRIPT" gemini    > /tmp/ai-router-gemini.out  2>/tmp/ai-router-gemini.err  &
+wait
 ```
 
-### OpenAI
+Stdout shape:
 
-```bash
-python3 << 'PYEOF'
-import json, subprocess, os
-
-config = json.load(open(os.path.expanduser("~/.orchestrator-config.json")))
-body = json.dumps({
-    "model": config["default_openai_model"],
-    "max_completion_tokens": 16384,
-    "messages": [{"role": "user", "content": PROMPT}]
-})
-
-result = subprocess.run([
-    "curl", "-sS", "--max-time", "300", "--connect-timeout", "10",
-    "-o", "/tmp/ai-router-resp.json", "-w", "%{http_code}",
-    "https://api.openai.com/v1/chat/completions",
-    "-H", f"Authorization: Bearer {config['openai_api_key']}",
-    "-H", "Content-Type: application/json",
-    "-d", body
-], capture_output=True, text=True)
-
-status = result.stdout.strip()
-if status != "200":
-    print(f"OpenAI error: HTTP {status}")
-    print(open("/tmp/ai-router-resp.json").read()[:500])
-else:
-    resp = json.load(open("/tmp/ai-router-resp.json"))
-    print(resp["choices"][0]["message"]["content"])
-    print("---USAGE---")
-    u = resp.get("usage", {})
-    print(json.dumps({"input": u.get("prompt_tokens", 0), "output": u.get("completion_tokens", 0)}))
-PYEOF
+```
+<response text>
+---USAGE---
+{"input":N,"output":N,"provider":"...","model":"..."}
 ```
 
-### Gemini
+Exit codes: `0` ok | `2` not configured | `3` missing deps | `4` HTTP non-200 | `5` network/timeout.
 
-```bash
-python3 << 'PYEOF'
-import json, subprocess, os
+The prompt is piped on stdin and never appears on a command line — the auto-mode classifier sees a constant `bash …/call-provider.sh <provider>` invocation, which can be pre-authorized with a single `permissions.allow` rule per script.
 
-config = json.load(open(os.path.expanduser("~/.orchestrator-config.json")))
-model = config["default_gemini_model"]
-body = json.dumps({
-    "contents": [{"parts": [{"text": PROMPT}]}]
-})
+### Required permissions.allow snippet
 
-result = subprocess.run([
-    "curl", "-sS", "--max-time", "120", "--connect-timeout", "10",
-    "-o", "/tmp/ai-router-resp.json", "-w", "%{http_code}",
-    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-    "-H", "Content-Type: application/json",
-    "-H", f"x-goog-api-key: {config['gemini_api_key']}",
-    "-d", body
-], capture_output=True, text=True)
+Add to `~/.claude/settings.json` `permissions.allow`:
 
-status = result.stdout.strip()
-if status != "200":
-    print(f"Gemini error: HTTP {status}")
-    print(open("/tmp/ai-router-resp.json").read()[:500])
-else:
-    resp = json.load(open("/tmp/ai-router-resp.json"))
-    print(resp["candidates"][0]["content"]["parts"][0]["text"])
-    print("---USAGE---")
-    u = resp.get("usageMetadata", {})
-    print(json.dumps({"input": u.get("promptTokenCount", 0), "output": u.get("candidatesTokenCount", 0)}))
-PYEOF
+```json
+"Bash(bash ~/.claude/skills/ai-router/scripts/call-provider.sh:*)",
+"Bash(bash ~/.claude/skills/ai-router/scripts/validate-key.sh:*)",
+"Bash(bash ~/.claude/skills/ai-router/scripts/post-review.sh:*)",
+"Bash(bash ~/.claude/skills/ai-router/scripts/shadow-spawn.sh:*)",
+"Bash(bash ~/.claude/skills/ai-router/scripts/shadow-poll.sh:*)"
 ```
 
-### Error Handling
-
-Each template captures HTTP status and handles errors inline:
-1. Non-200 status: print error with status code and first 500 chars of response body.
-2. If a provider fails during ensemble, continue with remaining providers.
-3. Note failures in the synthesis: "[Provider]: unavailable (HTTP [code])."
-4. If all providers fail, report the errors — do not synthesize from nothing.
-
-### Parallel Execution
-
-For ensemble and compare commands, run all API calls as separate Bash tool calls in a single response where supported. Otherwise run sequentially. Each call writes to a provider-specific temp file to avoid conflicts.
-
-### Prompt Construction
-
-Use python3 `json.dumps()` to safely escape prompts for JSON embedding. Never interpolate raw user input into shell strings or JSON templates. For review commands, prepend the diff to the prompt string in Python before JSON-encoding.
+Without these, `defaultMode: "auto"` will prompt on every call. (Allow-rule paths must match the literal command Claude invokes; if `~` doesn't expand in your Claude Code version, use `/Users/<you>/.claude/skills/ai-router/scripts/...`.)
 
 ### Model Override
 
-To use a non-default model: `/ai-router ask --model claude-opus-4-6 "question"`. Parse `--model <value>` from the prompt. Validate model name contains only `[a-zA-Z0-9._-]` before substituting. Override the config default for that single call only.
+To use a non-default model for one call: pass `--model <id>` after the provider. Model IDs must match `[A-Za-z0-9._-]+` (validated by the script).
+
+### Error Handling
+
+`call-provider.sh` writes errors to stderr with `<provider>: HTTP <code>` and the first 500 chars of the response body. Exit code distinguishes config (2), deps (3), HTTP (4), network (5). For ensembles, treat non-zero exits per-provider — continue with the others and note the failure: "Gemini: unavailable (HTTP 429)."
 
 ---
 
 ## Cost Tracking
 
-After every API call, extract token usage from the `---USAGE---` line and calculate cost.
-
-### Pricing Table (per 1M tokens, estimates as of 2026-03)
-
-| Provider | Model | Input | Output |
-|----------|-------|------:|-------:|
-| Anthropic | claude-sonnet-4-6 | $3.00 | $15.00 |
-| Anthropic | claude-opus-4-6 | $5.00 | $25.00 |
-| Anthropic | claude-haiku-4-5 | $1.00 | $5.00 |
-| OpenAI | gpt-5.5 | ~$2.50* | ~$15.00* |
-| Gemini | gemini-3-flash-preview | $0.50 | $3.00 |
-
-*gpt-5.5 pricing approximated from gpt-5.4 rates, not yet verified against platform.openai.com/pricing — OpenAI cost reports are estimates (shown with ~) until updated.
-
-Prices may change. See REFERENCE.md for latest known rates.
-
-### Cost Calculation
+After every API call, parse the `---USAGE---` JSON line and compute cost from the table in REFERENCE.md.
 
 ```
 cost = (input_tokens / 1_000_000 * input_rate) + (output_tokens / 1_000_000 * output_rate)
 ```
 
-### Cost Report
-
-Append a cost summary to every API response (`ask`, `ensemble`, `compare`, `review`):
+Append a cost summary to every API response:
 
 ```
 ---
 **Cost:** Claude $0.0045 (312 in / 189 out) | GPT $0.0038 (298 in / 201 out) | Gemini $0.0008 (305 in / 195 out) | **Total: $0.0091**
 ```
 
-For single-model calls (`ask`), show just that provider's cost. For multi-model calls, show per-provider breakdown + total.
+For single-model calls, show just that provider. For multi-model, show per-provider breakdown + total.
 
 ---
 
 ## Reference
 
-For model capabilities, context windows, pricing tiers, PR review rubrics,
-and troubleshooting, read REFERENCE.md. Load on demand, not by default.
+Model catalog, pricing, PR review rubric, troubleshooting, headless/CI usage, and signature marker contract: see REFERENCE.md. Load on demand, not by default.

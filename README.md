@@ -9,7 +9,7 @@ Reusable components for [Claude Code](https://docs.anthropic.com/en/docs/claude-
 | [linear](./.claude/skills/linear/) | Skill | 0.5.1 | Linear project management with session continuity. Buffered writes, board management, ticket creation, structured handoffs persisted to Linear. Auto-maintains `.latest-status.md`. |
 | [handoff](./.claude/skills/handoff/) | Skill | 3.0.1 | Session continuity via `.latest-status.md`. Auto-updates during plan execution. Manual handoff, resume, and transfer commands. |
 | [vault-backup](./.claude/skills/vault-backup/) | Skill | 1.0 | Save research, project outputs, and knowledge artifacts from any Claude Code workspace into a shared Obsidian knowledge vault. |
-| [ai-router](./.claude/skills/ai-router/) | Skill | 1.1 | Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Requires `curl` and `jq`. |
+| [ai-router](./.claude/skills/ai-router/) | Skill | 1.3 | Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Headless-safe with `--post-to-pr` and `/ai-router shadow-review` (background review + PR-comment polling). Requires `curl`, `jq`, `python3`, and (for PR posting) `gh`. |
 | [pull-and-sync](./.claude/commands/pull-and-sync.md) | Command | 1.0 | Sync working branch with latest from default branch using merge --no-ff. |
 | [commit](./.claude/commands/commit.md) | Command | 1.0 | Smart commit with conventional format, staged diffs, and hook compliance. |
 | [push](./.claude/commands/push.md) | Command | 1.0 | Push with safety checks, branch protection, and tracking setup. |
@@ -70,7 +70,8 @@ claude-code-skills/
     │   │   └── SKILL.md
     │   ├── ai-router/
     │   │   ├── SKILL.md
-    │   │   └── REFERENCE.md
+    │   │   ├── REFERENCE.md
+    │   │   └── scripts/        # provider dispatcher + shadow-review helpers
     ├── agents/
     │   └── .gitkeep
     └── commands/
@@ -93,6 +94,18 @@ These components are built around a few constraints that shape every decision.
 **Progressive disclosure.** Not everything loads at once. Reference files are loaded on demand. The agent gets what it needs for the current command, not the entire knowledge base.
 
 ## Upgrade Notes
+
+### AI Router v1.3
+
+External API calls moved out of inline `python3` heredocs and into checked-in helper scripts under `.claude/skills/ai-router/scripts/`. This unblocks `permissions.defaultMode: "auto"` users (Claude Code's auto-mode classifier was denying the heredocs as "exfiltration to untrusted endpoint"). Adds `/ai-router review --post-to-pr <#>` and a new `/ai-router shadow-review` that spawns a headless background review and polls the PR for both ai-router and CodeRabbit comments. Config schema (`~/.orchestrator-config.json`) is unchanged — fully back-compat.
+
+To upgrade:
+
+```bash
+cp -r .claude/skills/ai-router/ ~/.claude/skills/ai-router/
+```
+
+Then add the five script allow-rules to `~/.claude/settings.json` `permissions.allow` (see REFERENCE.md → "Pre-authorizing the scripts").
 
 ### Linear v0.5.1 / Handoff v3.0.1
 

@@ -42,7 +42,87 @@ When constructing review prompts, instruct each model to evaluate:
 
 Ask models to reference specific lines/hunks and categorize severity (critical/suggestion/nit).
 
+## Headless / CI Usage
+
+The skill is safe to run under `claude -p` (headless mode), which is how `/ai-router shadow-review` works. Key contract:
+
+- All provider calls go through `scripts/call-provider.sh`. The prompt is piped on stdin so the literal Bash command line is constant — pattern-matching allow-rules work cleanly.
+- `/ai-router review <PR#> --post-to-pr <PR#>` writes the synthesis to stdout AND posts it as a PR comment via `scripts/post-review.sh`. Exit 0 iff at least one provider returned 200 and `gh pr comment` succeeded.
+
+### Env vars
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `AI_ROUTER_CONFIG` | `~/.orchestrator-config.json` | Override config path (useful for CI). |
+| `AI_ROUTER_TMPDIR` | `$TMPDIR` or `/tmp` | Where temp body/response files live. |
+| `AI_ROUTER_RUN_ID` | new UUID | Embedded in the comment marker so the shadow poll can match the comment from one specific run. |
+| `AI_ROUTER_PROVIDERS` | `anthropic,openai,gemini` | CSV listed in the comment marker. |
+| `AI_ROUTER_SHADOW_TIMEOUT` | `1800` (s) | Shadow poll timeout. |
+
+### Exit codes
+
+| Code | Meaning |
+|-----:|---------|
+| 0 | OK |
+| 2 | Not configured (no key for that provider) |
+| 3 | Missing dependency (`curl`, `jq`, `python3`, `gh`) |
+| 4 | HTTP non-200 from provider |
+| 5 | Network / timeout |
+| 10 | `gh pr comment` failed (post-review.sh only) |
+| 64 | Usage error |
+
+### Finding the shadow's PR comment
+
+```bash
+gh api repos/OWNER/REPO/issues/<PR>/comments \
+  --jq '[.[] | select(.body | contains("<!-- ai-router:review:v"))] | last'
+```
+
+To match a specific run:
+
+```bash
+gh api repos/OWNER/REPO/issues/<PR>/comments \
+  --jq --arg rid "$RUN_ID" \
+       '[.[] | select(.body | contains("run-id=" + $rid))] | last'
+```
+
+## Signature Marker Contract
+
+`scripts/post-review.sh` prepends every PR comment with:
+
+```
+<!-- ai-router:review:v<MAJ.MIN> ts=<ISO-UTC> run-id=<uuid> -->
+<!-- providers: anthropic,openai,gemini -->
+
+<review markdown>
+
+<!-- /ai-router:review:v<MAJ.MIN> run-id=<uuid> -->
+```
+
+- Version is read from `SKILL.md` frontmatter, so the marker stays in sync with the skill.
+- `run-id` is the polling key. Re-runs always create a new comment (per user preference); poll matching is exact on `run-id`.
+- `providers` lists which providers actually contributed (for partial-quorum reviews).
+
+## Pre-authorizing the scripts (auto-mode)
+
+Users with `permissions.defaultMode: "auto"` in `~/.claude/settings.json` need to allowlist the helper scripts. Add to `permissions.allow`:
+
+```json
+"Bash(bash ~/.claude/skills/ai-router/scripts/call-provider.sh:*)",
+"Bash(bash ~/.claude/skills/ai-router/scripts/validate-key.sh:*)",
+"Bash(bash ~/.claude/skills/ai-router/scripts/post-review.sh:*)",
+"Bash(bash ~/.claude/skills/ai-router/scripts/shadow-spawn.sh:*)",
+"Bash(bash ~/.claude/skills/ai-router/scripts/shadow-poll.sh:*)"
+```
+
+If `~` is not expanded in your Claude Code version, use the absolute path form (`/Users/<you>/.claude/skills/...`).
+
+Why this works: the auto-mode classifier scores the literal command string. A bash invocation of a checked-in script has constant shape — review once, allow forever. The previous v1.2 design embedded multi-line `python3 << 'PYEOF' … curl https://api.anthropic.com … PYEOF` heredocs that varied byte-for-byte every call, so no allow pattern could match cleanly and the classifier denied them by default.
+
 ## Troubleshooting
+
+### Classifier denied a Bash call ("auto mode classifier")
+You have `permissions.defaultMode: "auto"` and are missing the allow snippet above. Add the five `Bash(bash ~/.claude/skills/ai-router/scripts/...)` lines to `~/.claude/settings.json` `permissions.allow`.
 
 ### "command not found: jq"
 Install jq: `brew install jq` (macOS) or `apt-get install jq` (Linux).
