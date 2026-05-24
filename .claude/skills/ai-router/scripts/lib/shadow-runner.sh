@@ -2,7 +2,7 @@
 # shadow-runner.sh — body of the detached shadow process.
 #
 # Called only by shadow-spawn.sh via:
-#   python3 -c 'os.setsid(); subprocess.run(["bash", "<this>", PR, RUN_ID, PROVIDERS, STATE])'
+#   python3 -c 'os.setsid(); subprocess.run(["bash", "<this>", PR, RUN_ID, PROVIDERS, POST, STATE])'
 #
 # Runs inside the new session created by python3's os.setsid(), so $$ equals the
 # session/process-group leader. Writing $$ -> $STATE/shadow.pgid here (rather
@@ -11,28 +11,66 @@
 
 set -euo pipefail
 
-[[ $# -eq 4 ]] || { echo "shadow-runner.sh: bad argc ($#)" >&2; exit 64; }
-PR=$1; RUN_ID=$2; PROVIDERS=$3; STATE=$4
+[[ $# -eq 5 ]] || { echo "shadow-runner.sh: bad argc ($#) — expected 5" >&2; exit 64; }
+PR=$1; RUN_ID=$2; PROVIDERS=$3; POST=$4; STATE=$5
 
 # Atomic pgid write. Equals the new session leader (this bash process).
 PGID=$(ps -o pgid= -p $$ | tr -d ' ')
 printf '%s\n' "$PGID" > "$STATE/shadow.pgid.tmp" && mv "$STATE/shadow.pgid.tmp" "$STATE/shadow.pgid"
 
-export AI_ROUTER_RUN_ID="$RUN_ID" AI_ROUTER_PROVIDERS="$PROVIDERS"
+# Build the claude -p prompt. PR is interpolated into the string, but
+# shadow-spawn.sh strictly validated it (^[1-9][0-9]*$) so injection is blocked.
+if [[ "$POST" == "true" ]]; then
+  PROMPT="/ai-router review $PR --post-to-pr $PR"
+else
+  PROMPT="/ai-router review $PR"
+fi
 
-# Headless claude. PR is interpolated into the prompt string, but shadow-spawn.sh
-# strictly validated it (^[1-9][0-9]*$) before spawn, so this can't inject.
+# Isolation: scrub inherited env. The shadow advertises "zero context bleed",
+# so strip API keys, GH_TOKEN, Anthropic console creds, anything the parent
+# happened to export. Keep ONLY what claude / gh / config-file reads need:
+#   HOME      — claude looks up ~/.claude/, gh looks up ~/.config/gh/
+#   PATH      — needed to find `claude`, `gh`, `bash`, `python3`, `jq`, `curl`
+#   TMPDIR    — temp files (provider body/resp, post-review comment)
+#   TERM      — claude -p uses "dumb" for non-interactive output formatting
+#   USER      — some gh git operations want a user
+#   LANG/LC_* — keep UTF-8 happy
+#   AI_ROUTER_* — explicit per-run inputs
 #
+# Max-runtime cap (python signal.alarm) ensures one shadow can't run longer
+# than AI_ROUTER_SHADOW_RUNTIME (default 600s = 10 min). claude -p for a
+# review is normally ~3 min; the cap is a hard ceiling so orphaned shadows
+# (parent session ended before poll fired) can't burn unbounded API tokens.
+RUNTIME_CAP=${AI_ROUTER_SHADOW_RUNTIME:-600}
+
 # `set +e` around the call so a non-zero exit doesn't trip set -e and abort
 # before the status file is written — the poller relies on the status file
 # transitioning out of "running".
 set +e
-claude -p "/ai-router review $PR --post-to-pr $PR" --output-format text \
+env -i \
+  HOME="$HOME" \
+  PATH="$PATH" \
+  TMPDIR="${TMPDIR:-/tmp}" \
+  TERM="${TERM:-dumb}" \
+  USER="${USER:-$(id -un 2>/dev/null || echo user)}" \
+  LANG="${LANG:-en_US.UTF-8}" \
+  LC_ALL="${LC_ALL:-}" \
+  AI_ROUTER_RUN_ID="$RUN_ID" \
+  AI_ROUTER_PROVIDERS="$PROVIDERS" \
+  python3 -c '
+import os, signal, subprocess, sys
+signal.alarm(int(sys.argv[1]))
+sys.exit(subprocess.run(sys.argv[2:]).returncode)
+' "$RUNTIME_CAP" claude -p "$PROMPT" --output-format text \
   > "$STATE/shadow.log" 2>&1
 rc=$?
 set -e
 
-if (( rc == 0 )); then
+# Distinguish "claude exited non-zero" from "we hit the runtime cap".
+# python3 receives SIGALRM and exits 142 (128 + 14).
+if (( rc == 142 )); then
+  printf 'failed:runtime-cap-%ss\n' "$RUNTIME_CAP" > "$STATE/shadow.status.tmp"
+elif (( rc == 0 )); then
   printf 'done\n' > "$STATE/shadow.status.tmp"
 else
   printf 'failed:exit-%s\n' "$rc" > "$STATE/shadow.status.tmp"

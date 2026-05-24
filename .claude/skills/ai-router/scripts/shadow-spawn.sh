@@ -2,7 +2,7 @@
 # shadow-spawn.sh — launch a headless `claude -p` that runs /ai-router review
 # on a PR in the background. Returns the state directory on stdout.
 #
-# Usage: bash shadow-spawn.sh <pr-number> [--wait-for-cr true|false]
+# Usage: bash shadow-spawn.sh <pr-number> [--wait-for-cr true|false] [--post]
 #
 # Security:
 # - PR number is strictly validated (^[1-9][0-9]*$) before any interpolation.
@@ -32,6 +32,7 @@ PR=$1; shift
 [[ "$PR" =~ ^[1-9][0-9]*$ ]] || { echo "invalid PR number: $PR (must be positive integer)" >&2; exit 2; }
 
 WAIT_FOR_CR=true
+POST=false   # default: synthesis goes to shadow.log, NOT to a PR comment
 while (( $# > 0 )); do
   case "$1" in
     --wait-for-cr)
@@ -41,6 +42,10 @@ while (( $# > 0 )); do
         *) echo "--wait-for-cr must be 'true' or 'false', got: $2" >&2; exit 2 ;;
       esac
       shift 2
+      ;;
+    --post)
+      POST=true
+      shift
       ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac
@@ -87,6 +92,7 @@ date -u +%Y-%m-%dT%H:%M:%SZ > "$STATE/started_at"
 printf '%s\n' "$RUN_ID"      > "$STATE/run_id"
 printf '%s\n' "$PR"          > "$STATE/pr"
 printf '%s\n' "$WAIT_FOR_CR" > "$STATE/wait_for_cr"
+printf '%s\n' "$POST"        > "$STATE/post"
 printf '%s\n' "$PROVIDERS"   > "$STATE/providers"
 # Atomic status write.
 printf 'running\n' > "$STATE/shadow.status.tmp" && mv "$STATE/shadow.status.tmp" "$STATE/shadow.status"
@@ -100,7 +106,7 @@ python3 -c '
 import os, sys, subprocess
 os.setsid()
 sys.exit(subprocess.run(["bash", *sys.argv[1:]]).returncode)
-' "$SCRIPT_DIR/lib/shadow-runner.sh" "$PR" "$RUN_ID" "$PROVIDERS" "$STATE" \
+' "$SCRIPT_DIR/lib/shadow-runner.sh" "$PR" "$RUN_ID" "$PROVIDERS" "$POST" "$STATE" \
   </dev/null >/dev/null 2>&1 &
 
 PID=$!

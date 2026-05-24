@@ -79,8 +79,9 @@ If missing, run setup:
 | `/ai-router ask <prompt>` | Send to one external model | Yes |
 | `/ai-router ensemble <prompt>` | Send to all configured models, synthesize | Yes |
 | `/ai-router review [<pr>] [--post-to-pr <pr>]` | Ensemble PR review; optionally post to PR | Yes |
-| `/ai-router shadow-review` | Spawn a headless background review, poll for comments | Yes |
-| `/ai-router shadow-cancel` | Stop a running shadow-review | No |
+| `/ai-router shadow-review [--post] [--pr <#>]` | Spawn a background review; default stdout-only, `--post` to also post to PR | Yes |
+| `/ai-router shadow-list` | List active shadow runs for this repo | No |
+| `/ai-router shadow-cancel [<pr>]` | Stop a running shadow-review (most-recent if no PR given) | No |
 | `/ai-router compare <prompt>` | Side-by-side without synthesis | Yes |
 | `/ai-router config` | Show current config (redacted keys) | No |
 
@@ -220,13 +221,25 @@ Ensemble PR review. Gathers diff context, sends to all configured models, synthe
 
 ---
 
-## `/ai-router shadow-review`
+## `/ai-router shadow-review [--post] [--pr <#>]`
 
-Run an ensemble PR review in a background headless Claude Code instance ("shadow") that has zero context bleed from the active session. The shadow posts the synthesized review to the PR as a comment; the active session polls the PR every 3 minutes for both the ai-router comment AND any CodeRabbit comment, then surfaces a synthesized handoff when both arrive.
+Run an ensemble PR review in a background headless Claude Code instance ("shadow") that has minimal context bleed from the active session (see Isolation below). The shadow writes the synthesized review to `$STATE/shadow.log`; the active session polls every 3 minutes and surfaces the review when ready.
 
-Flow:
+**Posting is opt-in.** Default is stdout/log only — the user reads the synthesis, decides what to keep, and posts in their own voice. Pass `--post` to also post the raw synthesis as a PR comment with the `<!-- ai-router:review:v… -->` signature marker.
 
-1. **Detect PR** for the current branch:
+### Isolation (what "zero context bleed" actually means)
+
+- The shadow is a fresh `claude -p` process. It has **no access** to the parent session's conversation history, no shared memory, no plan/task state.
+- It **does** inherit `HOME`, `PATH`, `TMPDIR`, locale, and explicit `AI_ROUTER_*` env vars (needed for `claude`, `gh`, and `python3` to function). All other env vars are scrubbed via `env -i` in `lib/shadow-runner.sh`, so secrets like `ANTHROPIC_API_KEY` / `GH_TOKEN` that may be set in the parent are NOT visible to the shadow. The shadow reads provider keys from `~/.orchestrator-config.json`, and `gh` reads its credentials from `~/.config/gh/`.
+- The shadow has a hard runtime cap (default 600s, `AI_ROUTER_SHADOW_RUNTIME` to override) via `python3 signal.alarm`, so an orphaned shadow can't burn unbounded API tokens.
+
+### Orphan warning
+
+If the parent session ends after spawning but before the cron fires `BOTH_READY` / `ONLY_AI_ROUTER_READY`, the shadow keeps running until it (a) finishes its `claude -p` review or (b) hits the runtime cap. The cron dies with the session, so the result won't be surfaced — but if `--post` was set, the comment will still land on the PR. Use `/ai-router shadow-list` to find orphaned state dirs and `/ai-router shadow-cancel <pr>` to terminate one.
+
+### Flow
+
+1. **Detect PR** for the current branch (or honor `--pr <#>` if passed):
    ```bash
    gh pr view --json number,headRefName,url -q '.number'
    ```
@@ -249,11 +262,13 @@ Flow:
    ```
    If `WAIT_FOR_CR=false`: tell user "CodeRabbit not detected on this repo — polling for ai-router only."
 
-3. **Confirm** with a single Y/N: "Shadow-review PR #N. Spawns a headless claude in background, polls every 3 min, 30 min timeout. OK?"
+3. **Confirm** with a single Y/N: "Shadow-review PR #N. Spawns a headless claude in background, polls every 3 min, 30 min timeout. Posting to PR: \<yes/no\>. OK?"
 
-4. **Spawn:**
+4. **Spawn** (pass `--post` only if the user explicitly opted in):
    ```bash
-   STATE=$(bash ~/.claude/skills/ai-router/scripts/shadow-spawn.sh <PR> --wait-for-cr <true|false>)
+   STATE=$(bash ~/.claude/skills/ai-router/scripts/shadow-spawn.sh <PR> \
+     --wait-for-cr <true|false> \
+     [--post])
    ```
 
 5. **Schedule the poll** via `CronCreate` with cron `*/3 * * * *`. Save the cron ID to `$STATE/cron.id`. Use this prompt verbatim (substituting `<PR>` and `<STATE>`):
@@ -272,33 +287,52 @@ Flow:
 
 7. **Return control immediately.** The user keeps working; the cron fires when there's news.
 
-### `/ai-router shadow-cancel`
+### `/ai-router shadow-list`
 
-Two-step procedure (the parent assistant runs step 1 as a tool call, then step 2 as shell):
+Lists active shadow runs for this repo (skipping `.stale.*` archives):
 
-1. **Find state dir for this repo + delete the cron via the `CronDelete` tool:**
+```bash
+bash ~/.claude/skills/ai-router/scripts/shadow-list.sh
+```
+
+Output is tab-separated: `PR  STATUS  STARTED_AT  STATE_DIR  PID  ALIVE`. Use when investigating why a poll never fired, or to find orphans after a session ended uncleanly.
+
+### `/ai-router shadow-cancel [<pr>]`
+
+Two-step procedure (assistant invokes `CronDelete` as a tool, then runs the shell).
+
+1. **Locate the state dir** (by PR if provided, else most-recent for this repo) and print the cron ID:
    ```bash
    REPO_SLUG=$(gh repo view --json nameWithOwner -q .nameWithOwner | tr '/' '-')
    SHADOW_BASE="${AI_ROUTER_SHADOW_DIR:-${AI_ROUTER_TMPDIR:-${TMPDIR:-/tmp}}/ai-router-shadow}"
-   STATE=$(ls -dt "$SHADOW_BASE/${REPO_SLUG}-pr"*/ 2>/dev/null | grep -v '\.stale\.' | head -1 | sed 's:/$::')
-   [ -z "$STATE" ] && echo "No active shadow for this repo." && exit 0
+   if [[ -n "${1:-}" ]]; then
+     [[ "$1" =~ ^[1-9][0-9]*$ ]] || { echo "invalid PR: $1" >&2; exit 2; }
+     STATE="$SHADOW_BASE/${REPO_SLUG}-pr$1"
+     [[ -d "$STATE" ]] || { echo "No shadow for PR $1." && exit 0; }
+   else
+     STATE=$(ls -dt "$SHADOW_BASE/${REPO_SLUG}-pr"*/ 2>/dev/null | grep -v '\.stale\.' | head -1 | sed 's:/$::')
+     [ -z "$STATE" ] && echo "No active shadow for this repo." && exit 0
+   fi
    [ -f "$STATE/cron.id" ] && echo "Cron to delete: $(cat "$STATE/cron.id")"
    ```
-   Then the assistant invokes `CronDelete` (the Claude Code tool, not a shell command) with the printed ID.
+   The assistant then invokes the `CronDelete` Claude tool with the printed ID.
 
 2. **Kill the process group + clear state:**
    ```bash
-   [ -f "$STATE/shadow.pgid" ] && kill -TERM -"$(cat "$STATE/shadow.pgid")" 2>/dev/null || true
+   if [[ -f "$STATE/shadow.pgid" ]]; then
+     PGID=$(cat "$STATE/shadow.pgid")
+     [[ "$PGID" =~ ^[0-9]+$ ]] && kill -TERM -"$PGID" 2>/dev/null || true
+   fi
    rm -rf "$STATE"
    ```
 
 ### Shadow Handoff Format
 
-Rendered by the parent assistant when the poll returns `BOTH_READY` or `ONLY_AI_ROUTER_READY`. Synthesis is done in-session from `$STATE/both.json` — no extra API calls.
+Rendered by the parent assistant when the poll returns `BOTH_READY` or `ONLY_AI_ROUTER_READY`. Synthesis is done in-session from `$STATE/both.json` — no extra API calls. In `--post=false` mode, the ai-router body comes from `$STATE/shadow.log` (the `source` field of the JSON record is `"shadow.log"`); link is null. In `--post=true` mode, link is the PR comment URL.
 
 ```markdown
 ## Shadow Review #<PR> — reviews are in
-**AI Router ensemble** ([link])   ← link is `both.json` .ai_router.url
+**AI Router ensemble** ([link or "(stdout only — not posted)"])
 **CodeRabbit** ([link])           ← omit this line if CodeRabbit was skipped
 
 ### Where they agree

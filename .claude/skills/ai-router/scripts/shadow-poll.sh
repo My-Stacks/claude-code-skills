@@ -45,6 +45,7 @@ PR=$(cat "$STATE/pr")
 RUN_ID=$(cat "$STATE/run_id")
 STARTED=$(cat "$STATE/started_at")
 WAIT_FOR_CR=$(cat "$STATE/wait_for_cr" 2>/dev/null || echo true)
+POST=$(cat "$STATE/post" 2>/dev/null || echo false)
 SHADOW_STATUS=$(cat "$STATE/shadow.status")
 SHADOW_PID=$(cat "$STATE/shadow.pid" 2>/dev/null || echo "")
 
@@ -56,8 +57,20 @@ REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
 COMMENTS=$(gh api "repos/$REPO/issues/$PR/comments?since=$STARTED&per_page=100" --paginate 2>/dev/null | jq -s '[.[][]]' || echo '[]')
 CR_REVIEWS=$(gh api "repos/$REPO/pulls/$PR/reviews?per_page=100" --paginate 2>/dev/null | jq -s '[.[][]]' || echo '[]')
 
-AIROUTER=$(jq --arg rid "$RUN_ID" \
-  '[.[] | select(.body | contains("run-id=" + $rid))] | last // null' <<<"$COMMENTS")
+# AI-router signal source depends on --post:
+#   POST=true:  the headless instance posted to the PR; we match by run-id marker.
+#   POST=false: synthesis lives in $STATE/shadow.log; readiness is shadow.status=="done".
+if [[ "$POST" == "true" ]]; then
+  AIROUTER=$(jq --arg rid "$RUN_ID" \
+    '[.[] | select(.body | contains("run-id=" + $rid))] | last // null' <<<"$COMMENTS")
+else
+  if [[ "$SHADOW_STATUS" == "done" && -s "$STATE/shadow.log" ]]; then
+    AIROUTER=$(jq -n --rawfile body "$STATE/shadow.log" \
+      '{body:$body, html_url:null, id:null, source:"shadow.log"}')
+  else
+    AIROUTER="null"
+  fi
+fi
 
 # CodeRabbit posts via issue-comments AND pulls/reviews endpoints; check both.
 CODERABBIT=$(jq --arg started "$STARTED" \
