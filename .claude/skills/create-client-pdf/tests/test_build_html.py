@@ -123,7 +123,7 @@ def test_frontmatter_filename_cannot_escape_source_dir(evil, tmp_path):
     assert ".." not in out.parts
 
 
-@pytest.mark.parametrize("bad", [".", "..", "/"])
+@pytest.mark.parametrize("bad", [".", "..", "/", ".pdf", ".PDF", "/.pdf"])
 def test_frontmatter_filename_rejects_degenerate(bad, tmp_path):
     md = tmp_path / "doc.md"
     md.write_text("# t\n")
@@ -210,6 +210,14 @@ def test_apply_brand_defaults_does_not_mutate_caller_dict():
     original = {"brand": "stacklab"}
     apply_brand_defaults(original)
     assert original == {"brand": "stacklab"}   # caller's dict unchanged
+
+
+def test_build_html_does_not_mutate_caller_dict():
+    # Symmetric to apply_brand_defaults: build_html should never write back to
+    # the caller's frontmatter dict (`body` injection goes into a local copy).
+    original = {"title": "Hi"}
+    build_html(original, "# T\n")
+    assert original == {"title": "Hi"}
 
 
 def test_frontmatter_filename_gets_pdf_suffix(tmp_path):

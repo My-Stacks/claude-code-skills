@@ -397,6 +397,12 @@ def resolve_output_path(markdown_path, fm, output_path):
         safe = Path(str(fm_name)).name  # strips dirs / absolute / ~ prefix
         if not safe or safe in (".", ".."):
             raise ValueError(f"Invalid frontmatter filename: {fm_name!r}")
+        # Reject stemless extensions like ".pdf" / "/.pdf" — they pass the
+        # basename + dot-marker checks but produce a hidden file with no
+        # name (e.g. <source_dir>/.pdf).
+        stem = safe[:-4] if safe.lower().endswith(".pdf") else safe
+        if stem.lstrip(".") == "":
+            raise ValueError(f"Invalid frontmatter filename: {fm_name!r}")
         if not safe.lower().endswith(".pdf"):
             safe += ".pdf"
         return (markdown_path.parent / safe).resolve()

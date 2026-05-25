@@ -150,7 +150,7 @@ For row highlighting or other one-off styling, drop in raw HTML inside the markd
 
 ## Input trust boundary
 
-Raw HTML in the markdown is rendered **as-is** (`html=True` + `body|safe`) — this is what enables row-highlighting and one-off styling. Consequently this skill is designed for **markdown you author or curate**, not adversarial input. Scripts/styles in the source will execute in the headless render. As a safety net the renderer blocks all non-`file:` requests, so a malicious doc cannot exfiltrate via or pull in remote subresources; but if you must process untrusted client-supplied markdown, sanitize it first (e.g. strip/allowlist HTML).
+Raw HTML in the markdown is rendered **as-is** (`html=True` + `body|safe`) — this is what enables row-highlighting and one-off styling. Consequently this skill is designed for **markdown you author or curate**, not adversarial input. Inline styles in the source apply; **scripts do not execute** (the renderer runs with JavaScript disabled). As a safety net the renderer also blocks all network requests and restricts local-file access to the document's own temporary render directory, so a malicious doc cannot exfiltrate via remote subresources or include arbitrary local files (e.g. `file:///etc/passwd`). If you must process untrusted client-supplied markdown, sanitize it first (e.g. strip/allowlist HTML).
 
 ## Template extensibility
 
