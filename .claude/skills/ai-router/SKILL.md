@@ -475,12 +475,17 @@ echo "$PROMPT" | bash "$SCRIPT" anthropic
 echo "$PROMPT" | bash "$SCRIPT" openai --model gpt-5.5 --max-tokens 8192 --timeout 300
 
 # Ensemble (parallel — issue these as three separate Bash tool calls).
-# Use a per-run temp dir so concurrent invocations never clobber each other:
+# Use a per-run temp dir so concurrent invocations never clobber each other.
+# After parsing the per-provider outputs, clean up the run dir — otherwise
+# /tmp accumulates one dir per ensemble call (the shadow flow alone can leave
+# dozens over a session).
 RUN=$(mktemp -d "${TMPDIR:-/tmp}/ai-router-run-XXXXXX")
 echo "$PROMPT" | bash "$SCRIPT" anthropic > "$RUN/claude.out"  2>"$RUN/claude.err"  &
 echo "$PROMPT" | bash "$SCRIPT" openai    > "$RUN/gpt.out"     2>"$RUN/gpt.err"     &
 echo "$PROMPT" | bash "$SCRIPT" gemini    > "$RUN/gemini.out"  2>"$RUN/gemini.err"  &
 wait
+# ... read $RUN/*.out, $RUN/*.err, synthesize ...
+rm -rf "$RUN"
 ```
 
 Stdout shape:
