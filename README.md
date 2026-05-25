@@ -7,7 +7,6 @@ Reusable components for [Claude Code](https://docs.anthropic.com/en/docs/claude-
 | Component | Type | Version | What it does |
 |-----------|------|---------|-------------|
 | [linear](./.claude/skills/linear/) | Skill | 0.5.1 | Linear project management with session continuity. Buffered writes, board management, ticket creation, structured handoffs persisted to Linear. Auto-maintains `.latest-status.md`. |
-| [handoff](./.claude/skills/handoff/) | Skill | 3.0.1 | Session continuity via `.latest-status.md`. Auto-updates during plan execution. Manual handoff, resume, and transfer commands. |
 | [vault-backup](./.claude/skills/vault-backup/) | Skill | 1.0 | Save research, project outputs, and knowledge artifacts from any Claude Code workspace into a shared Obsidian knowledge vault. |
 | [ai-router](./.claude/skills/ai-router/) | Skill | 1.3 | Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Headless-safe with `--post-to-pr` and `/ai-router shadow-review` (background review + PR-comment polling). Requires `curl`, `jq`, `python3`, and (for PR posting) `gh`. |
 | [pull-and-sync](./.claude/commands/pull-and-sync.md) | Command | 1.0 | Sync working branch with latest from default branch using merge --no-ff. |
@@ -64,8 +63,6 @@ claude-code-skills/
     │   ├── linear/
     │   │   ├── SKILL.md
     │   │   └── REFERENCE.md
-    │   ├── handoff/
-    │   │   └── SKILL.md
     │   ├── vault-backup/
     │   │   └── SKILL.md
     │   ├── ai-router/
@@ -107,46 +104,28 @@ cp -r .claude/skills/ai-router/ ~/.claude/skills/ai-router/
 
 Then add the five script allow-rules to `~/.claude/settings.json` `permissions.allow` (see REFERENCE.md → "Pre-authorizing the scripts").
 
-### Linear v0.5.1 / Handoff v3.0.1
+### Linear v0.5.1
 
-Fixes a frontmatter parsing bug in both skills. The `## Version Check` section was placed before the YAML frontmatter, preventing the parser from reading `trigger`, `description`, and other metadata. This caused `/linear update` to run a version check instead of posting a project status update, and both skills to appear as "Version Check" in the skill list.
+Fixes a frontmatter parsing bug. The `## Version Check` section was placed before the YAML frontmatter, preventing the parser from reading `trigger`, `description`, and other metadata. This caused `/linear update` to run a version check instead of posting a project status update, and the skill to appear as "Version Check" in the skill list.
 
 To upgrade:
 
 ```bash
 cp -r .claude/skills/linear/ ~/.claude/skills/linear/
-cp -r .claude/skills/handoff/ ~/.claude/skills/handoff/
 ```
 
 ### Linear v0.5.0
 
-The linear skill now auto-maintains `.latest-status.md` (the same file used by the handoff skill), eliminating the need to run `/handoff` separately when using Linear.
+The linear skill now auto-maintains `.latest-status.md` at project root, providing cross-session resume context without a separate command.
 
 - **Auto-updates:** `.latest-status.md` updates on plan start and plan completion when the linear skill is active
 - **Resume priority:** `/linear resume` reads `.latest-status.md` first, then `.linear/last-handoff.md` for expanded detail, then falls back to Linear API
 - **Three handoff destinations:** `.latest-status.md` (universal, 100-300 words), `.linear/last-handoff.md` (full detail), Linear project update (lean, 150-300 words)
-- **Coexistence:** Both skills write to `.latest-status.md`. `/handoff` still works for manual updates
 
 To upgrade:
 
 ```bash
 cp -r .claude/skills/linear/ ~/.claude/skills/linear/
-```
-
-### Handoff v3.0 (breaking)
-
-The handoff skill now uses a single `.latest-status.md` file at project root instead of dated files in `docs/handoffs/`. Key changes:
-
-- **New file location:** `.latest-status.md` (replaces `docs/handoffs/LATEST.md` + dated archives)
-- **Auto-updates:** `.latest-status.md` updates automatically on plan start and completion
-- **Fewer commands:** `/handoff quick` and `/handoff status` removed — the new format is already lean, and `/handoff resume` covers status
-- **Linear integration:** Auto-detects `.linear/cache.yaml` and `.linear/session.yaml` to populate a `## Linear` section
-- **Migration:** `/handoff resume` falls back to `docs/handoffs/LATEST.md` if `.latest-status.md` doesn't exist yet
-
-To upgrade, copy the new SKILL.md over your installed version:
-
-```bash
-cp -r .claude/skills/handoff/ ~/.claude/skills/handoff/
 ```
 
 ## License

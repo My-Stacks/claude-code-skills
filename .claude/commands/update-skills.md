@@ -33,8 +33,8 @@ Match installed `name`/`version` against remote `versions.yaml`.
 ```
 | Component | Type    | Installed | Latest | Status           |
 |-----------|---------|-----------|--------|------------------|
-| handoff   | skill   | 2.0       | 2.1    | Update available |
-| linear    | skill   | 0.5.0     | 0.5.0  | Up to date       |
+| linear    | skill   | 0.5.0     | 0.5.1  | Update available |
+| ai-router | skill   | 1.3       | 1.3    | Up to date       |
 | commit    | command | 1.0       | 1.0    | Up to date       |
 ```
 
@@ -43,7 +43,7 @@ Match installed `name`/`version` against remote `versions.yaml`.
 For outdated components:
 
 ```bash
-curl -s https://raw.githubusercontent.com/My-Stacks/claude-code-skills/main/.claude/skills/handoff/SKILL.md > ~/.claude/skills/handoff/SKILL.md
+curl -s https://raw.githubusercontent.com/My-Stacks/claude-code-skills/main/.claude/skills/linear/SKILL.md > ~/.claude/skills/linear/SKILL.md
 ```
 
 ## Important
