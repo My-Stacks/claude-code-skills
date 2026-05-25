@@ -88,7 +88,7 @@ env -i \
   AI_ROUTER_RUN_ID="$RUN_ID" \
   AI_ROUTER_PROVIDERS="$PROVIDERS" \
   AI_ROUTER_STATE_DIR="$STATE" \
-  "${ENV_EXTRA[@]}" \
+  ${ENV_EXTRA[@]:+"${ENV_EXTRA[@]}"} \
   python3 -c '
 import os, signal, subprocess, sys
 timeout = int(sys.argv[1])
