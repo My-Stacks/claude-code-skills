@@ -56,7 +56,12 @@ WAIT_REVIEWERS=$(cat "$STATE/wait_reviewers" 2>/dev/null || echo false)
 PR_AUTHOR=$(cat "$STATE/pr_author" 2>/dev/null || echo "")
 POST=$(cat "$STATE/post" 2>/dev/null || echo false)
 SHADOW_STATUS=$(cat "$STATE/shadow.status")
-SHADOW_PID=$(cat "$STATE/shadow.pid" 2>/dev/null || echo "")
+# Prefer claude.pid (the actual reviewer, written by the inner python wrapper
+# after Popen with start_new_session=True). Fall back to shadow.pid (the
+# outer python wrapper) for legacy state dirs that predate the split — but
+# note that the wrapper exits as soon as Popen returns, so checking it for
+# liveness produces false-FAILED on a running shadow.
+SHADOW_PID=$(cat "$STATE/claude.pid" 2>/dev/null || cat "$STATE/shadow.pid" 2>/dev/null || echo "")
 
 # Read repo from state (persisted by shadow-spawn.sh) so cron ticks don't
 # depend on cwd being a git checkout. Fall back to `gh repo view` for state
@@ -79,19 +84,35 @@ fi
 # (which would later drift the run to FAILED:shadow-exited-without-posting).
 fetch_json() {
   # $1 endpoint, $2 dest var, $3 stderr-file
-  local endpoint=$1 var=$2 err=$3 raw rc
+  # Surfaces both gh-api failures AND jq parse errors as non-zero return —
+  # the caller emits FAILED:gh-api-error rather than silently collapsing a
+  # malformed 2xx body into "no comments" (which would later masquerade as
+  # FAILED:shadow-exited-without-posting with no useful diagnostic).
+  local endpoint=$1 var=$2 err=$3 raw rc jq_out
   raw=$(gh api "$endpoint" --paginate 2>"$err"); rc=$?
   if (( rc != 0 )); then return $rc; fi
-  printf -v "$var" '%s' "$(jq -s '[.[][]]' <<<"$raw" 2>>"$err" || echo '[]')"
+  jq_out=$(jq -s '[.[][]]' <<<"$raw" 2>>"$err"); rc=$?
+  if (( rc != 0 )); then return $rc; fi
+  printf -v "$var" '%s' "$jq_out"
 }
 POLL_ERR="$STATE/poll.err"
-if ! fetch_json "repos/$REPO/issues/$PR/comments?since=$STARTED&per_page=100" COMMENTS "$POLL_ERR"; then
-  echo "FAILED:gh-api-error (issues/comments — see $POLL_ERR)"
-  exit 1
-fi
-if ! fetch_json "repos/$REPO/pulls/$PR/reviews?per_page=100" CR_REVIEWS "$POLL_ERR"; then
-  echo "FAILED:gh-api-error (pulls/reviews — see $POLL_ERR)"
-  exit 1
+# Short-circuit the GitHub API entirely when neither posting nor waiting for
+# external sources. This is the default-flag path and the common case; a
+# single transient gh blip shouldn't be able to terminate it. The downstream
+# CR / reviewer detection sees empty arrays → have_cr=0, have_reviewers=0,
+# which is correct because wait_cr/wait_reviewers are false.
+if [[ "$POST" == "false" && "$WAIT_CR" == "false" && "$WAIT_REVIEWERS" == "false" ]]; then
+  COMMENTS='[]'
+  CR_REVIEWS='[]'
+else
+  if ! fetch_json "repos/$REPO/issues/$PR/comments?since=$STARTED&per_page=100" COMMENTS "$POLL_ERR"; then
+    echo "FAILED:gh-api-error (issues/comments — see $POLL_ERR)"
+    exit 1
+  fi
+  if ! fetch_json "repos/$REPO/pulls/$PR/reviews?per_page=100" CR_REVIEWS "$POLL_ERR"; then
+    echo "FAILED:gh-api-error (pulls/reviews — see $POLL_ERR)"
+    exit 1
+  fi
 fi
 
 # AI-router signal source depends on --post:

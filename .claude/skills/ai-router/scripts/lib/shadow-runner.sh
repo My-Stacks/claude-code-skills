@@ -72,6 +72,7 @@ env -i \
   ${LC_ALL:+LC_ALL="$LC_ALL"} \
   AI_ROUTER_RUN_ID="$RUN_ID" \
   AI_ROUTER_PROVIDERS="$PROVIDERS" \
+  AI_ROUTER_STATE_DIR="$STATE" \
   ${AI_ROUTER_CONFIG:+AI_ROUTER_CONFIG="$AI_ROUTER_CONFIG"} \
   ${AI_ROUTER_TMPDIR:+AI_ROUTER_TMPDIR="$AI_ROUTER_TMPDIR"} \
   ${AI_ROUTER_POST_BODY_DIR:+AI_ROUTER_POST_BODY_DIR="$AI_ROUTER_POST_BODY_DIR"} \
@@ -84,6 +85,24 @@ env -i \
 import os, signal, subprocess, sys
 timeout = int(sys.argv[1])
 proc = subprocess.Popen(sys.argv[2:], start_new_session=True)
+# Record claude PID and PGID so the parent can liveness-check + cancel the
+# actual reviewer process. start_new_session puts claude in its OWN pgid,
+# which is distinct from this wrapper and from shadow-runner.sh — without
+# this file, cancel signals the runner and leaves claude detached.
+state = os.environ.get("AI_ROUTER_STATE_DIR")
+if state:
+    try:
+        pgid = os.getpgid(proc.pid)
+        with open(os.path.join(state, "claude.pid.tmp"), "w") as f:
+            f.write(f"{proc.pid}\n")
+        os.rename(os.path.join(state, "claude.pid.tmp"),
+                  os.path.join(state, "claude.pid"))
+        with open(os.path.join(state, "claude.pgid.tmp"), "w") as f:
+            f.write(f"{pgid}\n")
+        os.rename(os.path.join(state, "claude.pgid.tmp"),
+                  os.path.join(state, "claude.pgid"))
+    except OSError:
+        pass  # best-effort; main flow continues
 try:
     sys.exit(proc.wait(timeout=timeout))
 except subprocess.TimeoutExpired:

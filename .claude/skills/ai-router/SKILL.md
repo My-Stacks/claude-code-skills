@@ -246,7 +246,9 @@ Both can be combined. The run surfaces `ALL_READY` only when ai-router AND every
 ### Isolation (what "zero context bleed" actually means)
 
 - The shadow is a fresh `claude -p` process. It has **no access** to the parent session's conversation history, no shared memory, no plan/task state.
-- It **does** inherit `HOME`, `PATH`, `TMPDIR`, locale, and explicit `AI_ROUTER_*` env vars (needed for `claude`, `gh`, and `python3` to function). All other env vars are scrubbed via `env -i` in `lib/shadow-runner.sh`, so secrets like `ANTHROPIC_API_KEY` / `GH_TOKEN` that may be set in the parent are NOT visible to the shadow. The shadow reads provider keys from `~/.orchestrator-config.json`, and `gh` reads its credentials from `~/.config/gh/`.
+- It **does** inherit `HOME`, `PATH`, `TMPDIR`, locale, the documented `AI_ROUTER_*` overrides, and — *if set in the parent* — `GH_TOKEN` / `GITHUB_TOKEN`. Everything else is scrubbed via `env -i` in `lib/shadow-runner.sh`.
+- **Provider API keys** (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.) are always scrubbed regardless of whether they're set in the parent. The shadow reads provider keys from `~/.orchestrator-config.json` only.
+- **`GH_TOKEN` / `GITHUB_TOKEN` passthrough is intentional** for CI compatibility — GitHub Actions and most CI runners authenticate `gh` solely via env tokens, not via a `~/.config/gh/hosts.yml` file. Interactive local users typically have file-backed `gh` auth and no `GH_TOKEN` set, so nothing leaks. If you want to scrub them anyway (e.g. running under a service account with a different `gh` identity than the parent), unset the var before invoking the skill.
 - The shadow has a hard runtime cap (default 600s, `AI_ROUTER_SHADOW_RUNTIME` to override). The cap is enforced by `subprocess.Popen(start_new_session=True)` + `Popen.wait(timeout=…)` + `os.killpg(SIGTERM→SIGKILL)` in `lib/shadow-runner.sh`, so the `claude` child sits in its own process group and is killed cleanly when the cap fires (no orphan to launchd/init).
 
 ### Orphan warning
@@ -343,12 +345,18 @@ Two-step procedure (assistant invokes `CronDelete` as a tool, then runs the shel
    ```
    The assistant then invokes the `CronDelete` Claude tool with the printed ID.
 
-2. **Kill the process group + clear state:**
+2. **Kill BOTH process groups + clear state:**
    ```bash
-   if [[ -f "$STATE/shadow.pgid" ]]; then
-     PGID=$(cat "$STATE/shadow.pgid")
-     [[ "$PGID" =~ ^[0-9]+$ ]] && kill -TERM -"$PGID" 2>/dev/null || true
-   fi
+   # claude.pgid: the actual reviewer (start_new_session=True puts it in its
+   # own pgid, distinct from the runner). Killing only shadow.pgid would
+   # leave claude detached. Signal claude first so the runner can write the
+   # status file before its own pgid gets killed.
+   for f in claude.pgid shadow.pgid; do
+     if [[ -f "$STATE/$f" ]]; then
+       PGID=$(cat "$STATE/$f")
+       [[ "$PGID" =~ ^[0-9]+$ ]] && kill -TERM -"$PGID" 2>/dev/null || true
+     fi
+   done
    rm -rf "$STATE"
    ```
 
