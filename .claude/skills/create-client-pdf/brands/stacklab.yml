@@ -1,0 +1,6 @@
+# Stacklab brand
+# Currently only the label is consumed by build.py. Future fields (logo path,
+# brand-specific accent color, alt typography, etc.) can be added here without
+# touching the build script if the template is updated to reference them.
+
+label: "Stacklab"

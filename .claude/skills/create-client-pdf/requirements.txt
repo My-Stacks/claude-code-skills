@@ -1,0 +1,5 @@
+markdown-it-py>=3.0.0
+linkify-it-py>=2.0.0      # required: build_html enables markdown-it linkify
+jinja2>=3.1.0
+pyyaml>=6.0
+playwright>=1.40.0
