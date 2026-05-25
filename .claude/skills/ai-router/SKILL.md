@@ -52,20 +52,27 @@ If missing, run setup:
    # write a one-key probe config, run validate-key.sh <provider>, drop key if non-zero
    ```
    Exit 0 = valid; non-zero = warn "[Provider] key invalid (HTTP [code]). Skipping." and drop from the candidate set.
-5. After validation, write the surviving keys to the real config with restrictive permissions. Pass the config object on stdin so no secrets land in argv:
+5. After validation, write the surviving keys to the real config with restrictive permissions. Build the JSON inside Python so `json.dump` escapes everything correctly — never interpolate raw keys into a JSON heredoc (`"`, `\`, `$`, newline in a key would corrupt the file or trigger shell expansion). Keys are passed via env vars so they never appear in argv:
    ```bash
    umask 077
-   python3 -c 'import json,sys; json.dump(json.load(sys.stdin), open(sys.argv[1], "w"))' \
-     ~/.orchestrator-config.json <<JSON
-   {
-     "anthropic_api_key": "$ANTHROPIC_KEY",
-     "openai_api_key": "$OPENAI_KEY",
-     "gemini_api_key": "$GEMINI_KEY",
-     "default_anthropic_model": "claude-sonnet-4-6",
-     "default_openai_model": "gpt-5.5",
-     "default_gemini_model": "gemini-3-flash-preview"
+   ANTHROPIC_KEY="$ANTHROPIC_KEY" \
+   OPENAI_KEY="$OPENAI_KEY" \
+   GEMINI_KEY="$GEMINI_KEY" \
+   python3 - "$HOME/.orchestrator-config.json" <<'PY'
+   import json, os, sys
+   cfg = {
+       "anthropic_api_key": os.environ.get("ANTHROPIC_KEY", "") or None,
+       "openai_api_key":    os.environ.get("OPENAI_KEY", "")    or None,
+       "gemini_api_key":    os.environ.get("GEMINI_KEY", "")    or None,
+       "default_anthropic_model": "claude-sonnet-4-6",
+       "default_openai_model":    "gpt-5.5",
+       "default_gemini_model":    "gemini-3-flash-preview",
    }
-   JSON
+   # Drop providers the user skipped so config_exists / *_key() return ""
+   cfg = {k: v for k, v in cfg.items() if v is not None}
+   with open(sys.argv[1], "w") as f:
+       json.dump(cfg, f, indent=2)
+   PY
    ```
 6. Confirm: "ai-router configured. [N] provider(s) active: [list]."
 
@@ -79,7 +86,7 @@ If missing, run setup:
 | `/ai-router ask <prompt>` | Send to one external model | Yes |
 | `/ai-router ensemble <prompt>` | Send to all configured models, synthesize | Yes |
 | `/ai-router review [<pr>] [--post-to-pr <pr>]` | Ensemble PR review; optionally post to PR | Yes |
-| `/ai-router shadow-review [--post] [--pr <#>]` | Spawn a background review; default stdout-only, `--post` to also post to PR | Yes |
+| `/ai-router shadow-review [--post] [--pr <#>] [--wait-cr] [--wait-reviewers]` | Spawn a background review; default stdout-only and surfaces as soon as ai-router finishes. `--wait-cr` adds CodeRabbit to the AND-wait, `--wait-reviewers` adds any non-author reviewer. | Yes |
 | `/ai-router shadow-list` | List active shadow runs for this repo | No |
 | `/ai-router shadow-cancel [<pr>]` | Stop a running shadow-review (most-recent if no PR given) | No |
 | `/ai-router compare <prompt>` | Side-by-side without synthesis | Yes |
@@ -187,7 +194,9 @@ Ensemble PR review. Gathers diff context, sends to all configured models, synthe
    - On a branch: `git diff $(git merge-base HEAD main)..HEAD`
    - Staged: `git diff --cached`
    - Last resort: `git diff HEAD~1` (if `git rev-list --count HEAD` > 1)
-2. If diff > 80K characters, warn and ask to scope.
+2. **Scope-check the diff.** This branches on whether we're running headless (shadow) vs interactive:
+   - **Headless mode** — detected by `[ -n "$AI_ROUTER_RUN_ID" ]` (set by `lib/shadow-runner.sh`). NEVER ask the user; there is no interactive user. If diff > 500K chars, truncate to the last 500K and prepend a header line: `[diff truncated from <N>K chars to 500K — showing tail]`. Otherwise pass through. Cost is already bounded by the shadow's runtime cap + per-call `MAX_TOKENS`.
+   - **Interactive mode** — if diff > 150K chars, warn and ask the user to scope. Below 150K, pass through (modern provider context windows handle this comfortably).
 3. Construct the review prompt with the full rubric:
    > "Review this code diff. Evaluate: (1) Correctness — logic errors, off-by-one, null handling, race conditions. (2) Security — injection, auth bypass, secrets exposure, OWASP top 10. (3) Performance — N+1 queries, unnecessary allocations, missing indexes. (4) Maintainability — naming, complexity, dead code, missing error handling. (5) Tests — coverage gaps, flaky patterns, missing edge cases. Be specific with file and line references. Categorize each finding as critical, suggestion, or nit."
 4. Prepend the diff to the prompt.
@@ -221,21 +230,28 @@ Ensemble PR review. Gathers diff context, sends to all configured models, synthe
 
 ---
 
-## `/ai-router shadow-review [--post] [--pr <#>]`
+## `/ai-router shadow-review [--post] [--pr <#>] [--wait-cr] [--wait-reviewers]`
 
 Run an ensemble PR review in a background headless Claude Code instance ("shadow") that has minimal context bleed from the active session (see Isolation below). The shadow writes the synthesized review to `$STATE/shadow.log`; the active session polls every 3 minutes and surfaces the review when ready.
 
 **Posting is opt-in.** Default is stdout/log only — the user reads the synthesis, decides what to keep, and posts in their own voice. Pass `--post` to also post the raw synthesis as a PR comment with the `<!-- ai-router:review:v… -->` signature marker.
 
+**Waiting is opt-in (AND semantics).** With no `--wait-*` flag, the run surfaces as `ONLY_AI_ROUTER_READY` as soon as the headless ai-router review finishes (usually 2–4 min). Add flags to extend the wait — every flag is an AND clause:
+
+- `--wait-cr` — also wait for CodeRabbit to post a fresh review/comment on this PR after spawn time.
+- `--wait-reviewers` — also wait for any non-author reviewer (humans, other bots) to post a fresh review or comment.
+
+Both can be combined. The run surfaces `ALL_READY` only when ai-router AND every requested wait source has landed. A pre-spawn freshness check warns the user when the wait source has already reviewed the latest commit and is unlikely to re-review.
+
 ### Isolation (what "zero context bleed" actually means)
 
 - The shadow is a fresh `claude -p` process. It has **no access** to the parent session's conversation history, no shared memory, no plan/task state.
 - It **does** inherit `HOME`, `PATH`, `TMPDIR`, locale, and explicit `AI_ROUTER_*` env vars (needed for `claude`, `gh`, and `python3` to function). All other env vars are scrubbed via `env -i` in `lib/shadow-runner.sh`, so secrets like `ANTHROPIC_API_KEY` / `GH_TOKEN` that may be set in the parent are NOT visible to the shadow. The shadow reads provider keys from `~/.orchestrator-config.json`, and `gh` reads its credentials from `~/.config/gh/`.
-- The shadow has a hard runtime cap (default 600s, `AI_ROUTER_SHADOW_RUNTIME` to override) via `python3 signal.alarm`, so an orphaned shadow can't burn unbounded API tokens.
+- The shadow has a hard runtime cap (default 600s, `AI_ROUTER_SHADOW_RUNTIME` to override). The cap is enforced by `subprocess.Popen(start_new_session=True)` + `Popen.wait(timeout=…)` + `os.killpg(SIGTERM→SIGKILL)` in `lib/shadow-runner.sh`, so the `claude` child sits in its own process group and is killed cleanly when the cap fires (no orphan to launchd/init).
 
 ### Orphan warning
 
-If the parent session ends after spawning but before the cron fires `BOTH_READY` / `ONLY_AI_ROUTER_READY`, the shadow keeps running until it (a) finishes its `claude -p` review or (b) hits the runtime cap. The cron dies with the session, so the result won't be surfaced — but if `--post` was set, the comment will still land on the PR. Use `/ai-router shadow-list` to find orphaned state dirs and `/ai-router shadow-cancel <pr>` to terminate one.
+If the parent session ends after spawning but before the cron fires `ALL_READY` / `ONLY_AI_ROUTER_READY`, the shadow keeps running until it (a) finishes its `claude -p` review or (b) hits the runtime cap. The cron dies with the session, so the result won't be surfaced — but if `--post` was set, the comment will still land on the PR. Use `/ai-router shadow-list` to find orphaned state dirs and `/ai-router shadow-cancel <pr>` to terminate one.
 
 ### Flow
 
@@ -245,29 +261,39 @@ If the parent session ends after spawning but before the cron fires `BOTH_READY`
    ```
    If empty: tell user "No PR for branch `<name>`. Push and open one first." and stop.
 
-2. **Detect CodeRabbit** by checking the SAME endpoints the poller polls (issue comments on THIS PR + formal reviews on THIS PR). A repo-wide check would false-positive on a CodeRabbit comment from any past PR and trap us at the 30-min timeout.
+2. **Freshness check (only when `--wait-cr` or `--wait-reviewers` was passed).** Don't auto-detect anything — the wait flags are explicit user opt-in. But warn the user when the requested wait source has already reviewed the latest commit (in which case it won't post again unless they push):
    ```bash
    REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
-   CR_ISSUE=$(gh api "repos/$REPO/issues/$PR/comments?per_page=100" --paginate \
-     --jq '[.[] | select((.user.login // "")=="coderabbitai[bot]" or (.user.login // "")=="coderabbitai")] | length' 2>/dev/null || echo 0)
-   CR_REVIEWS=$(gh api "repos/$REPO/pulls/$PR/reviews?per_page=100" --paginate \
-     --jq '[.[] | select((.user.login // "")=="coderabbitai[bot]" or (.user.login // "")=="coderabbitai")] | length' 2>/dev/null || echo 0)
-   if (( CR_ISSUE + CR_REVIEWS == 0 )); then
-     # Fall back to a recent-activity probe on the repo (last 100 issue-comments)
-     # so a brand-new PR with no CR history yet still benefits from CR detection.
-     CR_RECENT=$(gh api "repos/$REPO/issues/comments?per_page=100" \
-       --jq '[.[] | select((.user.login // "")=="coderabbitai[bot]" or (.user.login // "")=="coderabbitai")] | length' 2>/dev/null || echo 0)
-     (( CR_RECENT > 0 )) || WAIT_FOR_CR=false
+   LATEST_COMMIT_AT=$(gh api "repos/$REPO/pulls/$PR/commits" \
+     --jq '[.[] | .commit.committer.date] | max // ""')
+
+   if [[ "$WAIT_CR" == "true" ]]; then
+     LAST_CR_AT=$(gh api "repos/$REPO/pulls/$PR/reviews" \
+       --jq '[.[] | select((.user.login // "") | test("coderabbit"; "i"))] | max_by(.submitted_at) | .submitted_at // ""')
+     if [[ -n "$LAST_CR_AT" && "$LAST_CR_AT" > "$LATEST_COMMIT_AT" ]]; then
+       # warn: "CodeRabbit already reviewed the latest commit (at $LAST_CR_AT).
+       # It won't re-review unless you push new commits. Wait anyway? (y/N)"
+     fi
+   fi
+   if [[ "$WAIT_REVIEWERS" == "true" ]]; then
+     LAST_REVIEWER_AT=$(gh api "repos/$REPO/pulls/$PR/reviews" \
+       --jq "[.[] | select((.user.login // \"\") != \"$PR_AUTHOR\")
+                  | select((.user.login // \"\") | test(\"coderabbit\"; \"i\") | not)]
+              | max_by(.submitted_at) | .submitted_at // \"\"")
+     if [[ -n "$LAST_REVIEWER_AT" && "$LAST_REVIEWER_AT" > "$LATEST_COMMIT_AT" ]]; then
+       # warn similarly and confirm
+     fi
    fi
    ```
-   If `WAIT_FOR_CR=false`: tell user "CodeRabbit not detected on this repo — polling for ai-router only."
+   If the user declines, drop the corresponding flag and proceed without it (or stop, per their choice).
 
-3. **Confirm** with a single Y/N: "Shadow-review PR #N. Spawns a headless claude in background, polls every 3 min, 30 min timeout. Posting to PR: \<yes/no\>. OK?"
+3. **Confirm** with a single Y/N: "Shadow-review PR #N. Spawns a headless claude in background, polls every 3 min, 30 min timeout. Posting to PR: \<yes/no\>. Waiting: \<none | CodeRabbit | reviewers | CodeRabbit+reviewers\>. OK?"
 
-4. **Spawn** (pass `--post` only if the user explicitly opted in):
+4. **Spawn** (pass only the flags the user actually opted into):
    ```bash
    STATE=$(bash ~/.claude/skills/ai-router/scripts/shadow-spawn.sh <PR> \
-     --wait-for-cr <true|false> \
+     [--wait-cr] \
+     [--wait-reviewers] \
      [--post])
    ```
 
@@ -276,8 +302,8 @@ If the parent session ends after spawning but before the cron fires `BOTH_READY`
    Run: bash ~/.claude/skills/ai-router/scripts/shadow-poll.sh <STATE>
 
    Read the first line of stdout:
-   - BOTH_READY            → load <STATE>/both.json, render Shadow Handoff (see SKILL.md), CronDelete <cron-id>, summarize the two reviews in chat.
-   - ONLY_AI_ROUTER_READY  → load <STATE>/both.json, render Shadow Handoff with CodeRabbit omitted, CronDelete <cron-id>.
+   - ALL_READY             → load <STATE>/both.json, render Shadow Handoff (see SKILL.md), CronDelete <cron-id>, summarize the reviews in chat.
+   - ONLY_AI_ROUTER_READY  → load <STATE>/both.json, render Shadow Handoff with the ai-router section only, CronDelete <cron-id>.
    - WAITING               → do nothing, stay quiet.
    - TIMEOUT               → surface partial results from <STATE>/both.json if present plus last 50 lines of <STATE>/shadow.log; ask user to keep waiting or stop; do NOT auto-delete the cron.
    - FAILED:<status>       → show last 50 lines of <STATE>/shadow.log, CronDelete.
@@ -328,24 +354,34 @@ Two-step procedure (assistant invokes `CronDelete` as a tool, then runs the shel
 
 ### Shadow Handoff Format
 
-Rendered by the parent assistant when the poll returns `BOTH_READY` or `ONLY_AI_ROUTER_READY`. Synthesis is done in-session from `$STATE/both.json` — no extra API calls. In `--post=false` mode, the ai-router body comes from `$STATE/shadow.log` (the `source` field of the JSON record is `"shadow.log"`); link is null. In `--post=true` mode, link is the PR comment URL.
+Rendered by the parent assistant when the poll returns `ALL_READY` or `ONLY_AI_ROUTER_READY`. Synthesis is done in-session from `$STATE/both.json` — no extra API calls. In `--post=false` mode, the ai-router body comes from `$STATE/shadow.log` (the `source` field of the JSON record is `"shadow.log"`); link is null. In `--post=true` mode, link is the PR comment URL.
+
+`both.json` shape — `coderabbit` and `reviewers` are present only when their respective wait flags fired:
+```json
+{
+  "ai_router":  {"body": "...", "url": "...|null", "id": 12345},
+  "coderabbit": {"body": "...", "url": "...", "id": 12346},
+  "reviewers":  [{"user": "alice", "body": "...", "url": "...", "id": 12347, "at": "2026-..."}]
+}
+```
 
 ```markdown
 ## Shadow Review #<PR> — reviews are in
 **AI Router ensemble** ([link or "(stdout only — not posted)"])
-**CodeRabbit** ([link])           ← omit this line if CodeRabbit was skipped
+**CodeRabbit** ([link])                 ← omit if `coderabbit` key not in both.json
+**Reviewers**: alice, bob ([links])     ← omit if `reviewers` array empty/absent
 
 ### Where they agree
 - <bullets from the intersection: same file/line, same finding category>
 
-### AI Router caught (CodeRabbit did not)
+### AI Router caught (others did not)
 - <bullets, with file:line>
 
-### CodeRabbit caught (AI Router did not)
-- <bullets, with file:line>
+### Others caught (AI Router did not)
+- <bullets, attributed: "CodeRabbit:", "alice:" — file:line>
 
 ### Conflicts
-- <if one says ship and the other flags critical, surface here>
+- <if one says ship and another flags critical, surface here>
 
 ### Recommended next step
 <1-2 sentences>
@@ -445,7 +481,7 @@ Stdout shape:
 {"input":N,"output":N,"provider":"...","model":"..."}
 ```
 
-Exit codes: `0` ok | `2` not configured | `3` missing deps | `4` HTTP non-200 | `5` network/timeout.
+Exit codes: `0` ok | `2` not configured | `3` missing deps | `4` HTTP non-200 | `5` network/timeout | `6` 2xx with empty text (safety-blocked, token-capped, or error envelope returned as 2xx) — usage line still emitted so cost accounting works.
 
 The prompt is piped on stdin and never appears on a command line — the auto-mode classifier sees a constant `bash …/call-provider.sh <provider>` invocation, which can be pre-authorized with a single `permissions.allow` rule per script.
 
@@ -469,7 +505,7 @@ To use a non-default model for one call: pass `--model <id>` after the provider.
 
 ### Error Handling
 
-`call-provider.sh` writes errors to stderr with `<provider>: HTTP <code>` and the first 500 chars of the response body. Exit code distinguishes config (2), deps (3), HTTP (4), network (5). For ensembles, treat non-zero exits per-provider — continue with the others and note the failure: "Gemini: unavailable (HTTP 429)."
+`call-provider.sh` writes errors to stderr with `<provider>: HTTP <code>` and the first 500 chars of the response body. Exit code distinguishes config (2), deps (3), HTTP (4), network (5), empty-2xx (6). For ensembles, treat non-zero exits per-provider — continue with the others and note the failure: "Gemini: unavailable (HTTP 429)" or "Gemini: empty response (safety-blocked or token-capped)" for exit 6.
 
 ---
 

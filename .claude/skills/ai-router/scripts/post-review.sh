@@ -29,6 +29,25 @@ PROVIDERS=${3:-${AI_ROUTER_PROVIDERS:-anthropic,openai,gemini}}
 [[ "$PR" =~ ^[1-9][0-9]*$ ]] || { echo "invalid PR number: $PR (must be positive integer)" >&2; exit 2; }
 
 [[ -r "$BODY_FILE" ]] || { echo "cannot read: $BODY_FILE" >&2; exit 2; }
+# Defense-in-depth: this script is wildcard-allowlisted, so a stray invocation
+# could otherwise turn arbitrary local files into public PR comments. Constrain
+# BODY_FILE to the per-run tmpdir and require caller ownership + non-symlink.
+# Set AI_ROUTER_POST_BODY_DIR to override (e.g. CI sandbox); leave empty to
+# disable the trusted-path check entirely (interactive workflows that build
+# the body in /var/folders/* via mktemp).
+BODY_FILE_REAL=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$BODY_FILE")
+TRUSTED_DIR=${AI_ROUTER_POST_BODY_DIR:-${AI_ROUTER_TMPDIR:-${TMPDIR:-/tmp}}}
+TRUSTED_DIR=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$TRUSTED_DIR")
+case "$BODY_FILE_REAL" in
+  "$TRUSTED_DIR"/*) : ;;
+  *) echo "post-review.sh: BODY_FILE must live under $TRUSTED_DIR (got: $BODY_FILE_REAL)" >&2; exit 2 ;;
+esac
+[[ -L "$BODY_FILE" ]] && { echo "post-review.sh: BODY_FILE must not be a symlink" >&2; exit 2; }
+# Owner check — guards against another local user pre-staging a body file.
+FILE_OWNER=$(python3 -c 'import os,sys; print(os.stat(sys.argv[1]).st_uid)' "$BODY_FILE_REAL")
+if [[ "$FILE_OWNER" != "$(id -u)" ]]; then
+  echo "post-review.sh: BODY_FILE not owned by current user" >&2; exit 2
+fi
 command -v gh >/dev/null 2>&1 || { echo "missing dependency: gh" >&2; exit 3; }
 
 # Skill version is read from the SKILL.md frontmatter so the marker stays in sync.

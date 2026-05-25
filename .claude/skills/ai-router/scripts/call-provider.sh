@@ -28,9 +28,9 @@ MAX_TOKENS=""
 TIMEOUT=""
 
 # Defaults — overridden by config + flags.
-DEFAULT_MAX_TOKENS_ANTHROPIC=4096
-DEFAULT_MAX_TOKENS_OPENAI=16384
-DEFAULT_MAX_TOKENS_GEMINI=8192
+DEFAULT_MAX_TOKENS_ANTHROPIC=16384
+DEFAULT_MAX_TOKENS_OPENAI=32768
+DEFAULT_MAX_TOKENS_GEMINI=16384
 DEFAULT_TIMEOUT_ANTHROPIC=120
 DEFAULT_TIMEOUT_OPENAI=300
 DEFAULT_TIMEOUT_GEMINI=120
@@ -189,8 +189,16 @@ if not text:
         finish = r.get("stop_reason") or ""
     elif provider == "gemini" and (r.get("candidates") or []):
         finish = ((r["candidates"][0] or {}).get("finishReason")) or ""
-    print(f"{provider}: empty response text (finish_reason={finish!r}); shape may be safety-blocked or error envelope returned as 2xx", file=sys.stderr)
-    # Still exit 0 — caller can decide whether empty text is acceptable.
+    print(f"{provider}: empty response text (finish_reason={finish!r}); shape may be safety-blocked, token-capped, or error envelope returned as 2xx", file=sys.stderr)
+    # Distinct exit code so callers can detect "2xx but no usable text" without
+    # parsing stderr. Synthesis logic in ensemble/review should treat 6 like
+    # any other provider failure (continue with remaining providers, note in
+    # the summary). Usage line is still emitted so cost accounting works.
+    usage["provider"] = provider
+    usage["model"] = model
+    sys.stdout.write("---USAGE---\n")
+    sys.stdout.write(json.dumps(usage) + "\n")
+    sys.exit(6)
 
 usage["provider"] = provider
 usage["model"] = model

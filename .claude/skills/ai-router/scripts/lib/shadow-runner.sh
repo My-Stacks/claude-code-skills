@@ -37,10 +37,16 @@ fi
 #   LANG/LC_* — keep UTF-8 happy
 #   AI_ROUTER_* — explicit per-run inputs
 #
-# Max-runtime cap (python signal.alarm) ensures one shadow can't run longer
-# than AI_ROUTER_SHADOW_RUNTIME (default 600s = 10 min). claude -p for a
-# review is normally ~3 min; the cap is a hard ceiling so orphaned shadows
-# (parent session ended before poll fired) can't burn unbounded API tokens.
+# Max-runtime cap ensures one shadow can't run longer than
+# AI_ROUTER_SHADOW_RUNTIME (default 600s = 10 min). claude -p for a review is
+# normally ~3 min; the cap is a hard ceiling so orphaned shadows (parent
+# session ended before poll fired) can't burn unbounded API tokens.
+#
+# Mechanism: the wrapper puts claude in its OWN process group (start_new_session
+# so claude+descendants are killable as a unit without taking down this bash
+# runner, which still needs to write the status file. SIGTERM → 5s grace →
+# SIGKILL escalation, then reap to avoid a zombie. Exits 142 on timeout so the
+# existing bash accounting below still works.
 RUNTIME_CAP=${AI_ROUTER_SHADOW_RUNTIME:-600}
 
 # `set +e` around the call so a non-zero exit doesn't trip set -e and abort
@@ -59,15 +65,28 @@ env -i \
   AI_ROUTER_PROVIDERS="$PROVIDERS" \
   python3 -c '
 import os, signal, subprocess, sys
-signal.alarm(int(sys.argv[1]))
-sys.exit(subprocess.run(sys.argv[2:]).returncode)
+timeout = int(sys.argv[1])
+proc = subprocess.Popen(sys.argv[2:], start_new_session=True)
+try:
+    sys.exit(proc.wait(timeout=timeout))
+except subprocess.TimeoutExpired:
+    pgid = os.getpgid(proc.pid)
+    try: os.killpg(pgid, signal.SIGTERM)
+    except ProcessLookupError: pass
+    try: proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try: os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError: pass
+        proc.wait()
+    sys.exit(142)
 ' "$RUNTIME_CAP" claude -p "$PROMPT" --output-format text \
   > "$STATE/shadow.log" 2>&1
 rc=$?
 set -e
 
 # Distinguish "claude exited non-zero" from "we hit the runtime cap".
-# python3 receives SIGALRM and exits 142 (128 + 14).
+# The python wrapper exits 142 on timeout (kept for back-compat with the
+# previous signal.alarm-based design).
 if (( rc == 142 )); then
   printf 'failed:runtime-cap-%ss\n' "$RUNTIME_CAP" > "$STATE/shadow.status.tmp"
 elif (( rc == 0 )); then

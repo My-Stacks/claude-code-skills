@@ -4,15 +4,16 @@
 # Usage: bash shadow-poll.sh <state-dir>
 #
 # Outputs (first line of stdout) — see SKILL.md "Shadow Review" for cron contract:
-#   BOTH_READY              — ai-router + CodeRabbit both posted
-#   ONLY_AI_ROUTER_READY    — CodeRabbit was skipped; ai-router posted
-#   WAITING have_ai=… have_cr=… elapsed=…s
-#   TIMEOUT have_ai=… have_cr=…       (partial both.json written if anything matched)
-#   FAILED:<status>                   — process died or exited without posting
+#   ALL_READY               — every requested source has landed (ai-router + any waits)
+#   ONLY_AI_ROUTER_READY    — no --wait-* flags requested; ai-router done
+#   WAITING have_ai=… have_cr=… have_reviewers=… elapsed=…s
+#   TIMEOUT have_ai=… have_cr=… have_reviewers=…   (partial both.json written if have_ai==1)
+#   FAILED:<status>                                — process died or exited without posting
 #
 # Side-effects:
-#   BOTH_READY / ONLY_AI_ROUTER_READY / TIMEOUT (when have_ai==1) — writes
-#   <state-dir>/both.json with the matched comment object(s).
+#   ALL_READY / ONLY_AI_ROUTER_READY / TIMEOUT (when have_ai==1) — writes
+#   <state-dir>/both.json with the matched comment object(s); reviewers (if any)
+#   land in a `reviewers` array alongside `ai_router` and `coderabbit`.
 #
 # Exit codes:
 #   0  WAITING or terminal-ready
@@ -44,12 +45,30 @@ done
 PR=$(cat "$STATE/pr")
 RUN_ID=$(cat "$STATE/run_id")
 STARTED=$(cat "$STATE/started_at")
-WAIT_FOR_CR=$(cat "$STATE/wait_for_cr" 2>/dev/null || echo true)
+# wait_cr / wait_reviewers: new opt-out shape. wait_for_cr: legacy shape from
+# older state dirs (kept readable for in-flight runs across the upgrade).
+if [[ -r "$STATE/wait_cr" ]]; then
+  WAIT_CR=$(cat "$STATE/wait_cr")
+else
+  WAIT_CR=$(cat "$STATE/wait_for_cr" 2>/dev/null || echo false)
+fi
+WAIT_REVIEWERS=$(cat "$STATE/wait_reviewers" 2>/dev/null || echo false)
+PR_AUTHOR=$(cat "$STATE/pr_author" 2>/dev/null || echo "")
 POST=$(cat "$STATE/post" 2>/dev/null || echo false)
 SHADOW_STATUS=$(cat "$STATE/shadow.status")
 SHADOW_PID=$(cat "$STATE/shadow.pid" 2>/dev/null || echo "")
 
-REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+# Read repo from state (persisted by shadow-spawn.sh) so cron ticks don't
+# depend on cwd being a git checkout. Fall back to `gh repo view` for state
+# dirs written by older spawns that didn't persist it.
+if [[ -r "$STATE/repo" ]]; then
+  REPO=$(cat "$STATE/repo")
+else
+  REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+fi
+# Defense-in-depth against a malformed $STATE/repo silently breaking the API
+# URL — `gh api repos/<repo>/...` would 404 or worse with garbage.
+[[ "$REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || { echo "invalid repo in state: $REPO" >&2; exit 64; }
 
 # `gh api --paginate` emits [...][...] (one array per page); `jq -s '[.[][]]'`
 # slurps and flattens. `?since=` bounds the result to items at-or-after our
@@ -78,25 +97,57 @@ CODERABBIT=$(jq --arg started "$STARTED" \
 CR_REVIEW=$(jq --arg started "$STARTED" \
   '[.[] | select((.user.login // "")=="coderabbitai[bot]" or (.user.login // "")=="coderabbitai") | select((.submitted_at // "") > $started)] | last // null' <<<"$CR_REVIEWS")
 
+# "Other reviewers" = any issue-comment or pulls/review since spawn that is NOT
+# from the PR author and NOT from CodeRabbit (CR has its own bucket above).
+# Self-posts from the shadow itself are excluded via the ai-router signature
+# marker so --post=true runs don't think the shadow is its own "reviewer".
+REVIEWERS=$(jq --arg started "$STARTED" --arg author "$PR_AUTHOR" --arg rid "$RUN_ID" '
+  [ .[]
+    | select((.user.login // "") != $author)
+    | select((.user.login // "") != "coderabbitai[bot]")
+    | select((.user.login // "") != "coderabbitai")
+    | select((.created_at // "") > $started)
+    | select((.body // "") | contains("run-id=" + $rid) | not)
+  ]' <<<"$COMMENTS")
+REVIEWER_REVIEWS=$(jq --arg started "$STARTED" --arg author "$PR_AUTHOR" '
+  [ .[]
+    | select((.user.login // "") != $author)
+    | select((.user.login // "") != "coderabbitai[bot]")
+    | select((.user.login // "") != "coderabbitai")
+    | select((.submitted_at // "") > $started)
+  ]' <<<"$CR_REVIEWS")
+# Merge issue-comment and formal-review hits into one reviewers array.
+REVIEWERS=$(jq -n --argjson c "$REVIEWERS" --argjson r "$REVIEWER_REVIEWS" '$c + $r')
+
 HAVE_AI=0; [[ "$AIROUTER" != "null" ]] && HAVE_AI=1
 HAVE_CR=0
 [[ "$CODERABBIT" != "null" || "$CR_REVIEW" != "null" ]] && HAVE_CR=1
+HAVE_REVIEWERS=0
+[[ "$(jq 'length' <<<"$REVIEWERS")" != "0" ]] && HAVE_REVIEWERS=1
 # Prefer the issue-comment shape (has body + html_url); fall back to review.
 [[ "$CODERABBIT" == "null" ]] && CODERABBIT=$CR_REVIEW
 
 write_both() {
-  # $1: include CR? (true|false)
-  local include_cr=$1
-  if [[ "$include_cr" == "true" && "$CODERABBIT" != "null" ]]; then
-    jq -n --argjson a "$AIROUTER" --argjson c "$CODERABBIT" \
-      '{ai_router:{body:$a.body, url:($a.html_url // null), id:$a.id},
-        coderabbit:{body:$c.body, url:($c.html_url // null), id:$c.id}}' \
-      > "$STATE/both.json"
-  elif [[ "$AIROUTER" != "null" ]]; then
-    jq -n --argjson a "$AIROUTER" \
-      '{ai_router:{body:$a.body, url:($a.html_url // null), id:$a.id}}' \
-      > "$STATE/both.json"
-  fi
+  # Always called when AIROUTER is present. Includes CR / reviewers iff their
+  # respective wait flag is set AND the data exists. Partial writes (timeout
+  # path) just pass whatever subset has landed.
+  [[ "$AIROUTER" == "null" ]] && return 0
+  local cr_arg=$CODERABBIT rev_arg=$REVIEWERS
+  [[ "$WAIT_CR" == "false" || $HAVE_CR -eq 0 ]] && cr_arg=null
+  [[ "$WAIT_REVIEWERS" == "false" ]] && rev_arg='[]'
+  jq -n \
+    --argjson a "$AIROUTER" \
+    --argjson c "$cr_arg" \
+    --argjson rs "$rev_arg" \
+    '{ai_router:{body:$a.body, url:($a.html_url // null), id:$a.id}}
+     + (if $c == null then {} else
+         {coderabbit:{body:$c.body, url:($c.html_url // null), id:$c.id}}
+       end)
+     + (if ($rs | length) == 0 then {} else
+         {reviewers:[$rs[] | {user:.user.login, body:.body,
+                              url:(.html_url // null), id:.id,
+                              at:(.submitted_at // .created_at // null)}]}
+       end)' > "$STATE/both.json"
 }
 
 # 1. Shadow process died WITHOUT posting an ai-router comment → FAILED.
@@ -119,21 +170,45 @@ if [[ "$SHADOW_STATUS" == "running" && "$process_alive" == "false" && $HAVE_AI -
   exit 1
 fi
 if [[ "$SHADOW_STATUS" == "done" && $HAVE_AI -eq 0 ]]; then
+  # In POST=true mode, ai-router presence is detected via a PR comment with the
+  # run-id marker. GitHub's REST API can lag the actual write by a few seconds
+  # on a fresh comment, so a single tick of "done + no comment" is normal —
+  # only the second consecutive observation past the grace window is a real
+  # failure. The grace marker is the first-seen timestamp; default 90s.
+  if [[ "$POST" == "true" ]]; then
+    GRACE_S=${AI_ROUTER_POST_GRACE:-90}
+    NOW_S=$(date -u +%s)
+    if [[ -r "$STATE/done_seen_at" ]]; then
+      DONE_AT=$(cat "$STATE/done_seen_at")
+      if (( NOW_S - DONE_AT < GRACE_S )); then
+        echo "WAITING have_ai=0 have_cr=$HAVE_CR have_reviewers=$HAVE_REVIEWERS post-grace=$((NOW_S - DONE_AT))s"
+        exit 0
+      fi
+    else
+      printf '%s\n' "$NOW_S" > "$STATE/done_seen_at"
+      echo "WAITING have_ai=0 have_cr=$HAVE_CR have_reviewers=$HAVE_REVIEWERS post-grace=new"
+      exit 0
+    fi
+  fi
   echo "FAILED:shadow-exited-without-posting"
   exit 1
 fi
 
-# 2. Terminal: both required and both present.
-if [[ "$WAIT_FOR_CR" == "true" && $HAVE_AI -eq 1 && $HAVE_CR -eq 1 ]]; then
-  write_both true
-  echo "BOTH_READY"
-  exit 0
+# 2. Terminal-ready check (AND semantics): ai-router AND every requested wait.
+READY=0
+if (( HAVE_AI == 1 )); then
+  READY=1
+  [[ "$WAIT_CR" == "true" && $HAVE_CR -eq 0 ]] && READY=0
+  [[ "$WAIT_REVIEWERS" == "true" && $HAVE_REVIEWERS -eq 0 ]] && READY=0
 fi
 
-# 3. Terminal: CodeRabbit skipped, ai-router present.
-if [[ "$WAIT_FOR_CR" == "false" && $HAVE_AI -eq 1 ]]; then
-  write_both false
-  echo "ONLY_AI_ROUTER_READY"
+if (( READY == 1 )); then
+  write_both
+  if [[ "$WAIT_CR" == "false" && "$WAIT_REVIEWERS" == "false" ]]; then
+    echo "ONLY_AI_ROUTER_READY"
+  else
+    echo "ALL_READY"
+  fi
   exit 0
 fi
 
@@ -158,12 +233,10 @@ TIMEOUT_S=${AI_ROUTER_SHADOW_TIMEOUT:-1800}
 #    `>=` so the documented 30-min wall is honored on the tick that crosses it,
 #    not the one after (3-min overshoot).
 if (( ELAPSED >= TIMEOUT_S )); then
-  if (( HAVE_AI == 1 )); then
-    write_both "$( [[ "$WAIT_FOR_CR" == "true" && $HAVE_CR -eq 1 ]] && echo true || echo false )"
-  fi
-  echo "TIMEOUT have_ai=$HAVE_AI have_cr=$HAVE_CR elapsed=${ELAPSED}s"
+  (( HAVE_AI == 1 )) && write_both
+  echo "TIMEOUT have_ai=$HAVE_AI have_cr=$HAVE_CR have_reviewers=$HAVE_REVIEWERS elapsed=${ELAPSED}s"
   exit 2
 fi
 
-echo "WAITING have_ai=$HAVE_AI have_cr=$HAVE_CR elapsed=${ELAPSED}s"
+echo "WAITING have_ai=$HAVE_AI have_cr=$HAVE_CR have_reviewers=$HAVE_REVIEWERS elapsed=${ELAPSED}s"
 exit 0

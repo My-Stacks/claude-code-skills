@@ -26,27 +26,22 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/lib/config.sh"
 
-[[ $# -ge 1 ]] || { echo "usage: shadow-spawn.sh <pr-number> [--wait-for-cr true|false]" >&2; exit 2; }
+[[ $# -ge 1 ]] || { echo "usage: shadow-spawn.sh <pr-number> [--wait-cr] [--wait-reviewers] [--post]" >&2; exit 2; }
 PR=$1; shift
 
 [[ "$PR" =~ ^[1-9][0-9]*$ ]] || { echo "invalid PR number: $PR (must be positive integer)" >&2; exit 2; }
 
-WAIT_FOR_CR=true
+# Opt-out by default. Each --wait-* flag adds an AND clause to the terminal-ready
+# condition. With no flags, the run resolves to ONLY_AI_ROUTER_READY as soon as
+# the headless review finishes.
+WAIT_CR=false
+WAIT_REVIEWERS=false
 POST=false   # default: synthesis goes to shadow.log, NOT to a PR comment
 while (( $# > 0 )); do
   case "$1" in
-    --wait-for-cr)
-      [[ $# -ge 2 ]] || { echo "--wait-for-cr requires a value (true|false)" >&2; exit 2; }
-      case "$2" in
-        true|false) WAIT_FOR_CR=$2 ;;
-        *) echo "--wait-for-cr must be 'true' or 'false', got: $2" >&2; exit 2 ;;
-      esac
-      shift 2
-      ;;
-    --post)
-      POST=true
-      shift
-      ;;
+    --wait-cr)        WAIT_CR=true;        shift ;;
+    --wait-reviewers) WAIT_REVIEWERS=true; shift ;;
+    --post)           POST=true;           shift ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac
 done
@@ -55,7 +50,8 @@ for bin in claude gh python3; do
   command -v "$bin" >/dev/null 2>&1 || { echo "missing dependency: $bin" >&2; exit 3; }
 done
 
-REPO_SLUG=$(gh repo view --json nameWithOwner -q .nameWithOwner | tr '/' '-')
+REPO_FULL=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+REPO_SLUG=${REPO_FULL//\//-}
 RUN_ID=$(python3 -c 'import uuid; print(uuid.uuid4())')
 
 SHADOW_BASE="${AI_ROUTER_SHADOW_DIR:-${AI_ROUTER_TMPDIR:-${TMPDIR:-/tmp}}/ai-router-shadow}"
@@ -88,12 +84,17 @@ if [[ -z "$PROVIDERS" ]]; then
   exit 2
 fi
 
-date -u +%Y-%m-%dT%H:%M:%SZ > "$STATE/started_at"
-printf '%s\n' "$RUN_ID"      > "$STATE/run_id"
-printf '%s\n' "$PR"          > "$STATE/pr"
-printf '%s\n' "$WAIT_FOR_CR" > "$STATE/wait_for_cr"
-printf '%s\n' "$POST"        > "$STATE/post"
-printf '%s\n' "$PROVIDERS"   > "$STATE/providers"
+PR_AUTHOR=$(gh api "repos/$REPO_FULL/pulls/$PR" --jq '.user.login' 2>/dev/null || echo "")
+
+date -u +%Y-%m-%dT%H:%M:%SZ    > "$STATE/started_at"
+printf '%s\n' "$RUN_ID"         > "$STATE/run_id"
+printf '%s\n' "$PR"             > "$STATE/pr"
+printf '%s\n' "$WAIT_CR"        > "$STATE/wait_cr"
+printf '%s\n' "$WAIT_REVIEWERS" > "$STATE/wait_reviewers"
+printf '%s\n' "$POST"           > "$STATE/post"
+printf '%s\n' "$PROVIDERS"      > "$STATE/providers"
+printf '%s\n' "$REPO_FULL"      > "$STATE/repo"
+printf '%s\n' "$PR_AUTHOR"      > "$STATE/pr_author"
 # Atomic status write.
 printf 'running\n' > "$STATE/shadow.status.tmp" && mv "$STATE/shadow.status.tmp" "$STATE/shadow.status"
 

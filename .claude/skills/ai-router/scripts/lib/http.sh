@@ -23,9 +23,13 @@ do_post() {
   trap 'rm -f -- "$cfg"' RETURN
 
   while (( $# > 0 )) && [[ "$1" != "--" ]]; do
-    # Reject control chars (CR/LF/NUL) in header values — a malformed header
-    # could otherwise inject a new curl --config directive on a fresh line.
-    if [[ "$1" == *$'\n'* || "$1" == *$'\r'* || "$1" == *$'\0'* ]]; then
+    # Reject CR/LF in header values — a malformed header could otherwise inject
+    # a new curl --config directive on a fresh line. We don't check for NUL:
+    # bash strings can't hold a NUL byte (variable assignment strips it), so
+    # `$'\0'` expands to the empty string and `*$'\0'*` becomes `**`, which
+    # matches every non-empty string in `[[ == ]]` glob context and would
+    # reject every header. CR/LF coverage is sufficient for the threat model.
+    if [[ "$1" == *$'\n'* || "$1" == *$'\r'* ]]; then
       echo "do_post: header contains control character" >&2
       return 64
     fi
