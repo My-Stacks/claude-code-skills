@@ -62,7 +62,11 @@ STATE="$SHADOW_BASE/${REPO_SLUG}-pr${PR}"
 
 # Atomic claim — `mkdir` fails iff the dir already exists. No TOCTOU.
 if ! mkdir -m 700 "$STATE" 2>/dev/null; then
-  pid=$(cat "$STATE/shadow.pid" 2>/dev/null || true)
+  # Prefer claude.pid (the actual reviewer) over shadow.pid (the outer python
+  # wrapper, which exits as soon as Popen returns). Checking shadow.pid alone
+  # would false-detect a live run as stale and start a parallel claude -p,
+  # doubling provider spend.
+  pid=$(cat "$STATE/claude.pid" 2>/dev/null || cat "$STATE/shadow.pid" 2>/dev/null || true)
   status=$(cat "$STATE/shadow.status" 2>/dev/null || echo "?")
   if [[ "$status" == "running" && "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
     echo "shadow already running for PR $PR (PID $pid, state: $STATE)" >&2

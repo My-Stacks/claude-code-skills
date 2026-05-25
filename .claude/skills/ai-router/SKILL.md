@@ -304,12 +304,14 @@ If the parent session ends after spawning but before the cron fires `ALL_READY` 
    Run: bash ~/.claude/skills/ai-router/scripts/shadow-poll.sh <STATE>
 
    Read the first line of stdout:
-   - ALL_READY             → load <STATE>/both.json, render Shadow Handoff (see SKILL.md), CronDelete <cron-id>, summarize the reviews in chat.
-   - ONLY_AI_ROUTER_READY  → load <STATE>/both.json, render Shadow Handoff with the ai-router section only, CronDelete <cron-id>.
+   - ALL_READY             → load <STATE>/both.json, render Shadow Handoff (see SKILL.md), CronDelete <cron-id>, summarize the reviews in chat, then `rm -rf <STATE>` (synthesis is in chat, state dir is dead weight).
+   - ONLY_AI_ROUTER_READY  → load <STATE>/both.json, render Shadow Handoff with the ai-router section only, CronDelete <cron-id>, then `rm -rf <STATE>`.
    - WAITING               → do nothing, stay quiet.
-   - TIMEOUT               → surface partial results from <STATE>/both.json if present plus last 50 lines of <STATE>/shadow.log; ask user to keep waiting or stop; do NOT auto-delete the cron.
-   - FAILED:<status>       → show last 50 lines of <STATE>/shadow.log, CronDelete.
+   - TIMEOUT               → surface partial results from <STATE>/both.json if present plus last 50 lines of <STATE>/shadow.log; ask user to keep waiting or stop; do NOT auto-delete the cron and do NOT remove <STATE> (user may want to inspect).
+   - FAILED:<status>       → show last 50 lines of <STATE>/shadow.log and <STATE>/poll.err if present, CronDelete. Do NOT remove <STATE> — diagnostics are still useful.
    ```
+
+   Cleanup policy: successful terminal states (ALL_READY / ONLY_AI_ROUTER_READY) auto-remove the state dir because the synthesis is already rendered in chat. Failure modes (TIMEOUT / FAILED) keep the state dir so the user can `cat <STATE>/shadow.log` / `cat <STATE>/poll.err` for diagnosis.
 
 6. **Print to user:** "Shadow review running for PR #N (state: `$STATE`). Polling every 3 min. I'll surface results when ready. Stop early with `/ai-router shadow-cancel`."
 

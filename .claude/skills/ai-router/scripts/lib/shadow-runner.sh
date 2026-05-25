@@ -61,6 +61,22 @@ RUNTIME_CAP=${AI_ROUTER_SHADOW_RUNTIME:-600}
 # `set +e` around the call so a non-zero exit doesn't trip set -e and abort
 # before the status file is written — the poller relies on the status file
 # transitioning out of "running".
+#
+# Build the optional-env list as an ARRAY rather than inline ${VAR:+...}
+# expansions. Inline expansions are word-split by bash after substitution,
+# so a value containing a space/newline/quote splits into multiple args and
+# corrupts the child env (e.g. PATH with a space in it, or a poorly-formed
+# AI_ROUTER_CONFIG). Array elements are passed verbatim with no splitting.
+ENV_EXTRA=()
+[[ -n "${LC_ALL:-}" ]]                   && ENV_EXTRA+=(LC_ALL="$LC_ALL")
+[[ -n "${AI_ROUTER_CONFIG:-}" ]]         && ENV_EXTRA+=(AI_ROUTER_CONFIG="$AI_ROUTER_CONFIG")
+[[ -n "${AI_ROUTER_TMPDIR:-}" ]]         && ENV_EXTRA+=(AI_ROUTER_TMPDIR="$AI_ROUTER_TMPDIR")
+[[ -n "${AI_ROUTER_POST_BODY_DIR:-}" ]]  && ENV_EXTRA+=(AI_ROUTER_POST_BODY_DIR="$AI_ROUTER_POST_BODY_DIR")
+[[ -n "${AI_ROUTER_SHADOW_TIMEOUT:-}" ]] && ENV_EXTRA+=(AI_ROUTER_SHADOW_TIMEOUT="$AI_ROUTER_SHADOW_TIMEOUT")
+[[ -n "${AI_ROUTER_SHADOW_RUNTIME:-}" ]] && ENV_EXTRA+=(AI_ROUTER_SHADOW_RUNTIME="$AI_ROUTER_SHADOW_RUNTIME")
+[[ -n "${AI_ROUTER_POST_GRACE:-}" ]]     && ENV_EXTRA+=(AI_ROUTER_POST_GRACE="$AI_ROUTER_POST_GRACE")
+[[ -n "${GH_TOKEN:-}" ]]                 && ENV_EXTRA+=(GH_TOKEN="$GH_TOKEN")
+[[ -n "${GITHUB_TOKEN:-}" ]]             && ENV_EXTRA+=(GITHUB_TOKEN="$GITHUB_TOKEN")
 set +e
 env -i \
   HOME="$HOME" \
@@ -69,30 +85,26 @@ env -i \
   TERM="${TERM:-dumb}" \
   USER="${USER:-$(id -un 2>/dev/null || echo user)}" \
   LANG="${LANG:-en_US.UTF-8}" \
-  ${LC_ALL:+LC_ALL="$LC_ALL"} \
   AI_ROUTER_RUN_ID="$RUN_ID" \
   AI_ROUTER_PROVIDERS="$PROVIDERS" \
   AI_ROUTER_STATE_DIR="$STATE" \
-  ${AI_ROUTER_CONFIG:+AI_ROUTER_CONFIG="$AI_ROUTER_CONFIG"} \
-  ${AI_ROUTER_TMPDIR:+AI_ROUTER_TMPDIR="$AI_ROUTER_TMPDIR"} \
-  ${AI_ROUTER_POST_BODY_DIR:+AI_ROUTER_POST_BODY_DIR="$AI_ROUTER_POST_BODY_DIR"} \
-  ${AI_ROUTER_SHADOW_TIMEOUT:+AI_ROUTER_SHADOW_TIMEOUT="$AI_ROUTER_SHADOW_TIMEOUT"} \
-  ${AI_ROUTER_SHADOW_RUNTIME:+AI_ROUTER_SHADOW_RUNTIME="$AI_ROUTER_SHADOW_RUNTIME"} \
-  ${AI_ROUTER_POST_GRACE:+AI_ROUTER_POST_GRACE="$AI_ROUTER_POST_GRACE"} \
-  ${GH_TOKEN:+GH_TOKEN="$GH_TOKEN"} \
-  ${GITHUB_TOKEN:+GITHUB_TOKEN="$GITHUB_TOKEN"} \
+  "${ENV_EXTRA[@]}" \
   python3 -c '
 import os, signal, subprocess, sys
 timeout = int(sys.argv[1])
 proc = subprocess.Popen(sys.argv[2:], start_new_session=True)
+# Capture PGID NOW, while the child is guaranteed to exist. Calling
+# os.getpgid(proc.pid) later (e.g. after TimeoutExpired) can race with a
+# fast-exiting child whose PID has already been recycled on a busy host —
+# then killpg lands on an unrelated process group.
+pgid = os.getpgid(proc.pid)
 # Record claude PID and PGID so the parent can liveness-check + cancel the
 # actual reviewer process. start_new_session puts claude in its OWN pgid,
-# which is distinct from this wrapper and from shadow-runner.sh — without
-# this file, cancel signals the runner and leaves claude detached.
+# distinct from this wrapper and from shadow-runner.sh — without this file,
+# cancel signals the runner and leaves claude detached.
 state = os.environ.get("AI_ROUTER_STATE_DIR")
 if state:
     try:
-        pgid = os.getpgid(proc.pid)
         with open(os.path.join(state, "claude.pid.tmp"), "w") as f:
             f.write(f"{proc.pid}\n")
         os.rename(os.path.join(state, "claude.pid.tmp"),
@@ -106,7 +118,6 @@ if state:
 try:
     sys.exit(proc.wait(timeout=timeout))
 except subprocess.TimeoutExpired:
-    pgid = os.getpgid(proc.pid)
     try: os.killpg(pgid, signal.SIGTERM)
     except ProcessLookupError: pass
     try: proc.wait(timeout=5)

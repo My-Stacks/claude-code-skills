@@ -27,7 +27,10 @@ for d in "$SHADOW_BASE/${REPO_SLUG}-pr"*; do
   pr=$(cat "$d/pr" 2>/dev/null || echo "?")
   status=$(cat "$d/shadow.status" 2>/dev/null || echo "?")
   started=$(cat "$d/started_at" 2>/dev/null || echo "?")
-  pid=$(cat "$d/shadow.pid" 2>/dev/null || echo "")
+  # Prefer claude.pid (the actual reviewer) over shadow.pid (the outer python
+  # wrapper, which exits immediately after Popen). Falling back to shadow.pid
+  # supports legacy state dirs.
+  pid=$(cat "$d/claude.pid" 2>/dev/null || cat "$d/shadow.pid" 2>/dev/null || echo "")
   alive="no"
   if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
     alive="yes"
