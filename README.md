@@ -92,6 +92,14 @@ These components are built around a few constraints that shape every decision.
 
 ## Upgrade Notes
 
+### Handoff retired
+
+The `handoff` skill has been retired. Session continuity is now part of the `linear` skill via its auto-maintained `.latest-status.md`. If you previously installed `handoff` globally, remove it:
+
+```bash
+rm -rf ~/.claude/skills/handoff/
+```
+
 ### AI Router v1.3
 
 External API calls moved out of inline `python3` heredocs and into checked-in helper scripts under `.claude/skills/ai-router/scripts/`. This unblocks `permissions.defaultMode: "auto"` users (Claude Code's auto-mode classifier was denying the heredocs as "exfiltration to untrusted endpoint"). Adds `/ai-router review --post-to-pr <#>` and a new `/ai-router shadow-review` that spawns a headless background review and polls the PR for both ai-router and CodeRabbit comments. Config schema (`~/.orchestrator-config.json`) is unchanged — fully back-compat.
