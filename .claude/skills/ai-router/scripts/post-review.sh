@@ -31,18 +31,29 @@ PROVIDERS=${3:-${AI_ROUTER_PROVIDERS:-anthropic,openai,gemini}}
 [[ -r "$BODY_FILE" ]] || { echo "cannot read: $BODY_FILE" >&2; exit 2; }
 # Defense-in-depth: this script is wildcard-allowlisted, so a stray invocation
 # could otherwise turn arbitrary local files into public PR comments. Constrain
-# BODY_FILE to the per-run tmpdir and require caller ownership + non-symlink.
-# Set AI_ROUTER_POST_BODY_DIR to override (e.g. CI sandbox); leave empty to
-# disable the trusted-path check entirely (interactive workflows that build
-# the body in /var/folders/* via mktemp).
-BODY_FILE_REAL=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$BODY_FILE")
-TRUSTED_DIR=${AI_ROUTER_POST_BODY_DIR:-${AI_ROUTER_TMPDIR:-${TMPDIR:-/tmp}}}
-TRUSTED_DIR=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$TRUSTED_DIR")
-case "$BODY_FILE_REAL" in
-  "$TRUSTED_DIR"/*) : ;;
-  *) echo "post-review.sh: BODY_FILE must live under $TRUSTED_DIR (got: $BODY_FILE_REAL)" >&2; exit 2 ;;
-esac
+# BODY_FILE to the per-run tmpdir, require caller ownership, and reject any
+# component being a symlink. Reject symlinks BEFORE realpath so a symlink
+# pointing into the trusted dir can't bypass the case check.
 [[ -L "$BODY_FILE" ]] && { echo "post-review.sh: BODY_FILE must not be a symlink" >&2; exit 2; }
+
+# AI_ROUTER_POST_BODY_DIR overrides the default tmpdir. Unset → use default;
+# explicit empty string → trusted-path check disabled (escape hatch for
+# unusual workflows; ownership + non-symlink checks still apply).
+if [[ -z "${AI_ROUTER_POST_BODY_DIR+set}" ]]; then
+  TRUSTED_DIR=${AI_ROUTER_TMPDIR:-${TMPDIR:-/tmp}}
+elif [[ -z "$AI_ROUTER_POST_BODY_DIR" ]]; then
+  TRUSTED_DIR=""   # explicit opt-out
+else
+  TRUSTED_DIR=$AI_ROUTER_POST_BODY_DIR
+fi
+BODY_FILE_REAL=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$BODY_FILE")
+if [[ -n "$TRUSTED_DIR" ]]; then
+  TRUSTED_REAL=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$TRUSTED_DIR")
+  case "$BODY_FILE_REAL" in
+    "$TRUSTED_REAL"/*) : ;;
+    *) echo "post-review.sh: BODY_FILE must live under $TRUSTED_REAL (got: $BODY_FILE_REAL)" >&2; exit 2 ;;
+  esac
+fi
 # Owner check — guards against another local user pre-staging a body file.
 FILE_OWNER=$(python3 -c 'import os,sys; print(os.stat(sys.argv[1]).st_uid)' "$BODY_FILE_REAL")
 if [[ "$FILE_OWNER" != "$(id -u)" ]]; then
@@ -60,6 +71,20 @@ TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 # UUID via python3 — uuidgen isn't on every system and its output format is
 # inconsistent across distros.
 RUN_ID=${AI_ROUTER_RUN_ID:-$(python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null || echo "run-$(date +%s)-$$")}
+
+# Validate marker fields before they land in the HTML comment block. A value
+# containing `-->`, a newline, or other markdown-active chars would break out
+# of the signature block and either confuse the poll's run-id match or render
+# as visible content. Both fields are normally script-generated and safe, but
+# AI_ROUTER_RUN_ID / AI_ROUTER_PROVIDERS can be set externally.
+[[ "$RUN_ID" =~ ^[A-Za-z0-9._:-]+$ ]] || {
+  echo "post-review.sh: invalid RUN_ID (must match [A-Za-z0-9._:-]+): $RUN_ID" >&2
+  exit 2
+}
+[[ "$PROVIDERS" =~ ^[a-z][a-z0-9_,-]*$ ]] || {
+  echo "post-review.sh: invalid PROVIDERS (must be CSV of [a-z0-9_-] tokens): $PROVIDERS" >&2
+  exit 2
+}
 
 TMPDIR_BASE="${AI_ROUTER_TMPDIR:-${TMPDIR:-/tmp}}"
 # Trailing-only X's for BSD mktemp compatibility (see call-provider.sh).

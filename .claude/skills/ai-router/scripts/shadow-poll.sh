@@ -73,8 +73,26 @@ fi
 # `gh api --paginate` emits [...][...] (one array per page); `jq -s '[.[][]]'`
 # slurps and flattens. `?since=` bounds the result to items at-or-after our
 # spawn time, sharply reducing GitHub-API work on PRs with long histories.
-COMMENTS=$(gh api "repos/$REPO/issues/$PR/comments?since=$STARTED&per_page=100" --paginate 2>/dev/null | jq -s '[.[][]]' || echo '[]')
-CR_REVIEWS=$(gh api "repos/$REPO/pulls/$PR/reviews?per_page=100" --paginate 2>/dev/null | jq -s '[.[][]]' || echo '[]')
+#
+# Capture rc separately so rate limits / auth errors / network blips surface
+# as FAILED:gh-api-error instead of silently collapsing into "no comments"
+# (which would later drift the run to FAILED:shadow-exited-without-posting).
+fetch_json() {
+  # $1 endpoint, $2 dest var, $3 stderr-file
+  local endpoint=$1 var=$2 err=$3 raw rc
+  raw=$(gh api "$endpoint" --paginate 2>"$err"); rc=$?
+  if (( rc != 0 )); then return $rc; fi
+  printf -v "$var" '%s' "$(jq -s '[.[][]]' <<<"$raw" 2>>"$err" || echo '[]')"
+}
+POLL_ERR="$STATE/poll.err"
+if ! fetch_json "repos/$REPO/issues/$PR/comments?since=$STARTED&per_page=100" COMMENTS "$POLL_ERR"; then
+  echo "FAILED:gh-api-error (issues/comments — see $POLL_ERR)"
+  exit 1
+fi
+if ! fetch_json "repos/$REPO/pulls/$PR/reviews?per_page=100" CR_REVIEWS "$POLL_ERR"; then
+  echo "FAILED:gh-api-error (pulls/reviews — see $POLL_ERR)"
+  exit 1
+fi
 
 # AI-router signal source depends on --post:
 #   POST=true:  the headless instance posted to the PR; we match by run-id marker.
@@ -92,10 +110,13 @@ else
 fi
 
 # CodeRabbit posts via issue-comments AND pulls/reviews endpoints; check both.
+# Match case-insensitively on substring "coderabbit" so self-hosted variants,
+# legacy slugs (coderabbitai, coderabbitai[bot]), and rebrands all resolve to
+# the same bucket without per-deployment config.
 CODERABBIT=$(jq --arg started "$STARTED" \
-  '[.[] | select((.user.login // "")=="coderabbitai[bot]" or (.user.login // "")=="coderabbitai") | select((.created_at // "") > $started)] | last // null' <<<"$COMMENTS")
+  '[.[] | select((.user.login // "") | test("coderabbit"; "i")) | select((.created_at // "") > $started)] | last // null' <<<"$COMMENTS")
 CR_REVIEW=$(jq --arg started "$STARTED" \
-  '[.[] | select((.user.login // "")=="coderabbitai[bot]" or (.user.login // "")=="coderabbitai") | select((.submitted_at // "") > $started)] | last // null' <<<"$CR_REVIEWS")
+  '[.[] | select((.user.login // "") | test("coderabbit"; "i")) | select((.submitted_at // "") > $started)] | last // null' <<<"$CR_REVIEWS")
 
 # "Other reviewers" = any issue-comment or pulls/review since spawn that is NOT
 # from the PR author and NOT from CodeRabbit (CR has its own bucket above).
@@ -104,16 +125,14 @@ CR_REVIEW=$(jq --arg started "$STARTED" \
 REVIEWERS=$(jq --arg started "$STARTED" --arg author "$PR_AUTHOR" --arg rid "$RUN_ID" '
   [ .[]
     | select((.user.login // "") != $author)
-    | select((.user.login // "") != "coderabbitai[bot]")
-    | select((.user.login // "") != "coderabbitai")
+    | select((.user.login // "") | test("coderabbit"; "i") | not)
     | select((.created_at // "") > $started)
     | select((.body // "") | contains("run-id=" + $rid) | not)
   ]' <<<"$COMMENTS")
 REVIEWER_REVIEWS=$(jq --arg started "$STARTED" --arg author "$PR_AUTHOR" '
   [ .[]
     | select((.user.login // "") != $author)
-    | select((.user.login // "") != "coderabbitai[bot]")
-    | select((.user.login // "") != "coderabbitai")
+    | select((.user.login // "") | test("coderabbit"; "i") | not)
     | select((.submitted_at // "") > $started)
   ]' <<<"$CR_REVIEWS")
 # Merge issue-comment and formal-review hits into one reviewers array.
