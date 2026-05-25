@@ -2,3 +2,4 @@
 dev/
 .latest-status.md
 .linear/
+.claude/preflight.yml
