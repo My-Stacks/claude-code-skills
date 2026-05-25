@@ -104,6 +104,7 @@ def apply_brand_defaults(fm, brand_override=None):
         3. Frontmatter `brand:` field
         4. No brand applied
     """
+    fm = dict(fm)  # don't mutate the caller's dict
     brand_name = brand_override or fm.get("brand")
     if not brand_name:
         return fm
@@ -293,7 +294,22 @@ def build_html(fm, body_md, template_name=None):
 
     template_name = template_name or fm.get("template") or DEFAULT_TEMPLATE
     template = load_template(template_name)
-    return template.render(body=body_html, **fm)
+
+    # Build the context as a dict to avoid two crash modes:
+    #   - non-string YAML keys (e.g. `1: value`) blow up `**fm`.
+    #   - a frontmatter `body:` collides with the rendered-body kwarg.
+    context = dict(fm)
+    for key in context:
+        if not isinstance(key, str):
+            raise ValueError(
+                f"Frontmatter keys must be strings; got {type(key).__name__}: {key!r}"
+            )
+    if "body" in context:
+        raise ValueError(
+            "Frontmatter key 'body' is reserved (used for the rendered document body)"
+        )
+    context["body"] = body_html
+    return template.render(context)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -317,30 +333,49 @@ def render_pdf(html_path, pdf_path, footer_text):
     # including one already running an event loop. Path.as_uri() handles
     # spaces / non-ASCII in the path that a raw "file://" + str would break.
     from playwright.sync_api import sync_playwright
+
+    # Restrict subresources to file:// URIs inside the same temp dir as the
+    # rendered HTML — blocks BOTH remote loads (SSRF / exfiltration) AND
+    # arbitrary local file embeds like `<iframe src="file:///etc/passwd">`
+    # that a plain `file:` allowlist would let through. Resolve symlinks on
+    # both sides so a /var → /private/var (macOS) mismatch doesn't abort the
+    # navigation itself.
+    resolved_html = Path(html_path).resolve()
+    allowed_root = resolved_html.parent.as_uri()
+    if not allowed_root.endswith("/"):
+        allowed_root += "/"
+
     with sync_playwright() as p:
         browser = p.chromium.launch()
         try:
-            page = browser.new_page()
-            # The doc is local; block every non-file request so raw HTML in
-            # the markdown can't exfiltrate via remote subresources (SSRF) or
-            # pull in external content during the render.
+            # JS off: the template is static; disabling JS limits blast
+            # radius if raw HTML in the markdown body contains <script>.
+            context = browser.new_context(java_script_enabled=False)
+            page = context.new_page()
             page.route(
                 "**/*",
                 lambda r: r.continue_()
-                if r.request.url.startswith("file:")
+                if r.request.url.startswith(allowed_root)
                 else r.abort(),
             )
-            page.goto(Path(html_path).as_uri(), wait_until="load")
-            page.pdf(
-                path=str(pdf_path),
-                format="Letter",
-                print_background=True,
-                display_header_footer=True,
-                header_template="<div></div>",
-                footer_template=build_footer(footer_text),
-                margin={"top": "0.5in", "bottom": "0.5in", "left": "0in", "right": "0in"},
-                prefer_css_page_size=True,
-            )
+            try:
+                page.goto(resolved_html.as_uri(), wait_until="load", timeout=15_000)
+                page.pdf(
+                    path=str(pdf_path),
+                    format="Letter",
+                    print_background=True,
+                    display_header_footer=True,
+                    header_template="<div></div>",
+                    footer_template=build_footer(footer_text),
+                    margin={"top": "0.5in", "bottom": "0.5in", "left": "0in", "right": "0in"},
+                    prefer_css_page_size=True,
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"PDF render failed for {html_path}: {exc}"
+                ) from exc
+            finally:
+                context.close()
         finally:
             browser.close()
 
@@ -362,6 +397,8 @@ def resolve_output_path(markdown_path, fm, output_path):
         safe = Path(str(fm_name)).name  # strips dirs / absolute / ~ prefix
         if not safe or safe in (".", ".."):
             raise ValueError(f"Invalid frontmatter filename: {fm_name!r}")
+        if not safe.lower().endswith(".pdf"):
+            safe += ".pdf"
         return (markdown_path.parent / safe).resolve()
     title = derived_title(fm)
     if title:

@@ -9,7 +9,7 @@ Reusable components for [Claude Code](https://docs.anthropic.com/en/docs/claude-
 | [linear](./.claude/skills/linear/) | Skill | 0.5.1 | Linear project management with session continuity. Buffered writes, board management, ticket creation, structured handoffs persisted to Linear. Auto-maintains `.latest-status.md`. |
 | [vault-backup](./.claude/skills/vault-backup/) | Skill | 1.0 | Save research, project outputs, and knowledge artifacts from any Claude Code workspace into a shared Obsidian knowledge vault. |
 | [ai-router](./.claude/skills/ai-router/) | Skill | 1.3 | Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Headless-safe with `--post-to-pr` and `/ai-router shadow-review` (background review + PR-comment polling). Requires `curl`, `jq`, `python3`, and (for PR posting) `gh`. |
-| [create-client-pdf](./.claude/skills/create-client-pdf/) | Skill | 1.2 | Convert a Markdown file with YAML frontmatter into a client-presentable PDF, branded for Stacklab or Stacklist. Requires Python + Playwright (see `INSTALL.md`). |
+| [create-client-pdf](./.claude/skills/create-client-pdf/) | Skill | 1.2.1 | Convert a Markdown file with YAML frontmatter into a client-presentable PDF, branded for Stacklab or Stacklist. Requires Python + Playwright (see `INSTALL.md`). |
 | [pull-and-sync](./.claude/commands/pull-and-sync.md) | Command | 1.0 | Sync working branch with latest from default branch using merge --no-ff. |
 | [commit](./.claude/commands/commit.md) | Command | 1.0 | Smart commit with conventional format, staged diffs, and hook compliance. |
 | [push](./.claude/commands/push.md) | Command | 1.0 | Push with safety checks, branch protection, and tracking setup. |

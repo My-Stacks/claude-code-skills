@@ -1,6 +1,6 @@
 ---
 name: create-client-pdf
-version: "1.2"
+version: "1.2.1"
 description: "Convert a Markdown file with YAML frontmatter into a client-presentable PDF, branded for either Stacklab or Stacklist. Letter-sized with a cream cover page, editorial serif headings, an optional dark bottom-line closer, and a brand-aware footer."
 trigger: "when the user asks to create a client PDF, Stacklab PDF, or Stacklist PDF; turn markdown into a client deliverable; produce a client-facing POV, competitive landscape, strategy memo, or briefing; or points at a markdown file destined for a client meeting"
 ---
@@ -183,7 +183,7 @@ To extend what a brand controls (e.g. brand-specific accent color, logo path):
 
 ## Files
 
-```
+```text
 create-client-pdf/
 ├── SKILL.md              this file
 ├── README.md             usage notes + design tokens

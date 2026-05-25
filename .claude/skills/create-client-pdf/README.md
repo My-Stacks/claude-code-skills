@@ -26,7 +26,7 @@ See `SKILL.md` for the full markdown authoring contract and `INSTALL.md` for set
 
 ## Files
 
-```
+```text
 create-client-pdf/
 ├── SKILL.md              skill metadata + authoring contract
 ├── README.md             this file
@@ -55,7 +55,7 @@ YAML files. Selecting a brand fills in `prepared_by`, the cover eyebrow, and the
 label: "Stacklab"
 ```
 
-The brand dict is passed into the Jinja template, so future fields (logo path, brand-specific accent color, alt typography) can be added to the YAML and consumed in the template without touching build.py.
+Today only the `label` is consumed (to populate `prepared_by`, the eyebrow, and the footer). Future fields (logo path, brand-specific accent color, alt typography) can be added to the YAML; exposing the full brand dict to the template is a planned extension.
 
 ### Templates (`templates/`)
 

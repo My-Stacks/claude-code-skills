@@ -114,7 +114,12 @@ def test_frontmatter_filename_cannot_escape_source_dir(evil, tmp_path):
     out = resolve_output_path(md.resolve(), {"filename": evil}, None)
     # Always lands inside the markdown's own directory, basename only.
     assert out.parent == md.resolve().parent
-    assert out.name == Path(evil).name
+    # Basename is preserved (possibly with a `.pdf` suffix appended) — never
+    # any directory parts from `evil`.
+    expected_base = Path(evil).name
+    if not expected_base.lower().endswith(".pdf"):
+        expected_base += ".pdf"
+    assert out.name == expected_base
     assert ".." not in out.parts
 
 
@@ -184,3 +189,38 @@ def test_admonition_sentinel_survives_literal_collision_text():
     )
     assert "%%ADM-0%%" in html              # literal text preserved
     assert 'class="adm-callout"' in html    # real admonition still rendered
+
+
+def test_build_html_rejects_reserved_body_key_in_frontmatter():
+    # `body` is reserved for the rendered HTML; a frontmatter `body:` would
+    # otherwise crash template.render with "got multiple values for keyword
+    # argument 'body'". Fail loudly with a clear message instead.
+    with pytest.raises(ValueError, match="reserved"):
+        build_html({"body": "anything"}, "# T\n")
+
+
+def test_build_html_rejects_non_string_frontmatter_keys():
+    # Non-string YAML keys (e.g. `1: value`) would otherwise crash
+    # template.render with "keywords must be strings".
+    with pytest.raises(ValueError, match="must be strings"):
+        build_html({1: "value"}, "# T\n")
+
+
+def test_apply_brand_defaults_does_not_mutate_caller_dict():
+    original = {"brand": "stacklab"}
+    apply_brand_defaults(original)
+    assert original == {"brand": "stacklab"}   # caller's dict unchanged
+
+
+def test_frontmatter_filename_gets_pdf_suffix(tmp_path):
+    md = tmp_path / "doc.md"
+    md.write_text("# t\n")
+    # No suffix → .pdf appended.
+    out = resolve_output_path(md.resolve(), {"filename": "report"}, None)
+    assert out.name == "report.pdf"
+    # Non-.pdf suffix → .pdf appended.
+    out = resolve_output_path(md.resolve(), {"filename": "report.txt"}, None)
+    assert out.name == "report.txt.pdf"
+    # Existing .pdf (case-insensitive) → left alone.
+    out = resolve_output_path(md.resolve(), {"filename": "report.PDF"}, None)
+    assert out.name == "report.PDF"
