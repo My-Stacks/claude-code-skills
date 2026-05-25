@@ -59,7 +59,7 @@ Every output competes for context window space. These targets are hard limits, n
 
 ## Status File
 
-When the linear skill is active, it maintains `.latest-status.md` at project root — the same file used by the handoff skill. This enables cross-session resume without invoking `/handoff` separately.
+When the linear skill is active, it maintains `.latest-status.md` at project root. This enables cross-session resume.
 
 **On plan start** (entering execution after plan approval):
 - Light update: date, branch, status → `in_progress`, goal from plan.
@@ -67,7 +67,7 @@ When the linear skill is active, it maintains `.latest-status.md` at project roo
 **On plan completion:**
 - Full update with Linear section populated from session buffer.
 
-**Template** (100-300 words, same as handoff skill):
+**Template** (100-300 words):
 
 ```markdown
 ---

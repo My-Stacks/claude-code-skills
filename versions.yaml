@@ -1,6 +1,5 @@
 # versions.yaml
 linear: "0.5.1"
-handoff: "3.0.1"
 commit: "1.0"
 push: "1.0"
 commit-push-pr: "1.0"
