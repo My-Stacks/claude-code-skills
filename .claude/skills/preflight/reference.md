@@ -15,10 +15,13 @@ Step 4 brings active branches up to date **without ever leaving the current bran
 **Non-current branches — fast-forward the ref in place via a fetch refspec:**
 
 ```bash
-git fetch --no-tags origin 'refs/heads/main:refs/heads/main' 'refs/heads/fix/login:refs/heads/fix/login'
+# build each fully-qualified refspec as a SEPARATE argument — never one interpolated string:
+refspecs=()
+for b in "${active_noncurrent[@]}"; do refspecs+=("refs/heads/$b:refs/heads/$b"); done
+git fetch --no-tags origin "${refspecs[@]}"
 ```
 
-Use **fully-qualified, single-quoted** refspecs (`refs/heads/x:refs/heads/x`) so odd branch names can't break the shell and there's no ambiguity with tags. `--no-tags` keeps local tags from being moved (the charter forbids renaming a tag). Build the list **only** from `git for-each-ref` output, **excluding the current branch** (fetching into the checked-out branch is a *fatal* error that aborts the whole batch — `fatal: refusing to fetch into branch ... checked out`) and **excluding worktree-pinned branches** (same error). Never invent `dev:dev` if no local `dev` exists — that *creates* a branch, which the charter forbids.
+Pass refspecs as **separate quoted arguments** (`refs/heads/x:refs/heads/x`), fully-qualified so there's no tag ambiguity. Quoting alone isn't enough — a branch name can contain `'`, `;`, `|`, or `$`, so treat names as **data**, never splice them into a command string; if a name has characters that can't be passed cleanly, **skip and flag** it. `--no-tags` keeps local tags from being moved (the charter forbids renaming a tag). Build the list **only** from `git for-each-ref` output, **excluding the current branch** (fetching into the checked-out branch is a *fatal* error that aborts the whole batch — `fatal: refusing to fetch into branch ... checked out`) and **excluding worktree-pinned branches** (same error). Never invent `dev:dev` if no local `dev` exists — that *creates* a branch, which the charter forbids.
 
 The critical safety property: **git refuses to update a local branch ref unless the move is a clean fast-forward.** A rejected ref looks like:
 
@@ -36,7 +39,7 @@ Why not check out each branch and `git pull`? Checkout mutates the working tree,
 git merge --ff-only @{u}
 ```
 
-`@{u}` is the current branch's upstream; `merge --ff-only` aborts (changing nothing) on divergence and — unlike `git pull` — isn't swayed by `pull.rebase` config. Untracked-only is usually fine, but an untracked file that collides with an incoming tracked path makes the merge abort. So treat **any** non-zero exit as "skipped: could not fast-forward," not as synced.
+`@{u}` is the current branch's upstream; `merge --ff-only` aborts (changing nothing) on divergence and — unlike `git pull` — isn't swayed by `pull.rebase` config. Don't pre-screen for untracked-file collisions; just attempt the merge and treat **any** non-zero exit (divergence, or an untracked file colliding with an incoming tracked path) as "skipped: could not fast-forward," not as synced.
 
 **Reading outcomes — never lie about what happened:**
 - Ref accepted / merge succeeded → report `branch: oldSHA → newSHA` under SYNCED.
@@ -50,7 +53,8 @@ git merge --ff-only @{u}
 Kyle's rule: pull active branches (main, dev, live chore/fix/feature); flag everything else. Operationalized, "active" needs every condition true. Gather once (after `git fetch --prune --no-tags origin`) with:
 
 ```bash
-git for-each-ref --format='%(refname:short)|%(committerdate:unix)|%(upstream:short)|%(upstream:track)' refs/heads
+# NUL field/record separators so names with | or newlines parse safely:
+git for-each-ref --format='%(refname:short)%00%(committerdate:unix)%00%(upstream:short)%00%(upstream:track)%00%00' refs/heads
 git branch --merged "origin/<default>"        # ancestry-based merged detection
 git worktree list --porcelain                  # machine-readable worktree-pinned detection
 # if gh available + authed, also catch squash-merges:
@@ -68,11 +72,11 @@ gh pr list --state merged --base "<default>" --limit 200 --json headRefName
 | Upstream `[gone]` | **FLAG** | Remote branch deleted — merged or abandoned; cleanup is Kyle's call |
 | Merged into default (ancestry or merged-PR) | **FLAG** | Work already landed; candidate for deletion, not syncing |
 | Stale (last commit older than `active_window_days`) | **FLAG** | Dormant; pulling it adds noise, not value |
-| Eligible but name not in `active_prefixes` | **ASK** | All other criteria met; confirm with Kyle before pulling rather than silently dropping or silently pulling |
-| Worktree-pinned (in `git worktree list`) | **SKIP** | Checked out elsewhere; refspec update errors |
+| Eligible but name not in `active_prefixes` | **FLAG** | All other criteria met, but a single-pass briefing can't pause to ask mid-run — surface it and offer to add the prefix to config for next time; don't pull this run |
+| Worktree-pinned (in `git worktree list`, path ≠ this worktree) | **SKIP** | Checked out elsewhere; refspec update errors |
 | Detached HEAD | **SKIP all sync** | No branch to sync; re-attach first |
 
-`active_window_days` defaults to 14 (~two-week window); note this is wider than the 7-day PR-backlog threshold — they measure different things. **When a branch is ambiguous, FLAG (or ASK), don't PULL** — the cost of flagging is a line of output; the cost of a wrong pull is eroded trust.
+`active_window_days` defaults to 14 (~two-week window); note this is wider than the 7-day PR-backlog threshold — they measure different things. A name is "in `active_prefixes`" only if it begins with `<prefix>/` (the `/` boundary is required — `feature-x` does not match `feat`). **When a branch is ambiguous, FLAG, don't PULL** — the cost of flagging is a line of output; the cost of a wrong pull is eroded trust.
 
 Two merged-detection passes, because each misses cases the other catches: `git branch --merged origin/<default>` finds normally-merged branches via ancestry but **misses squash-merges** (their commits never appear verbatim on default); `gh pr list --state merged --base <default>` catches squash-merges that went through a PR. A branch squash-merged *locally* with no PR is detectable by neither — a known limitation; when in doubt, flag.
 
@@ -84,7 +88,7 @@ The per-repo config `.claude/preflight.yml` holds answers (default branch, namin
 
 **Check tracked state first.** Before anything else, `git ls-files --error-unmatch .claude/preflight.yml`. If it's already tracked, adding it to `.gitignore` will **not** untrack it — gitignore only affects untracked files. Flag this (`git rm --cached .claude/preflight.yml` removes it from tracking while keeping the local file) and stop; it's Kyle's call, never run silently.
 
-**Verify the repo's own `.gitignore` carries the rule** with `grep -qxF '.claude/preflight.yml' .gitignore` — not `git check-ignore`. `check-ignore` returns success for matches from the *global* excludes or `.git/info/exclude` too, which doesn't satisfy "the committed repo `.gitignore` protects this." If the line is already present, you're done — no duplicate, no empty commit. Steady-state runs stay write-free.
+**Verify the repo's own `.gitignore` carries the rule** with `[ -f .gitignore ] && grep -qxF '.claude/preflight.yml' .gitignore` — guard the `[ -f ]` first so a bare `grep` on a missing file doesn't error, and use this rather than `git check-ignore`. `check-ignore` returns success for matches from the *global* excludes or `.git/info/exclude` too, which doesn't satisfy "the committed repo `.gitignore` protects this." If the line is already present, you're done — no duplicate, no empty commit. Steady-state runs stay write-free.
 
 **Order of operations.** Add the ignore rule *before* creating the config file, so git never sees the config as an untracked, stageable file a careless `git add .` could sweep up.
 
@@ -272,7 +276,7 @@ Detached state: HEAD → commit directly, no branch in between. You make commits
 
 **Why it matters:** commits made in detached state become unreachable when you switch branches. Unreachable commits are eventually garbage-collected (typically 30-90 days, depending on git's gc settings — don't rely on the window).
 
-**How to recover:**
+**How to recover** (these are commands for **Kyle to run** — branch switch/create are charter-forbidden for the skill; show them, don't execute them):
 - If you haven't committed anything yet: just `git switch <branch>` to attach to a normal branch.
 - If you've made commits and want to keep them: `git switch -c <new-branch-name>` to create a branch at your current position. The commits become safe.
 
@@ -329,8 +333,10 @@ Kyle uses git worktrees for his multi-agent setup (Beacon, Blueprint, Folio, Sco
 - **Detect worktree-pinned branches from machine-readable output**, not by parsing `git branch -vv`. The `+` marker is real but column/spacing parsing is fragile; use:
 
   ```bash
-  git worktree list --porcelain   # 'branch refs/heads/<name>' lines = pinned, excluding this worktree
+  git worktree list --porcelain   # records: 'worktree <path>' then 'branch refs/heads/<name>'
   ```
+
+  `--porcelain` emits a record for **every** worktree, including the one preflight is running in. A branch is pinned *elsewhere* only when its `branch` line belongs to a `worktree <path>` that is **not** this run's `git rev-parse --show-toplevel` (Step 1). Don't treat every `branch` line as pinned — that would wrongly mark the current branch as pinned and skip its own sync.
 
   For a quick human glance, `git branch -vv` shows the pinned ones with a `+`:
 

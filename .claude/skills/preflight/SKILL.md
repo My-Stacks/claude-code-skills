@@ -1,6 +1,6 @@
 ---
 name: preflight
-version: "4.1"
+version: "4.2"
 description: >-
   Pre-session safe-sync briefing for git repos. Brings the repo up to date
   before work begins — fast-forwards active branches to origin, flags stale
@@ -45,7 +45,8 @@ This is the load-bearing contract. Everything below obeys it.
 - Commit anything other than the `.gitignore` rule. Never `git add -A`/`git add .`; never commit the config file.
 - Push Kyle's commits.
 - Pull or modify a **stale, diverged, ahead-only, or no-upstream** branch, or any branch whose upstream is not `origin/<same-name>` (flag only).
-- Touch a **dirty working tree** (uncommitted tracked changes) — skip the write and flag instead.
+- Fast-forward the **current** branch, or commit the `.gitignore` rule, while the tree is **tracked-dirty** — skip and flag. (Fetching remote-tracking refs and fast-forwarding *non-current* branches don't touch the working tree, so those stay allowed; see Step 2 for the exact rule.)
+- Interpolate a branch name into a shell command string. Branch names are **data** — pass them as separate quoted arguments, never concatenated into a command (a name can contain `'`, `|`, `;`, `$`).
 
 If a situation isn't clearly inside "MAY," it's a recommendation, not an action.
 
@@ -71,7 +72,13 @@ active_window_days: 14         # branches with commits newer than this are "acti
 active_prefixes: [feat, feature, fix, chore]  # branch prefixes eligible for auto-sync
 ```
 
-`active_window_days` defaults to 14 (a ~two-week window). `main` and `dev_branch` are **always** treated as active regardless of age. If the remote default differs from `default_branch`, trust the remote: resolve it with `git symbolic-ref -q refs/remotes/origin/HEAD`.
+`active_window_days` defaults to 14 (a ~two-week window). `main` and `dev_branch` are **always** treated as active regardless of age.
+
+**Resolving the real default branch** (don't blindly trust the config — the remote is authoritative): try in order, stop at the first that resolves to an existing `origin/<name>`:
+1. `git symbolic-ref -q --short refs/remotes/origin/HEAD` (strip the `origin/` prefix),
+2. the configured `default_branch` if `origin/<default_branch>` exists,
+3. `main`, then `master`, then `develop`.
+If none resolve, skip default-based merged detection and report "remote default unknown."
 
 ## The workflow
 
@@ -81,16 +88,17 @@ Run these steps in order. Writes happen only where the charter allows, only afte
 
 ```bash
 git rev-parse --is-inside-work-tree
-git rev-parse --show-toplevel
+git rev-parse --show-toplevel          # remember this — "this worktree" for Step 4
 git remote -v
-git branch --show-current      # empty output => detached HEAD
+git symbolic-ref -q HEAD               # non-zero exit => detached HEAD (works on all git)
+git branch --show-current              # branch name (empty => detached); needs git ≥ 2.22
 ```
 
-Report which repo, remote, branch, attached or detached. This step gates **all later writes**:
+Report which repo, remote, branch, attached or detached. Use `symbolic-ref` for the detached check (`git branch --show-current` predates git 2.22 and is silently absent on old git, which would make every state look detached). This step gates **all later writes**:
 
 - **Not in a repo** (`--is-inside-work-tree` non-zero): stop. Tell Kyle to cd into a repo and re-run. **No writes.**
 - **No `origin` remote** (`git remote | grep -qx origin` fails): run read-only only. Skip Step 3's commit and all of Step 4's syncing; report "no `origin` — nothing to sync against."
-- **Detached HEAD** (`git branch --show-current` empty): explain in one sentence ("you're viewing a specific commit, not attached to any branch — work here won't automatically belong anywhere"), recommend re-attaching. **Do not switch, do not sync, do not run Step 3 writes.**
+- **Detached HEAD** (`git symbolic-ref -q HEAD` non-zero): explain in one sentence ("you're viewing a specific commit, not attached to any branch — work here won't automatically belong anywhere"), recommend re-attaching. **Do not switch, do not sync, do not run Step 3 writes.**
 - **Unborn/empty repo** (no commits yet): report it; skip Step 3 commit and Step 4 sync.
 
 ### Step 2: Working tree state
@@ -102,7 +110,7 @@ git stash list --format='%gd|%cr|%s'
 
 Report modified / staged / untracked / stashes, one line each. **Define cleanliness once and reuse it:**
 
-- **tracked-dirty** = any `git status --porcelain` line NOT beginning with `??` (staged or modified tracked files). This blocks *all* writes in Steps 3 and 4.
+- **tracked-dirty** = any `git status --porcelain` line NOT beginning with `??` (staged or modified tracked files). This blocks exactly the two writes that touch the working tree or Kyle's index: the **current-branch fast-forward** (Step 4) and the **`.gitignore` commit** (Step 3). It does **not** block `git fetch` (remote-tracking refs only) or fast-forwarding *non-current* branches (their refs move; your working tree doesn't) or creating the untracked config file — none of those touch the working tree.
 - **untracked-only** = output is empty or every line begins with `??`. Writes may proceed (but see the untracked-collision note in Step 4).
 
 Also: flag untracked files matching "shouldn't be here" patterns (`.env`, zero-byte odd names, accidental redirects) — load `reference.md → "Files that look out of place"`. Stashes older than 8 weeks: mention as a future cleanup pass, not a blocker.
@@ -112,19 +120,20 @@ Also: flag untracked files matching "shouldn't be here" patterns (`.env`, zero-b
 The config file must never be committed; the `.gitignore` rule that protects it should be. **Order matters** — check tracked state first, then ignore state, then write.
 
 1. **Already tracked?** `git ls-files --error-unmatch .claude/preflight.yml` (exit 0 = tracked). If tracked, gitignore won't untrack it — **flag it** (`git rm --cached .claude/preflight.yml` is Kyle's call) and skip the rest of Step 3. Don't silently remove.
-2. **Repo `.gitignore` already has the rule?** `grep -qxF '.claude/preflight.yml' .gitignore` (file may not exist). If present, it's protected — skip to step 5 below. (Don't rely on `git check-ignore` alone: it also matches global excludes / `.git/info/exclude`, which doesn't satisfy "the repo's own `.gitignore` carries the rule.")
-3. **tracked-dirty? (Step 2)** Then **do not edit, stage, or commit anything.** Tell Kyle: add `.claude/preflight.yml` to `.gitignore` and commit it when his tree is clean (give the two commands). Note the config stays unignored until then — avoid `git add .`. Skip to step 5.
+2. **Repo `.gitignore` already has the rule?** Guard against a missing file (bare `grep` on an absent path errors): `[ -f .gitignore ] && grep -qxF '.claude/preflight.yml' .gitignore`. If present, it's protected — skip to step 5 below. (Don't rely on `git check-ignore` alone: it also matches global excludes / `.git/info/exclude`, which doesn't satisfy "the repo's own `.gitignore` carries the rule.") Also: if `.gitignore` exists but is **untracked** with unrelated content (`git ls-files --error-unmatch .gitignore` non-zero), don't auto-commit it wholesale — flag it for Kyle.
+3. **tracked-dirty? (Step 2)** Then **do not edit, stage, or commit `.gitignore`.** Tell Kyle: add `.claude/preflight.yml` to `.gitignore` and commit it when his tree is clean (give the two commands). You **may** still create the config file in step 5 (it's untracked and never staged) — just warn it stays unignored until Kyle commits the rule, so avoid `git add .`. Skip to step 5.
 4. **Clean tree:** add the rule and commit only it:
 
    ```bash
    # add the line (create .gitignore if absent) via Edit/Write, then:
    git add .gitignore
-   test "$(git diff --cached --name-only)" = ".gitignore"   # MUST hold; abort if not
+   test "$(git diff --cached --name-only)" = ".gitignore" \
+     || { echo "preflight: unexpected staged files — aborting gitignore commit"; exit 1; }
    git commit -m "chore: ignore .claude/preflight.yml" -- .gitignore
    ```
 
-   The `test` is the gate: it confirms `.gitignore` is the *only* staged path before committing. Never amend (a new commit, never `--amend`); never push. If `git commit` fails (hooks, signing), report it — never retry with `--no-verify`.
-5. **Create the config** if missing: ask the config questions (explain each; for `branch_naming` save Kyle's plain-language answer verbatim), then write `.claude/preflight.yml`. Never `git add` it.
+   The `test` is the gate, chained with `||` so a non-match **stops** rather than falling through to `git commit`: it confirms `.gitignore` is the *only* staged path. Never amend (a new commit, never `--amend`); never push. If `git commit` fails (hooks, signing), report it — never retry with `--no-verify`.
+5. **Create the config** if missing: ensure the directory exists (`mkdir -p .claude`), ask the config questions (explain each; for `branch_naming` save Kyle's plain-language answer verbatim), then write `.claude/preflight.yml`. Never `git add` it.
 
 Load `reference.md → "First-run config & gitignore"` for the reasoning and edge cases.
 
@@ -136,10 +145,13 @@ Classify every local branch, fast-forward only the *active* ones, flag everythin
 
 ```bash
 git fetch --prune --no-tags origin
-git for-each-ref --format='%(refname:short)|%(committerdate:unix)|%(upstream:short)|%(upstream:track)' refs/heads
+# NUL (%00) field + record separators so branch names containing | or newlines can't break parsing:
+git for-each-ref --format='%(refname:short)%00%(committerdate:unix)%00%(upstream:short)%00%(upstream:track)%00%00' refs/heads
 git branch --merged "origin/<default>"          # ancestry-based merged detection
 git worktree list --porcelain                    # machine-readable worktree-pinned detection
 ```
+
+For worktree-pinned detection, parse `git worktree list --porcelain` records: a branch is pinned **elsewhere** only when its `branch refs/heads/<name>` line belongs to a `worktree <path>` whose path is **not** this run's `git rev-parse --show-toplevel` (from Step 1). Don't blindly treat every `branch` line as pinned — that would wrongly skip the current branch's own sync.
 
 If `gh` is available and authenticated (`command -v gh && gh auth status`), also catch squash-merges:
 
@@ -150,48 +162,53 @@ gh pr list --state merged --base "<default>" --limit 200 --json headRefName
 If `gh` is missing/unauthenticated: note "PR/squash data unavailable," rely on the ancestry check above, and treat uncertain branches as **flag-only** (never pull a maybe-merged branch).
 
 **ACTIVE (eligible to fast-forward)** — a branch qualifies only if **all** hold:
-- upstream is exactly `origin/<same-branch-name>` (not a fork/other remote, not a renamed upstream), **and**
-- behind-only (`[behind N]`, N>0; not diverged, not ahead, not in-sync), **and**
-- is `default_branch` / `dev_branch`, **or** its name matches one of `active_prefixes` (`^(feat|feature|fix|chore)/` by default), **and**
+- upstream is exactly `origin/<same-branch-name>` (`%(upstream:short)` equals `origin/` + the branch's own short name — not a fork/other remote, not a renamed upstream), **and**
+- behind-only (`%(upstream:track)` is `[behind N]`, N>0; not diverged, not ahead, not in-sync), **and**
+- is `default_branch` / `dev_branch`, **or** its name begins with one of the configured `active_prefixes` followed by `/` — build the test from config, e.g. `^(feat|feature|fix|chore)/` for the defaults. A bare `feature-x` does **not** match the prefix `feat` (the `/` boundary is required), **and**
 - not merged into the default branch (ancestry or merged-PR), **and**
 - recent (commit within `active_window_days`) — `main`/`dev` are always recent enough.
 
-**In-sync** branches (`[behind 0]` / no track marker) need no action — report as "current," not flagged.
+**In-sync** = upstream is present **and** `%(upstream:track)` is empty → no action, report as "current," not flagged. (Don't confuse with **no-upstream**, where `%(upstream:short)` itself is empty — that's flag-only.)
 
-Everything else is **FLAG-ONLY**: diverged, ahead-only (unpushed), no-upstream, non-origin upstream, `[gone]` upstream (merged/abandoned), merged-into-default, stale (beyond window), unrecognized-name-but-otherwise-eligible (ask before pulling), worktree-pinned, detached HEAD.
+Everything else is **FLAG-ONLY**: diverged, ahead-only (unpushed), no-upstream, non-origin upstream, `[gone]` upstream (merged/abandoned), merged-into-default, stale (beyond window), worktree-pinned, detached HEAD. A branch that meets every criterion **except** the name prefix is also **FLAG-ONLY** this run — surface it and offer to add its prefix to `active_prefixes` for next time; do not pull it now (a single-pass briefing can't pause to ask mid-run).
 
 **Fast-forward mechanics (ff-only, never merge/rebase):**
 - **Non-current active branches** — update the ref in place *without checkout*, batched, fully-qualified and quoted, **excluding the current branch and any worktree-pinned branch**:
 
   ```bash
-  git fetch --no-tags origin 'refs/heads/main:refs/heads/main' 'refs/heads/fix/login:refs/heads/fix/login'
+  # build each refspec as a SEPARATE argument; never concatenate names into one string:
+  refspecs=()
+  for b in "${active_noncurrent[@]}"; do refspecs+=("refs/heads/$b:refs/heads/$b"); done
+  git fetch --no-tags origin "${refspecs[@]}"
   ```
 
-  Git **refuses** any refspec that isn't a clean fast-forward and leaves that ref unchanged. **Never** prefix a refspec with `+` or pass `--force`. Only include branches returned by `git for-each-ref` (never invent `dev:dev` if no local `dev` exists — that would *create* a branch). A batched fetch is **not** atomic: one ref can update while another is rejected — parse per-ref, don't assume all-or-nothing.
+  Pass refspecs as **separate quoted arguments** (array elements), never interpolated into a command string — a branch name can contain `'`, `;`, or `$`. If a name contains shell-special characters that can't be passed cleanly, **skip and flag it** rather than risk a malformed command. Git **refuses** any refspec that isn't a clean fast-forward and leaves that ref unchanged (this is also what protects against a force-pushed remote — never "fix" it by adding `+` or `--force`). Only include branches returned by `git for-each-ref` (never invent `dev:dev` if no local `dev` exists — that would *create* a branch). A batched fetch is **not** atomic: one ref can update while another is rejected — parse per-ref, don't assume all-or-nothing.
 - **Current branch** — can't be refspec-updated. Only if its upstream is `origin/<current>` **and** the tree is not tracked-dirty (Step 2):
 
   ```bash
   git merge --ff-only @{u}
   ```
 
-  (`@{u}` is the current branch's upstream. `merge --ff-only` aborts cleanly on divergence and isn't affected by `pull.rebase` config.) Untracked-only is usually fine, but an untracked file colliding with an incoming tracked path will abort — treat *any* non-zero exit as "skipped: could not fast-forward," not as synced.
+  (`@{u}` is the current branch's upstream. `merge --ff-only` aborts cleanly on divergence and isn't affected by `pull.rebase` config.) Don't pre-screen for untracked-file collisions — just **attempt the merge** and treat *any* non-zero exit (divergence, or an untracked file colliding with an incoming tracked path) as "skipped: could not fast-forward," never as synced.
 
 **Narrate before, verify after.** Before: "main is 3 behind origin — fast-forwarding slides your pointer to match, no merge commit." After, confirm each branch's old→new SHA from the command output (a `! [rejected]` line or non-zero merge = "skipped: diverged," **never** "synced"). Two summaries:
 - **SYNCED:** `branch: oldSHA → newSHA`
 - **FLAGGED:** table of `branch | state | why not pulled | suggested next step`
 
+In the FLAGGED "suggested next step," **never suggest deleting a `protected_branches` branch** (or a worktree-pinned one) even when it reads as merged — suggest investigation or leave it alone.
+
 For diverged default, load `reference.md → "Diverged default branch"` before recommending. Deeper mechanics: `reference.md → "Auto-sync mechanics: refspec ff vs pull"` and `→ "Active vs stale: the classification table"`.
 
 ### Step 5: Open PRs
 
-Gate first: `command -v gh && gh auth status`. If unavailable, note "PR data unavailable (gh not configured)" and skip to Step 6.
+Gate first: `command -v gh && gh auth status`. If unavailable, note "PR data unavailable (gh not configured)" and skip to Step 6. Resolve Kyle's login once (`gh api user --jq .login`) so "Kyle's PRs" is identified by author, not guessed.
 
 ```bash
 gh pr list --state open --json number,title,author,headRefName,baseRefName,isDraft,reviewDecision,updatedAt,labels
 gh pr list --state open --search "review-requested:@me" --json number,title,author,headRefName,updatedAt
 ```
 
-**Kyle's PRs:** awaiting review / changes requested / approved / draft — with number, title, branch, age, and a brief note on whether it affects today's work. **Review-requested PRs:** surfaced by the second query. Files Kyle's about to touch: only if he's said what he's working on.
+**Kyle's PRs:** filter the first query to `author.login == <resolved login>` — awaiting review / changes requested / approved / draft — with number, title, branch, age, and a brief note on whether it affects today's work. **Review-requested PRs:** surfaced by the second query. Files Kyle's about to touch: only if he's said what he's working on.
 
 Don't be prescriptive about *what* to do — surface state and relevance. **Backlog threshold:** 3+ stalled PRs (>1 week, Kyle's action needed) → flag as worth addressing before new work. Load `reference.md → "Managing your PR backlog"` if Kyle asks.
 
@@ -256,7 +273,7 @@ End with one of:
 
 ## Known limitations
 
-These are flagged-not-handled by design — when encountered, report and defer to Kyle rather than improvising: submodule dirtiness, sparse/shallow checkouts, case-only branch-name differences, branches squash-merged locally without a PR (no record to detect), and commit-recency based on the local tip date (a behind-only branch with newer *remote* commits may read as stale near the window edge).
+These are flagged-not-handled by design — when encountered, report and defer to Kyle rather than improvising: submodule dirtiness, sparse/shallow checkouts, case-only branch-name differences, branches squash-merged locally without a PR (no record to detect), commit-recency based on the local tip date (a behind-only branch with newer *remote* commits may read as stale near the window edge), squash-merged branches beyond the `gh pr list --limit 200` cap on very busy repos (may read as not-merged), and `--no-tags` not fully neutralising tag pruning if `fetch.pruneTags`/`remote.origin.pruneTags` is enabled in git config (if so, flag rather than fetch).
 
 ## What this skill does NOT do
 
