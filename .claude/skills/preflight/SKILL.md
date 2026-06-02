@@ -115,12 +115,14 @@ The config file must never be committed; the `.gitignore` rule that protects it 
 2. **Repo `.gitignore` already has the rule?** `grep -qxF '.claude/preflight.yml' .gitignore` (file may not exist). If present, it's protected — skip to step 5 below. (Don't rely on `git check-ignore` alone: it also matches global excludes / `.git/info/exclude`, which doesn't satisfy "the repo's own `.gitignore` carries the rule.")
 3. **tracked-dirty? (Step 2)** Then **do not edit, stage, or commit anything.** Tell Kyle: add `.claude/preflight.yml` to `.gitignore` and commit it when his tree is clean (give the two commands). Note the config stays unignored until then — avoid `git add .`. Skip to step 5.
 4. **Clean tree:** add the rule and commit only it:
+
    ```bash
    # add the line (create .gitignore if absent) via Edit/Write, then:
    git add .gitignore
    test "$(git diff --cached --name-only)" = ".gitignore"   # MUST hold; abort if not
    git commit -m "chore: ignore .claude/preflight.yml" -- .gitignore
    ```
+
    The `test` is the gate: it confirms `.gitignore` is the *only* staged path before committing. Never amend (a new commit, never `--amend`); never push. If `git commit` fails (hooks, signing), report it — never retry with `--no-verify`.
 5. **Create the config** if missing: ask the config questions (explain each; for `branch_naming` save Kyle's plain-language answer verbatim), then write `.claude/preflight.yml`. Never `git add` it.
 
@@ -160,14 +162,18 @@ Everything else is **FLAG-ONLY**: diverged, ahead-only (unpushed), no-upstream, 
 
 **Fast-forward mechanics (ff-only, never merge/rebase):**
 - **Non-current active branches** — update the ref in place *without checkout*, batched, fully-qualified and quoted, **excluding the current branch and any worktree-pinned branch**:
+
   ```bash
   git fetch --no-tags origin 'refs/heads/main:refs/heads/main' 'refs/heads/fix/login:refs/heads/fix/login'
   ```
+
   Git **refuses** any refspec that isn't a clean fast-forward and leaves that ref unchanged. **Never** prefix a refspec with `+` or pass `--force`. Only include branches returned by `git for-each-ref` (never invent `dev:dev` if no local `dev` exists — that would *create* a branch). A batched fetch is **not** atomic: one ref can update while another is rejected — parse per-ref, don't assume all-or-nothing.
 - **Current branch** — can't be refspec-updated. Only if its upstream is `origin/<current>` **and** the tree is not tracked-dirty (Step 2):
+
   ```bash
   git merge --ff-only @{u}
   ```
+
   (`@{u}` is the current branch's upstream. `merge --ff-only` aborts cleanly on divergence and isn't affected by `pull.rebase` config.) Untracked-only is usually fine, but an untracked file colliding with an incoming tracked path will abort — treat *any* non-zero exit as "skipped: could not fast-forward," not as synced.
 
 **Narrate before, verify after.** Before: "main is 3 behind origin — fast-forwarding slides your pointer to match, no merge commit." After, confirm each branch's old→new SHA from the command output (a `! [rejected]` line or non-zero merge = "skipped: diverged," **never** "synced"). Two summaries:

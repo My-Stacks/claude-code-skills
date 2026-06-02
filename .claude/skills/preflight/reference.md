@@ -327,10 +327,13 @@ Kyle uses git worktrees for his multi-agent setup (Beacon, Blueprint, Folio, Sco
 **For preflight:**
 
 - **Detect worktree-pinned branches from machine-readable output**, not by parsing `git branch -vv`. The `+` marker is real but column/spacing parsing is fragile; use:
+
   ```bash
   git worktree list --porcelain   # 'branch refs/heads/<name>' lines = pinned, excluding this worktree
   ```
+
   For a quick human glance, `git branch -vv` shows the pinned ones with a `+`:
+
   ```text
     main                  abc123 [origin/main]
   + feat/beacon-updates   def456 [origin/feat/beacon-updates]
@@ -340,9 +343,11 @@ Kyle uses git worktrees for his multi-agent setup (Beacon, Blueprint, Folio, Sco
 - **Never refspec-sync or recommend deleting a worktree-pinned branch.** It's actively checked out elsewhere — a refspec update errors, and deleting breaks that worktree.
 
 When *recommending* branch cleanup (a suggestion for Kyle to run — the skill never deletes), filter the current and pinned branches out:
+
 ```bash
 git branch --merged <default> | grep -vE '^[*+]'
 ```
+
 The leading `*` (current) and `+` (worktree-pinned) markers both sit at the start of the line, so `^[*+]` drops both. Deletion itself (`git branch -d`) is Kyle's command, never the skill's.
 
 ---
