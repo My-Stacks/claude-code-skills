@@ -8,67 +8,73 @@ The tone of every section is *teaching*, not lecturing. Kyle is a smart adult le
 
 ## Auto-sync mechanics: refspec ff vs pull
 
-Step 3 brings active branches up to date **without ever leaving the current branch or making a merge commit**. Two mechanics, by branch:
+Step 4 brings active branches up to date **without ever leaving the current branch or making a merge commit**. Two mechanics, by branch.
+
+**First, only sync to the real upstream.** A branch is eligible only if its upstream is exactly `origin/<same-name>` (from `%(upstream:short)`). A branch tracking `upstream/foo`, a fork remote, or a differently-named origin branch is **flagged, never synced** — otherwise a "fast-forward" could quietly move it to a *different* ref than the one its status was computed against.
 
 **Non-current branches — fast-forward the ref in place via a fetch refspec:**
 
-```
-git fetch origin main:main dev:dev fix/login:fix/login
+```bash
+git fetch --no-tags origin 'refs/heads/main:refs/heads/main' 'refs/heads/fix/login:refs/heads/fix/login'
 ```
 
-The `origin <src>:<dst>` form says "fetch origin's `main` and move my local `main` to match." The critical safety property: **git refuses to update a local branch ref unless the move is a clean fast-forward.** If the branch has diverged or has local-only commits, you get:
+Use **fully-qualified, single-quoted** refspecs (`refs/heads/x:refs/heads/x`) so odd branch names can't break the shell and there's no ambiguity with tags. `--no-tags` keeps local tags from being moved (the charter forbids renaming a tag). Build the list **only** from `git for-each-ref` output, **excluding the current branch** (fetching into the checked-out branch is a *fatal* error that aborts the whole batch — `fatal: refusing to fetch into branch ... checked out`) and **excluding worktree-pinned branches** (same error). Never invent `dev:dev` if no local `dev` exists — that *creates* a branch, which the charter forbids.
 
-```
+The critical safety property: **git refuses to update a local branch ref unless the move is a clean fast-forward.** A rejected ref looks like:
+
+```text
  ! [rejected]   main -> main (non-fast-forward)
 ```
 
-…and nothing changes. That refusal is the whole safety mechanism. So the rule is absolute: **never prefix the refspec with `+` and never pass `--force`** — that's exactly what would turn a safe no-op into a destructive overwrite of local work. Batch all active non-current branches into one `git fetch` call.
+…and that ref is left unchanged. **Never** prefix a refspec with `+` and never pass `--force` — that's what would turn a safe no-op into a destructive overwrite. A batched fetch is **not atomic**: `main` can fast-forward while `dev` is rejected in the same command, so parse per-ref and verify each branch's old→new SHA — never infer "all synced" from one exit code.
 
-Why not just check out each branch and `git pull`? Because checkout mutates the working tree, fails on uncommitted changes, can trigger conflicts, and is slow across many branches. Refspec ff touches only the ref pointer — the working tree of the current branch never moves.
+Why not check out each branch and `git pull`? Checkout mutates the working tree, fails on uncommitted changes, can conflict, and is slow. Refspec ff touches only the ref pointer.
 
-**Current branch — can't be refspec-updated** (git won't let you fetch into the branch you're on). Use:
+**Current branch — can't be refspec-updated** (git won't fetch into the branch you're on). Only if its upstream is `origin/<current>` and the tree is not tracked-dirty:
 
+```bash
+git merge --ff-only @{u}
 ```
-git pull --ff-only
-```
 
-`--ff-only` aborts (changes nothing) if the pull isn't a clean fast-forward. Gate it on a **clean working tree**: if `git status --porcelain` shows modified or staged *tracked* files, skip and flag — a pull onto dirty tracked files can fail or surprise. Untracked-only files are fine.
+`@{u}` is the current branch's upstream; `merge --ff-only` aborts (changing nothing) on divergence and — unlike `git pull` — isn't swayed by `pull.rebase` config. Untracked-only is usually fine, but an untracked file that collides with an incoming tracked path makes the merge abort. So treat **any** non-zero exit as "skipped: could not fast-forward," not as synced.
 
 **Reading outcomes — never lie about what happened:**
-- Refspec accepted → report `branch: oldSHA → newSHA` under SYNCED.
-- Refspec `! [rejected]` or `git pull --ff-only` "Not possible to fast-forward, aborting" → report under FLAGGED as "skipped: diverged," **never** as synced.
+- Ref accepted / merge succeeded → report `branch: oldSHA → newSHA` under SYNCED.
+- `! [rejected]`, `fatal:`, or `merge --ff-only` abort → report under FLAGGED as "skipped: diverged," **never** as synced.
 - Always parse the actual output/exit code; don't assume success.
-
-**Worktree-pinned branches** (`+` in `git branch -vv`) error if you try to refspec-update them — skip them entirely and flag.
 
 ---
 
 ## Active vs stale: the classification table
 
-Kyle's rule: pull active branches (main, dev, live chore/fix/feature); flag everything else. Operationalized, "active" needs every condition true. Gather once with:
+Kyle's rule: pull active branches (main, dev, live chore/fix/feature); flag everything else. Operationalized, "active" needs every condition true. Gather once (after `git fetch --prune --no-tags origin`) with:
 
-```
+```bash
 git for-each-ref --format='%(refname:short)|%(committerdate:unix)|%(upstream:short)|%(upstream:track)' refs/heads
-gh pr list --state merged --json headRefName
-git branch -vv
+git branch --merged "origin/<default>"        # ancestry-based merged detection
+git worktree list --porcelain                  # machine-readable worktree-pinned detection
+# if gh available + authed, also catch squash-merges:
+gh pr list --state merged --base "<default>" --limit 200 --json headRefName
 ```
 
 | Branch state | Action | Why |
 |---|---|---|
-| `main` / `dev_branch`, behind-only, clean | **PULL** (ff) | Integration branches — always kept current regardless of age |
-| `^(feat\|feature\|fix\|chore)/…`, has upstream, behind-only, not merged, within window | **PULL** (ff) | Live feature work that's simply behind origin |
+| `main` / `dev_branch`, upstream `origin/same`, behind-only | **PULL** (ff) | Integration branches — always kept current regardless of age |
+| Matches `active_prefixes`, upstream `origin/same`, behind-only, not merged, within window | **PULL** (ff) | Live feature work that's simply behind origin |
+| In sync (`[behind 0]` / no track marker) | **none** | Already current — report as "current," not flagged |
 | Diverged (ahead **and** behind) | **FLAG** | Fast-forward impossible; needs Kyle's merge/rebase decision |
 | Ahead-only (unpushed local commits) | **FLAG** | Nothing to pull; Kyle may want to push |
-| No upstream | **FLAG** | Nothing to sync against; never invented |
+| No upstream / upstream not `origin/<same>` | **FLAG** | Nothing safe to sync against; never auto-pull a fork/renamed upstream |
 | Upstream `[gone]` | **FLAG** | Remote branch deleted — merged or abandoned; cleanup is Kyle's call |
-| Merged into default (incl. squash) | **FLAG** | Work already landed; candidate for deletion, not syncing |
+| Merged into default (ancestry or merged-PR) | **FLAG** | Work already landed; candidate for deletion, not syncing |
 | Stale (last commit older than `active_window_days`) | **FLAG** | Dormant; pulling it adds noise, not value |
-| Worktree-pinned (`+`) | **FLAG / SKIP** | Checked out elsewhere; refspec update errors |
+| Eligible but name not in `active_prefixes` | **ASK** | All other criteria met; confirm with Kyle before pulling rather than silently dropping or silently pulling |
+| Worktree-pinned (in `git worktree list`) | **SKIP** | Checked out elsewhere; refspec update errors |
 | Detached HEAD | **SKIP all sync** | No branch to sync; re-attach first |
 
-`active_window_days` defaults to 14, matching the skill's existing ">1 week" staleness heuristics. **When a branch is ambiguous, FLAG, don't PULL** — the cost of flagging is a line of output; the cost of a wrong pull is eroded trust.
+`active_window_days` defaults to 14 (~two-week window); note this is wider than the 7-day PR-backlog threshold — they measure different things. **When a branch is ambiguous, FLAG (or ASK), don't PULL** — the cost of flagging is a line of output; the cost of a wrong pull is eroded trust.
 
-Squash-merge detection matters: `git branch --merged` misses squash-merged branches because their commits never appear verbatim on the default branch. `gh pr list --state merged` (match on `headRefName`) catches them.
+Two merged-detection passes, because each misses cases the other catches: `git branch --merged origin/<default>` finds normally-merged branches via ancestry but **misses squash-merges** (their commits never appear verbatim on default); `gh pr list --state merged --base <default>` catches squash-merges that went through a PR. A branch squash-merged *locally* with no PR is detectable by neither — a known limitation; when in doubt, flag.
 
 ---
 
@@ -76,17 +82,25 @@ Squash-merge detection matters: `git branch --merged` misses squash-merged branc
 
 The per-repo config `.claude/preflight.yml` holds answers (default branch, naming, window) that are **local choices, not shareable repo state** — so it's always gitignored. The `.gitignore` *rule* that protects it, however, belongs in the repo so the protection is permanent and applies to every clone. (Precedent in this very repo: commit `efa9cb9 "chore: ignore .claude/preflight.yml"`.)
 
-**Order of operations matters.** Add the ignore rule *before* creating the config file. If you create the config first, git briefly sees it as an untracked, stageable file — and a careless `git add .` would commit a file full of local preferences.
+**Check tracked state first.** Before anything else, `git ls-files --error-unmatch .claude/preflight.yml`. If it's already tracked, adding it to `.gitignore` will **not** untrack it — gitignore only affects untracked files. Flag this (`git rm --cached .claude/preflight.yml` removes it from tracking while keeping the local file) and stop; it's Kyle's call, never run silently.
 
-**The commit, and why not amend.** "Add it to the newest commit" means a **new** commit on top — `git commit -m "chore: ignore .claude/preflight.yml"` — **not** `git commit --amend`. Amend rewrites the last commit's SHA; if that commit is already pushed (and on a repo in sync with origin it is), amending forces a force-push to reconcile. Force-push is the single reflex a git-teaching tool must never model. New commit, always.
+**Verify the repo's own `.gitignore` carries the rule** with `grep -qxF '.claude/preflight.yml' .gitignore` — not `git check-ignore`. `check-ignore` returns success for matches from the *global* excludes or `.git/info/exclude` too, which doesn't satisfy "the committed repo `.gitignore` protects this." If the line is already present, you're done — no duplicate, no empty commit. Steady-state runs stay write-free.
 
-**Stage surgically.** `git add .gitignore` only — never `git add -A` or `git add .`. Committing the config file must be structurally impossible, not merely avoided.
+**Order of operations.** Add the ignore rule *before* creating the config file, so git never sees the config as an untracked, stageable file a careless `git add .` could sweep up.
 
-**Clean-tree guardrail.** Auto-committing is only appropriate when the working tree is otherwise clean. If Kyle has other staged or modified work, dropping a `chore:` commit into the middle of it is surprising and muddies his history. In that case: write the rule, stage `.gitignore`, and tell him the one command to run when he's ready. Fast-forward pulls run without a prompt; this commit (which touches shared history) is the gated step.
+**Never on a tracked-dirty tree.** If Step 2 found staged/modified tracked files, **do not edit, stage, or commit** — write the exact `.gitignore` line and the commit command for Kyle to run when his tree is clean, and warn that the config stays unignored until then. Dropping a `chore:` commit into the middle of his work (or leaving `.gitignore` staged for his next commit to sweep up) is exactly the surprise the charter forbids.
 
-**Idempotency.** `git check-ignore -q .claude/preflight.yml` returns exit 0 when the file is already ignored. If so, do nothing — no duplicate line, no empty commit. Steady-state runs (the common case) stay completely write-free for the gitignore concern.
+**On a clean tree, commit only `.gitignore`:**
 
-**Already-tracked edge case.** If `git ls-files` shows the config is already tracked, adding it to `.gitignore` will **not** untrack it — gitignore only affects untracked files. Flag this to Kyle (`git rm --cached .claude/preflight.yml` removes it from tracking while keeping the local file), but don't run it silently; it's a state he should understand.
+```bash
+git add .gitignore
+test "$(git diff --cached --name-only)" = ".gitignore"   # gate: nothing else staged
+git commit -m "chore: ignore .claude/preflight.yml" -- .gitignore
+```
+
+Two safety layers: the `test` aborts if anything but `.gitignore` is staged, and the `-- .gitignore` pathspec means even a stray staged file wouldn't ride along. **Why a plain `git diff --cached --quiet` gate is wrong:** once `.gitignore` is staged it exits non-zero on a perfectly clean tree, so that check never passes — the v4.0 bug all reviewers caught.
+
+**Never amend.** "Add it to the newest commit" means a **new** commit on top, never `git commit --amend`. Amend rewrites the last commit's SHA; on a branch in sync with origin that forces a force-push to reconcile — the one reflex a git-teaching tool must never model. If the commit fails (hooks, GPG signing), report it; never retry with `--no-verify`. Never push — the local commit is enough; pushing is Kyle's.
 
 ---
 
@@ -96,7 +110,7 @@ When `git status` shows untracked files, classify each before mentioning. Some c
 
 **Worth flagging actively (potentially harmful or definitely accidental):**
 
-- **Secrets and env files** (`.env`, `.env.local`, `.env.production`, `credentials.json`, `*.pem`, `*.key`): Never commit these. If one shows up untracked, it's probably fine — gitignore is doing its job. If one is *tracked* (caught in Step 6 of the workflow), that's a different problem entirely. See "Secrets and sensitive files" below.
+- **Secrets and env files** (`.env`, `.env.local`, `.env.production`, `credentials.json`, `*.pem`, `*.key`): Never commit these. Preflight only *sees* these when they appear as untracked files in Step 2 — distinguish: untracked **and** ignored is fine (gitignore doing its job); untracked **and not** ignored is worth flagging. Preflight does **not** actively scan *tracked* files for secret content (out of scope) — but if Kyle points one out, see "Secrets and sensitive files" below. The verdict's 🛑 "secrets in tree" applies when such a file is surfaced, not from an automated scan.
 
 - **Zero-byte files with weird names** (single characters like `-`, names with unprintable characters): Almost always from an accidental shell redirect (`command > -`) or typo. Recommend deletion. To delete a file named `-`, use `rm ./-` (the `./` prevents `rm` from treating the dash as a flag).
 
@@ -122,7 +136,7 @@ When `git rev-list --left-right --count <default>...origin/<default>` returns `N
 
 **Step 1: Get the data.**
 
-```
+```bash
 git log @{u}..HEAD --oneline       # local-only commits on default
 git log HEAD..@{u} --oneline       # remote-only commits on default
 ```
@@ -134,6 +148,8 @@ git log HEAD..@{u} --oneline       # remote-only commits on default
 - **Commits Kyle doesn't recognize**: investigation needed before any action.
 
 **Step 3: Recommend (but don't act).**
+
+> Every command in this section is a **suggestion for Kyle to run**. The charter forbids the skill from running `reset`, `tag`, branch creation, or any history rewrite — show the commands and the reasoning; Kyle types them.
 
 For accidental commits to default:
 > "Your local main has <N> commits that look like they shouldn't be on main — most teams keep main for merged PRs only, and these look like session-handoff or work-in-progress commits. Most likely path: reset local main to match origin (`git reset --hard origin/main`), then if any of those commits are worth keeping, redo them as a proper PR. Tag a safety anchor first (`git tag preflight-safe-<timestamp>`) so you can rewind if needed. **You'd run that — I won't.**"
@@ -152,7 +168,7 @@ When integrating commits from one branch into another (e.g., catching up a featu
 
 **Rebase** replays your branch's commits on top of the target. Result: linear history, your branch looks like it started from the latest target.
 
-```
+```text
 Before:
   main:    A---B---C
                 \
@@ -168,7 +184,7 @@ After rebasing feature onto main:
 
 **Merge** creates a merge commit that ties two branches together. Result: history shows the branching and reconvergence.
 
-```
+```text
 Before:
   main:    A---B---C
                 \
@@ -310,22 +326,24 @@ Kyle uses git worktrees for his multi-agent setup (Beacon, Blueprint, Folio, Sco
 
 **For preflight:**
 
-- `git branch -vv` shows worktree-checked-out branches with a `+` prefix:
+- **Detect worktree-pinned branches from machine-readable output**, not by parsing `git branch -vv`. The `+` marker is real but column/spacing parsing is fragile; use:
+  ```bash
+  git worktree list --porcelain   # 'branch refs/heads/<name>' lines = pinned, excluding this worktree
   ```
+  For a quick human glance, `git branch -vv` shows the pinned ones with a `+`:
+  ```text
     main                  abc123 [origin/main]
   + feat/beacon-updates   def456 [origin/feat/beacon-updates]
     feat/old-stuff        xyz789 [gone]
   ```
 
-- **Never recommend deleting a branch with `+`.** It's actively checked out in another directory. Deleting would break that worktree.
+- **Never refspec-sync or recommend deleting a worktree-pinned branch.** It's actively checked out elsewhere — a refspec update errors, and deleting breaks that worktree.
 
-- `git worktree list` shows all worktrees. Useful context if Kyle wants to see what's where.
-
-When recommending branch cleanup (which preflight rarely does), filter:
+When *recommending* branch cleanup (a suggestion for Kyle to run — the skill never deletes), filter the current and pinned branches out:
+```bash
+git branch --merged <default> | grep -vE '^[*+]'
 ```
-git branch --merged <default> | grep -vE '^\*|^\+'
-```
-The `^\*` excludes the currently checked-out branch. The `^\+` excludes worktree-checked-out branches.
+The leading `*` (current) and `+` (worktree-pinned) markers both sit at the start of the line, so `^[*+]` drops both. Deletion itself (`git branch -d`) is Kyle's command, never the skill's.
 
 ---
 
