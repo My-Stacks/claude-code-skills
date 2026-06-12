@@ -124,29 +124,31 @@ Config lives at `~/.claude/preflight/<repo-key>.yml` — **never in the repo**. 
 ```bash
 : "${HOME:?preflight: HOME is unset — refusing to write to /}"
 mkdir -p "$HOME/.claude/preflight"
+root=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "preflight: not in a git repo"; exit 1; }
 raw=$(git remote get-url origin 2>/dev/null | head -1)   # origin identity (1st line only)
-[ -z "$raw" ] && raw=$(git rev-parse --show-toplevel)    # no origin → repo path
+[ -z "$raw" ] && raw=$root                               # no origin → repo path
 # canon: lowercase, strip protocol / user@ / trailing .git / trailing slash; ssh and https
 # forms of one repo converge here, while org/repo vs org-repo stay distinct.
 canon=$(printf '%s' "$raw" | tr 'A-Z' 'a-z' \
   | sed -E 's#^[a-z]+://##; s#^[^@/]+@##; s#:#/#; s#\.git$##; s#/+$##')
 stem=$(printf '%s' "$canon" | tr -c 'a-z0-9._-' '-' | sed -E 's#-+#-#g; s#^[-.]+##; s#[-.]+$##')
-hash=$(printf '%s' "$canon" | { shasum 2>/dev/null || sha1sum; } | cut -c1-8)
-key="${stem:-repo}-${hash}"          # readable stem + collision-proof hash; stem may be empty
+hash=$(printf '%s' "$canon" | { shasum 2>/dev/null || sha1sum; } | cut -c1-12)
+key="${stem:-repo}-${hash}"          # readable stem + collision-resistant hash; stem may be empty
 cfg="$HOME/.claude/preflight/${key}.yml"
 ```
 
-Origin `git@github.com:My-Stacks/claude-code-skills.git` → key `github.com-my-stacks-claude-code-skills-<hash8>`. No origin → keyed on the repo's absolute path. The readable `stem` is **lossy** (slashes, colons, and other characters all collapse to `-`, so `org/repo` and `org-repo` would otherwise share a file) — the 8-char hash of the *canonical* identity is the real key, guaranteeing two genuinely different remotes never collide. Because the hash is computed from `canon`, the ssh and https URLs of the same repo (and a trailing-slash variant) all resolve to the **same** config; worktrees and clones of one origin share it too — all intended.
+Origin `git@github.com:My-Stacks/claude-code-skills.git` → key `github.com-my-stacks-claude-code-skills-<hash12>`. No origin → keyed on the repo's absolute path (`$root`). The readable `stem` is **lossy** (slashes, colons, and other characters all collapse to `-`, so `org/repo` and `org-repo` would otherwise share a file) — the 12-char (48-bit) hash of the *canonical* identity is the real key, so two genuinely different remotes effectively never collide. Because the hash is computed from `canon`, the ssh and https URLs of the same repo (and a trailing-slash variant) all resolve to the **same** config; worktrees and clones of one origin share it too — all intended. (The key never contains `/` — `tr` maps every separator to `-` — so it always names a single file directly under `~/.claude/preflight/`, never a path that could escape it.)
 
 **2. If `$cfg` exists → read it and you're done.** Steady-state runs do exactly this: read the per-user config and move on. **Never inspect the in-repo `.claude/preflight.yml`** once `$cfg` exists — that's what guarantees the legacy nag fires at most once, ever. **Migration is one-way:** once `$cfg` exists it is the *only* source of truth, so edits made to a leftover in-repo file afterward are silently ignored. To change settings, edit `$cfg` directly (tell Kyle its path).
 
 **3. If `$cfg` does NOT exist, migrate or create:**
 
-   - **Legacy in-repo config present** (`.claude/preflight.yml` exists in the repo from an older version): copy it **byte-for-byte** to `$cfg` — `cp -- .claude/preflight.yml "$cfg"`, don't parse or re-serialize it (that would drop comments, ordering, and any field this version doesn't recognize). **But first sanity-check it:** if the file is empty or doesn't contain a `default_branch:` line (truncated / not actually a preflight config), treat it as absent and fall through to the first-run questions instead — never migrate a broken file, because it would then be the source of truth forever. On a successful copy, tell Kyle once, plainly: *"Moved your preflight config to a local-only file outside the repo (`$cfg`). Future runs read it from there — the in-repo copy is no longer used."* Then, **only if** that in-repo file is **tracked** (`git ls-files --error-unmatch .claude/preflight.yml` exits 0), add a one-time optional-cleanup note (Kyle runs it, the skill never does):
+   - **Legacy in-repo config present** (`$root/.claude/preflight.yml` exists from an older version — anchor to `$root`, not a relative path, since preflight may be invoked from a subdirectory): copy it **byte-for-byte** to `$cfg` — `cp -- "$root/.claude/preflight.yml" "$cfg"`, don't parse or re-serialize it (that would drop comments, ordering, and any field this version doesn't recognize). **But first sanity-check it:** treat it as absent (and fall through to the first-run questions) unless it is non-empty **and** has a `default_branch:` key with a value — `grep -Eq '^[[:space:]]*default_branch:[[:space:]]*[^[:space:]#]' "$root/.claude/preflight.yml"` (allows leading indentation; rejects an empty/valueless key). Never migrate a broken or truncated file, because it would then be the source of truth forever. On a successful copy, tell Kyle once, plainly: *"Moved your preflight config to a local-only file outside the repo (`$cfg`). Future runs read it from there — the in-repo copy is no longer used."* Then, **only if** that in-repo file is **tracked** (`git ls-files --error-unmatch "$root/.claude/preflight.yml"` exits 0), add a one-time optional-cleanup note (Kyle runs it, the skill never does):
 
      ```bash
-     # optional tidy-up — run from an otherwise-clean tree. Stops tracking the now-unused
-     # in-repo copy (your local file stays); the pathspec keeps the commit to just these two:
+     # optional tidy-up — run from the repo root on an otherwise-clean tree. Stops tracking the
+     # now-unused in-repo copy (your local file stays); the pathspec keeps the commit to just these two:
+     cd "$(git rev-parse --show-toplevel)"
      git rm --cached .claude/preflight.yml
      grep -qxF '.claude/preflight.yml' .gitignore 2>/dev/null || echo '.claude/preflight.yml' >> .gitignore
      git add .gitignore
