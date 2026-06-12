@@ -82,29 +82,23 @@ Two merged-detection passes, because each misses cases the other catches: `git b
 
 ---
 
-## First-run config & gitignore
+## Per-user config & migration
 
-The per-repo config `.claude/preflight.yml` holds answers (default branch, naming, window) that are **local choices, not shareable repo state** — so it's always gitignored. The `.gitignore` *rule* that protects it, however, belongs in the repo so the protection is permanent and applies to every clone. (Precedent in this very repo: commit `efa9cb9 "chore: ignore .claude/preflight.yml"`.)
+**Why the config lives outside the repo.** The config (default branch, naming, window) holds **local, per-machine choices, not shareable repo state.** Earlier versions (≤4.2) kept it at `.claude/preflight.yml` *inside* the repo and tried to protect it with a committed `.gitignore` rule. That created a recurring failure mode: in repos where the file got committed before the rule existed, every run re-flagged "your config is committed, you should untrack it." From v5.0 the config lives at `~/.claude/preflight/<repo-key>.yml` — outside every repo. Nothing is written into the working tree, so there is no rule to add, nothing to stage, and **nothing to commit, ever**. The nag is structurally impossible.
 
-**Check tracked state first.** Before anything else, `git ls-files --error-unmatch .claude/preflight.yml`. If it's already tracked, adding it to `.gitignore` will **not** untrack it — gitignore only affects untracked files. Flag this (`git rm --cached .claude/preflight.yml` removes it from tracking while keeping the local file) and stop; it's Kyle's call, never run silently.
+**The repo key** is derived from the origin URL (normalized: strip protocol/`.git`, lowercase, non-alphanumerics → `-`), e.g. `git@github.com:My-Stacks/claude-code-skills.git` → `github.com-my-stacks-claude-code-skills`. No origin → the repo's absolute path, sanitized. Worktrees of one repo share an origin, so they share one config file — intended; per-repo settings shouldn't differ between worktrees.
 
-**Verify the repo's own `.gitignore` carries the rule** with `[ -f .gitignore ] && grep -qxF '.claude/preflight.yml' .gitignore` — guard the `[ -f ]` first so a bare `grep` on a missing file doesn't error, and use this rather than `git check-ignore`. `check-ignore` returns success for matches from the *global* excludes or `.git/info/exclude` too, which doesn't satisfy "the committed repo `.gitignore` protects this." If the line is already present, you're done — no duplicate, no empty commit. Steady-state runs stay write-free.
+**Steady state is read-only.** If `~/.claude/preflight/<key>.yml` exists, read it and move on. Once it exists, **never look at any in-repo `.claude/preflight.yml` again** — that single rule is what guarantees the legacy message appears at most once per repo, then never returns.
 
-**Order of operations.** Add the ignore rule *before* creating the config file, so git never sees the config as an untracked, stageable file a careless `git add .` could sweep up.
-
-**Never on a tracked-dirty tree.** If Step 2 found staged/modified tracked files, **do not edit, stage, or commit** — write the exact `.gitignore` line and the commit command for Kyle to run when his tree is clean, and warn that the config stays unignored until then. Dropping a `chore:` commit into the middle of his work (or leaving `.gitignore` staged for his next commit to sweep up) is exactly the surprise the charter forbids.
-
-**On a clean tree, commit only `.gitignore`:**
+**Migration (one time per repo).** On the first v5.0 run, if `$cfg` doesn't exist yet but a legacy `.claude/preflight.yml` is present in the repo, copy its values to `$cfg` verbatim and tell Kyle once that the config has moved. If that in-repo file is **tracked** (`git ls-files --error-unmatch .claude/preflight.yml` exits 0), add a one-time *optional* cleanup note — the three commands below — framed as housekeeping, never a blocker, never run by the skill:
 
 ```bash
-git add .gitignore
-test "$(git diff --cached --name-only)" = ".gitignore"   # gate: nothing else staged
-git commit -m "chore: ignore .claude/preflight.yml" -- .gitignore
+git rm --cached .claude/preflight.yml          # stop tracking; keeps your local copy
+echo '.claude/preflight.yml' >> .gitignore     # ignore it going forward
+git add .gitignore && git commit -m "chore: stop tracking .claude/preflight.yml"
 ```
 
-Two safety layers: the `test` aborts if anything but `.gitignore` is staged, and the `-- .gitignore` pathspec means even a stray staged file wouldn't ride along. **Why a plain `git diff --cached --quiet` gate is wrong:** once `.gitignore` is staged it exits non-zero on a perfectly clean tree, so that check never passes — the v4.0 bug all reviewers caught.
-
-**Never amend.** "Add it to the newest commit" means a **new** commit on top, never `git commit --amend`. Amend rewrites the last commit's SHA; on a branch in sync with origin that forces a force-push to reconcile — the one reflex a git-teaching tool must never model. If the commit fails (hooks, GPG signing), report it; never retry with `--no-verify`. Never push — the local commit is enough; pushing is Kyle's.
+Whether or not Kyle runs them, the next run finds `$cfg` and skips the in-repo file entirely — so the note never repeats. `git rm --cached` only removes the file from git's index; the on-disk copy stays (and is now ignored, harmless). **The skill never runs these itself** — removing a tracked file and making a commit are Kyle's call. The skill's own writes are confined to `~/.claude/preflight/`.
 
 ---
 
