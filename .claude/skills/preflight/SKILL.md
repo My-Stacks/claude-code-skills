@@ -42,7 +42,7 @@ This is the load-bearing contract. Everything below obeys it.
 **NEVER**:
 - Non-fast-forward merge, rebase, force-push, reset, cherry-pick.
 - Create, switch, delete, or rename a branch or tag. (Branch-switch/create commands shown to Kyle are **suggestions he runs**, never executed by the skill.)
-- **Commit anything, ever, to any repo** — not config, not `.gitignore`, not a stray file. The skill makes zero commits. Never `git add -A`/`git add .`; never write any file into the repo working tree. (Config lives outside the repo; see Step 3.)
+- **Commit anything, ever, to any repo** — not config, not `.gitignore`, not a stray file. The skill makes zero commits. Never `git add -A`/`git add .`; never write any file into the repo working tree. (Config lives outside the repo; see Step 3. The cleanup commit in Step 3 is a **suggestion Kyle runs**, never executed by the skill — same carve-out as the branch-switch commands.)
 - Push Kyle's commits.
 - Pull or modify a **stale, diverged, ahead-only, or no-upstream** branch, or any branch whose upstream is not `origin/<same-name>` (flag only).
 - Fast-forward the **current** branch while the tree is **tracked-dirty** — skip and flag. (Fetching remote-tracking refs and fast-forwarding *non-current* branches don't touch the working tree, so those stay allowed; see Step 2 for the exact rule. Writing the per-user config is always safe — it's outside the repo.)
@@ -97,7 +97,7 @@ git branch --show-current              # branch name (empty => detached); needs 
 Report which repo, remote, branch, attached or detached. Use `symbolic-ref` for the detached check (`git branch --show-current` predates git 2.22 and is silently absent on old git, which would make every state look detached). This step gates **all later writes**:
 
 - **Not in a repo** (`--is-inside-work-tree` non-zero): stop. Tell Kyle to cd into a repo and re-run. **No writes.**
-- **No `origin` remote** (`git remote | grep -qx origin` fails): run read-only only. Skip all of Step 4's syncing; report "no `origin` — nothing to sync against." (Step 3's config still works — it's keyed on the repo path when there's no origin.)
+- **No `origin` remote** (`git remote | grep -qx origin` fails): no git-side writes — skip all of Step 4's syncing and report "no `origin` — nothing to sync against." Step 3 still runs (the per-user config is keyed on the repo path when there's no origin, and lives outside the repo).
 - **Detached HEAD** (`git symbolic-ref -q HEAD` non-zero): explain in one sentence ("you're viewing a specific commit, not attached to any branch — work here won't automatically belong anywhere"), recommend re-attaching. **Do not switch, do not sync.**
 - **Unborn/empty repo** (no commits yet): report it; skip Step 4 sync.
 
@@ -122,31 +122,35 @@ Config lives at `~/.claude/preflight/<repo-key>.yml` — **never in the repo**. 
 **1. Derive the repo key** (stable per repo, shared across that repo's worktrees):
 
 ```bash
+: "${HOME:?preflight: HOME is unset — refusing to write to /}"
 mkdir -p "$HOME/.claude/preflight"
-origin=$(git remote get-url origin 2>/dev/null)
-if [ -n "$origin" ]; then
-  key=$(printf '%s' "$origin" | sed -E 's#^[a-z]+://##; s#^git@##; s#:#/#; s#\.git$##' \
-    | tr 'A-Z' 'a-z' | tr -c 'a-z0-9._-' '-')
-else
-  key=$(printf '%s' "$(git rev-parse --show-toplevel)" | tr -c 'a-zA-Z0-9._-' '-')
-fi
-key=$(printf '%s' "$key" | sed -E 's#-+#-#g; s#^-+##; s#-+$##')   # collapse/trim dashes
+raw=$(git remote get-url origin 2>/dev/null | head -1)   # origin identity (1st line only)
+[ -z "$raw" ] && raw=$(git rev-parse --show-toplevel)    # no origin → repo path
+# canon: lowercase, strip protocol / user@ / trailing .git / trailing slash; ssh and https
+# forms of one repo converge here, while org/repo vs org-repo stay distinct.
+canon=$(printf '%s' "$raw" | tr 'A-Z' 'a-z' \
+  | sed -E 's#^[a-z]+://##; s#^[^@/]+@##; s#:#/#; s#\.git$##; s#/+$##')
+stem=$(printf '%s' "$canon" | tr -c 'a-z0-9._-' '-' | sed -E 's#-+#-#g; s#^[-.]+##; s#[-.]+$##')
+hash=$(printf '%s' "$canon" | { shasum 2>/dev/null || sha1sum; } | cut -c1-8)
+key="${stem:-repo}-${hash}"          # readable stem + collision-proof hash; stem may be empty
 cfg="$HOME/.claude/preflight/${key}.yml"
 ```
 
-Origin `git@github.com:My-Stacks/claude-code-skills.git` → key `github.com-my-stacks-claude-code-skills`. No origin → keyed on the repo's absolute path. Worktrees of the same repo share one origin, so they share one config — intended.
+Origin `git@github.com:My-Stacks/claude-code-skills.git` → key `github.com-my-stacks-claude-code-skills-<hash8>`. No origin → keyed on the repo's absolute path. The readable `stem` is **lossy** (slashes, colons, and other characters all collapse to `-`, so `org/repo` and `org-repo` would otherwise share a file) — the 8-char hash of the *canonical* identity is the real key, guaranteeing two genuinely different remotes never collide. Because the hash is computed from `canon`, the ssh and https URLs of the same repo (and a trailing-slash variant) all resolve to the **same** config; worktrees and clones of one origin share it too — all intended.
 
-**2. If `$cfg` exists → read it and you're done.** Steady-state runs do exactly this: read the per-user config and move on. **Never inspect the in-repo `.claude/preflight.yml`** once `$cfg` exists — that's what guarantees the legacy nag fires at most once, ever.
+**2. If `$cfg` exists → read it and you're done.** Steady-state runs do exactly this: read the per-user config and move on. **Never inspect the in-repo `.claude/preflight.yml`** once `$cfg` exists — that's what guarantees the legacy nag fires at most once, ever. **Migration is one-way:** once `$cfg` exists it is the *only* source of truth, so edits made to a leftover in-repo file afterward are silently ignored. To change settings, edit `$cfg` directly (tell Kyle its path).
 
 **3. If `$cfg` does NOT exist, migrate or create:**
 
-   - **Legacy in-repo config present** (`.claude/preflight.yml` exists in the repo from an older version): read its values and write them to `$cfg` verbatim. Tell Kyle once, plainly: *"Moved your preflight config to a local-only file outside the repo (`$cfg`). Future runs read it from there — the in-repo copy is no longer used."* Then, **only if** that in-repo file is **tracked** (`git ls-files --error-unmatch .claude/preflight.yml` exits 0), add a one-time optional-cleanup note (Kyle runs it, the skill never does):
+   - **Legacy in-repo config present** (`.claude/preflight.yml` exists in the repo from an older version): copy it **byte-for-byte** to `$cfg` — `cp -- .claude/preflight.yml "$cfg"`, don't parse or re-serialize it (that would drop comments, ordering, and any field this version doesn't recognize). **But first sanity-check it:** if the file is empty or doesn't contain a `default_branch:` line (truncated / not actually a preflight config), treat it as absent and fall through to the first-run questions instead — never migrate a broken file, because it would then be the source of truth forever. On a successful copy, tell Kyle once, plainly: *"Moved your preflight config to a local-only file outside the repo (`$cfg`). Future runs read it from there — the in-repo copy is no longer used."* Then, **only if** that in-repo file is **tracked** (`git ls-files --error-unmatch .claude/preflight.yml` exits 0), add a one-time optional-cleanup note (Kyle runs it, the skill never does):
 
      ```bash
-     # optional tidy-up — stops tracking the now-unused in-repo copy (your local file stays):
+     # optional tidy-up — run from an otherwise-clean tree. Stops tracking the now-unused
+     # in-repo copy (your local file stays); the pathspec keeps the commit to just these two:
      git rm --cached .claude/preflight.yml
-     echo '.claude/preflight.yml' >> .gitignore
-     git add .gitignore && git commit -m "chore: stop tracking .claude/preflight.yml"
+     grep -qxF '.claude/preflight.yml' .gitignore 2>/dev/null || echo '.claude/preflight.yml' >> .gitignore
+     git add .gitignore
+     git commit -m "chore: stop tracking .claude/preflight.yml" -- .claude/preflight.yml .gitignore
      ```
 
      Frame it as optional housekeeping, not a blocker — once `$cfg` exists, the skill won't mention the in-repo file again whether or not Kyle cleans it up. Never run these for him.
