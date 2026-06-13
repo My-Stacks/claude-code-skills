@@ -1,13 +1,14 @@
 ---
 name: preflight
-version: "4.2"
+version: "5.0"
 description: >-
   Pre-session safe-sync briefing for git repos. Brings the repo up to date
   before work begins — fast-forwards active branches to origin, flags stale
   ones — then reports local state, open PRs, and where new work should branch
-  from. Performs only safe, non-destructive writes (ff-only sync, config
-  setup), narrating each before it runs. Never rewrites history, never makes a
-  decision that's Kyle's. Teaches the reasoning so Kyle learns git.
+  from. Performs only safe, non-destructive writes (ff-only sync); config is
+  stored per-user outside the repo and never committed. Narrates each write
+  before it runs. Never rewrites history, never makes a decision that's Kyle's.
+  Teaches the reasoning so Kyle learns git.
 trigger: /preflight
 allowed-tools: Bash, Read, Edit, Write
 ---
@@ -36,16 +37,15 @@ This is the load-bearing contract. Everything below obeys it.
 **MAY write** (safe, non-destructive, **always narrated before it runs**):
 - `git fetch --prune --no-tags origin` to update remote-tracking refs (`--no-tags` so local tags are never moved).
 - **Fast-forward-only** sync of *active* branches to origin (never a merge commit, never a rewrite).
-- Create `.claude/preflight.yml` on first run (never stage or commit it).
-- Add `.claude/preflight.yml` to `.gitignore` and commit **only `.gitignore`** — only when the working tree is otherwise clean.
+- Create / update the per-user config under `~/.claude/preflight/` (outside the repo — never touches the working tree, never staged, never committed). See Step 3.
 
 **NEVER**:
 - Non-fast-forward merge, rebase, force-push, reset, cherry-pick.
 - Create, switch, delete, or rename a branch or tag. (Branch-switch/create commands shown to Kyle are **suggestions he runs**, never executed by the skill.)
-- Commit anything other than the `.gitignore` rule. Never `git add -A`/`git add .`; never commit the config file.
+- **Commit anything, ever, to any repo** — not config, not `.gitignore`, not a stray file. The skill makes zero commits. Never `git add -A`/`git add .`; never write any file into the repo working tree. (Config lives outside the repo; see Step 3. The cleanup commit in Step 3 is a **suggestion Kyle runs**, never executed by the skill — same carve-out as the branch-switch commands.)
 - Push Kyle's commits.
 - Pull or modify a **stale, diverged, ahead-only, or no-upstream** branch, or any branch whose upstream is not `origin/<same-name>` (flag only).
-- Fast-forward the **current** branch, or commit the `.gitignore` rule, while the tree is **tracked-dirty** — skip and flag. (Fetching remote-tracking refs and fast-forwarding *non-current* branches don't touch the working tree, so those stay allowed; see Step 2 for the exact rule.)
+- Fast-forward the **current** branch while the tree is **tracked-dirty** — skip and flag. (Fetching remote-tracking refs and fast-forwarding *non-current* branches don't touch the working tree, so those stay allowed; see Step 2 for the exact rule. Writing the per-user config is always safe — it's outside the repo.)
 - Interpolate a branch name into a shell command string. Branch names are **data** — pass them as separate quoted arguments, never concatenated into a command (a name can contain `'`, `|`, `;`, `$`).
 
 If a situation isn't clearly inside "MAY," it's a recommendation, not an action.
@@ -61,7 +61,7 @@ If a situation isn't clearly inside "MAY," it's a recommendation, not an action.
 
 ## Per-repo config
 
-Config lives at `.claude/preflight.yml` (repo root). It is **always gitignored** — see Step 3.
+Config is **per-user and lives outside the repo**, at `~/.claude/preflight/<repo-key>.yml`. It is never created in the repo, never staged, never committed — so it can never show up as a tracked file or a "you should gitignore this" nag. The config holds local choices (default branch, naming, window), which are per-machine preferences, not shareable repo state. See Step 3 for how the key is derived and how a legacy in-repo config is migrated.
 
 ```yaml
 default_branch: main           # main | master | develop
@@ -97,9 +97,9 @@ git branch --show-current              # branch name (empty => detached); needs 
 Report which repo, remote, branch, attached or detached. Use `symbolic-ref` for the detached check (`git branch --show-current` predates git 2.22 and is silently absent on old git, which would make every state look detached). This step gates **all later writes**:
 
 - **Not in a repo** (`--is-inside-work-tree` non-zero): stop. Tell Kyle to cd into a repo and re-run. **No writes.**
-- **No `origin` remote** (`git remote | grep -qx origin` fails): run read-only only. Skip Step 3's commit and all of Step 4's syncing; report "no `origin` — nothing to sync against."
-- **Detached HEAD** (`git symbolic-ref -q HEAD` non-zero): explain in one sentence ("you're viewing a specific commit, not attached to any branch — work here won't automatically belong anywhere"), recommend re-attaching. **Do not switch, do not sync, do not run Step 3 writes.**
-- **Unborn/empty repo** (no commits yet): report it; skip Step 3 commit and Step 4 sync.
+- **No `origin` remote** (`git remote | grep -qx origin` fails): no git-side writes — skip all of Step 4's syncing and report "no `origin` — nothing to sync against." Step 3 still runs (the per-user config is keyed on the repo path when there's no origin, and lives outside the repo).
+- **Detached HEAD** (`git symbolic-ref -q HEAD` non-zero): explain in one sentence ("you're viewing a specific commit, not attached to any branch — work here won't automatically belong anywhere"), recommend re-attaching. **Do not switch, do not sync.**
+- **Unborn/empty repo** (no commits yet): report it; skip Step 4 sync.
 
 ### Step 2: Working tree state
 
@@ -110,32 +110,61 @@ git stash list --format='%gd|%cr|%s'
 
 Report modified / staged / untracked / stashes, one line each. **Define cleanliness once and reuse it:**
 
-- **tracked-dirty** = any `git status --porcelain` line NOT beginning with `??` (staged or modified tracked files). This blocks exactly the two writes that touch the working tree or Kyle's index: the **current-branch fast-forward** (Step 4) and the **`.gitignore` commit** (Step 3). It does **not** block `git fetch` (remote-tracking refs only) or fast-forwarding *non-current* branches (their refs move; your working tree doesn't) or creating the untracked config file — none of those touch the working tree.
+- **tracked-dirty** = any `git status --porcelain` line NOT beginning with `??` (staged or modified tracked files). This blocks exactly one write: the **current-branch fast-forward** (Step 4), which touches the working tree. It does **not** block `git fetch` (remote-tracking refs only), fast-forwarding *non-current* branches (their refs move; your working tree doesn't), or writing the per-user config (it lives outside the repo). The skill never stages or commits anything, so a dirty tree is never at risk of being swept into a commit.
 - **untracked-only** = output is empty or every line begins with `??`. Writes may proceed (but see the untracked-collision note in Step 4).
 
 Also: flag untracked files matching "shouldn't be here" patterns (`.env`, zero-byte odd names, accidental redirects) — load `reference.md → "Files that look out of place"`. Stashes older than 8 weeks: mention as a future cleanup pass, not a blocker.
 
-### Step 3: Config & gitignore (first run, idempotent)
+### Step 3: Config (per-user, outside the repo)
 
-The config file must never be committed; the `.gitignore` rule that protects it should be. **Order matters** — check tracked state first, then ignore state, then write.
+Config lives at `~/.claude/preflight/<repo-key>.yml` — **never in the repo**. Because nothing is written into the working tree, there is no `.gitignore` rule to add, nothing to stage, and nothing to commit. The skill makes **zero** commits. This is what stops the recurring "your config is committed / should be gitignored" message: there is no in-repo file to track.
 
-1. **Already tracked?** `git ls-files --error-unmatch .claude/preflight.yml` (exit 0 = tracked). If tracked, gitignore won't untrack it — **flag it** (`git rm --cached .claude/preflight.yml` is Kyle's call) and skip the rest of Step 3. Don't silently remove.
-2. **Repo `.gitignore` already has the rule?** Guard against a missing file (bare `grep` on an absent path errors): `[ -f .gitignore ] && grep -qxF '.claude/preflight.yml' .gitignore`. If present, it's protected — skip to step 5 below. (Don't rely on `git check-ignore` alone: it also matches global excludes / `.git/info/exclude`, which doesn't satisfy "the repo's own `.gitignore` carries the rule.") Also: if `.gitignore` exists but is **untracked** with unrelated content (`git ls-files --error-unmatch .gitignore` non-zero), don't auto-commit it wholesale — flag it for Kyle.
-3. **tracked-dirty? (Step 2)** Then **do not edit, stage, or commit `.gitignore`.** Tell Kyle: add `.claude/preflight.yml` to `.gitignore` and commit it when his tree is clean (give the two commands). You **may** still create the config file in step 5 (it's untracked and never staged) — just warn it stays unignored until Kyle commits the rule, so avoid `git add .`. Skip to step 5.
-4. **Clean tree:** add the rule and commit only it:
+**1. Derive the repo key** (stable per repo, shared across that repo's worktrees):
 
-   ```bash
-   # add the line (create .gitignore if absent) via Edit/Write, then:
-   git add .gitignore
-   test "$(git diff --cached --name-only)" = ".gitignore" \
-     || { echo "preflight: unexpected staged files — aborting gitignore commit"; exit 1; }
-   git commit -m "chore: ignore .claude/preflight.yml" -- .gitignore
-   ```
+```bash
+: "${HOME:?preflight: HOME is unset — refusing to write to /}"
+mkdir -p "$HOME/.claude/preflight"
+root=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "preflight: not in a git repo"; exit 1; }
+raw=$(git remote get-url origin 2>/dev/null | head -1)   # origin identity (1st line only)
+[ -z "$raw" ] && raw=$root                               # no origin → repo path
+# canon: lowercase, strip protocol / user@ / trailing .git / trailing slash; ssh and https
+# forms of one repo converge here, while org/repo vs org-repo stay distinct.
+canon=$(printf '%s' "$raw" | tr 'A-Z' 'a-z' \
+  | sed -E 's#^[a-z]+://##; s#^[^@/]+@##; s#:#/#; s#\.git$##; s#/+$##')
+stem=$(printf '%s' "$canon" | tr -c 'a-z0-9._-' '-' | sed -E 's#-+#-#g; s#^[-.]+##; s#[-.]+$##')
+hash=$(printf '%s' "$canon" | { shasum 2>/dev/null || sha1sum 2>/dev/null; } | cut -c1-12)
+case "$hash" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+  *) echo "preflight: no working shasum/sha1sum — cannot key config safely"; exit 1 ;; esac
+key="${stem:-repo}-${hash}"          # readable stem + collision-resistant hash; stem may be empty
+cfg="$HOME/.claude/preflight/${key}.yml"
+```
 
-   The `test` is the gate, chained with `||` so a non-match **stops** rather than falling through to `git commit`: it confirms `.gitignore` is the *only* staged path. Never amend (a new commit, never `--amend`); never push. If `git commit` fails (hooks, signing), report it — never retry with `--no-verify`.
-5. **Create the config** if missing: ensure the directory exists (`mkdir -p .claude`), ask the config questions (explain each; for `branch_naming` save Kyle's plain-language answer verbatim), then write `.claude/preflight.yml`. Never `git add` it.
+Origin `git@github.com:My-Stacks/claude-code-skills.git` → key `github.com-my-stacks-claude-code-skills-<hash12>`. No origin → keyed on the repo's absolute path (`$root`). The readable `stem` is **lossy** (slashes, colons, and other characters all collapse to `-`, so `org/repo` and `org-repo` would otherwise share a file) — the 12-char (48-bit) hash of the *canonical* identity is the real key, so two genuinely different remotes effectively never collide. Because the hash is computed from `canon`, the ssh and https URLs of the same repo (and a trailing-slash variant) all resolve to the **same** config; worktrees and clones of one origin share it too — all intended. (The key never contains `/` — `tr` maps every separator to `-` — so it always names a single file directly under `~/.claude/preflight/`, never a path that could escape it.)
 
-Load `reference.md → "First-run config & gitignore"` for the reasoning and edge cases.
+**2. If `$cfg` exists → read it and you're done.** Steady-state runs do exactly this: read the per-user config and move on. **Never inspect the in-repo `.claude/preflight.yml`** once `$cfg` exists — that's what guarantees the legacy nag fires at most once, ever. **Migration is one-way:** once `$cfg` exists it is the *only* source of truth, so edits made to a leftover in-repo file afterward are silently ignored. To change settings, edit `$cfg` directly (tell Kyle its path).
+
+**3. If `$cfg` does NOT exist, migrate or create:**
+
+   - **Legacy in-repo config present** (`$root/.claude/preflight.yml` exists from an older version — anchor to `$root`, not a relative path, since preflight may be invoked from a subdirectory): copy it **byte-for-byte** to `$cfg` — `cp -- "$root/.claude/preflight.yml" "$cfg"`, don't parse or re-serialize it (that would drop comments, ordering, and any field this version doesn't recognize). **But first sanity-check it:** treat it as absent (and fall through to the first-run questions) unless it contains at least one **recognized preflight key** — `grep -Eq '^[[:space:]]*(default_branch|dev_branch|protected_branches|branch_naming|active_window_days|active_prefixes):' "$root/.claude/preflight.yml"` (allows leading indentation; a leading `#` excludes commented lines). Keying on the known schema rejects an empty / whitespace-only / comment-only / unrelated file — any of which would otherwise become the permanent source of truth — while still preserving a valid config that uses only a subset of keys (e.g. one omitting `default_branch`, which the remote is authoritative for anyway). On a successful copy, tell Kyle once, plainly: *"Moved your preflight config to a local-only file outside the repo (`$cfg`). Future runs read it from there — the in-repo copy is no longer used."* Then, **only if** that in-repo file is **tracked** (`git ls-files --error-unmatch "$root/.claude/preflight.yml"` exits 0), add a one-time optional-cleanup note (Kyle runs it, the skill never does):
+
+     ```bash
+     # ── SUGGESTION FOR KYLE TO RUN — preflight NEVER executes this block ──
+     # optional tidy-up — run from the repo root on an otherwise-clean tree. Stops tracking the
+     # now-unused in-repo copy (your local file stays); the pathspec keeps the commit to just these two:
+     cd "$(git rev-parse --show-toplevel)"
+     git rm --cached .claude/preflight.yml
+     if ! grep -qxF '.claude/preflight.yml' .gitignore 2>/dev/null; then
+       [ -s .gitignore ] && [ -n "$(tail -c1 .gitignore)" ] && echo >> .gitignore   # ensure trailing newline
+       echo '.claude/preflight.yml' >> .gitignore
+     fi
+     git add .gitignore
+     git commit -m "chore: stop tracking .claude/preflight.yml" -- .claude/preflight.yml .gitignore
+     ```
+
+     Frame it as optional housekeeping, not a blocker — once `$cfg` exists, the skill won't mention the in-repo file again whether or not Kyle cleans it up. Never run these for him.
+   - **No legacy file** (genuine first run): ask the config questions (explain each; for `branch_naming` save Kyle's plain-language answer verbatim), then write `$cfg`. No repo writes, nothing to commit.
+
+Load `reference.md → "Per-user config & migration"` for the reasoning and edge cases.
 
 ### Step 4: Sync — classify, fast-forward active, flag the rest
 
@@ -262,7 +291,7 @@ End with one of:
 
 - Auto-sync / refspec / ff vs merge → "Auto-sync mechanics: refspec ff vs pull"
 - Which branches get pulled → "Active vs stale: the classification table"
-- Config / gitignore behavior → "First-run config & gitignore"
+- Config storage / migration behavior → "Per-user config & migration"
 - Rebase vs merge → "Rebase vs merge"
 - Diverged branches → "Diverged default branch"
 - Stale stashes/branches → "When to clean up vs when to leave it"
@@ -277,7 +306,7 @@ These are flagged-not-handled by design — when encountered, report and defer t
 
 ## What this skill does NOT do
 
-- **No unsafe writes.** Only fast-forwards and the single-file `.gitignore` commit. No merges, rebases, resets, force-pushes, branch/tag create/switch/delete, or pushes of Kyle's commits.
+- **No unsafe writes.** Only fast-forwards. The skill makes **zero commits** — config lives outside the repo. No merges, rebases, resets, force-pushes, branch/tag create/switch/delete, or pushes of Kyle's commits.
 - **No touching dirty trees or risky branches.** tracked-dirty trees and diverged/ahead/no-upstream/non-origin/stale branches are flagged, never modified.
 - **No shipping workflow** (push, PR open, merge). Kyle's PR process lives outside this skill.
 - **No history rewriting or secret cleanup.** Those are Martina's.
