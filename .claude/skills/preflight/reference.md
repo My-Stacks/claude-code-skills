@@ -90,11 +90,15 @@ Two merged-detection passes, because each misses cases the other catches: `git b
 
 **Steady state is read-only.** If `~/.claude/preflight/<key>.yml` exists, read it and move on. Once it exists, **never look at any in-repo `.claude/preflight.yml` again** — that single rule is what guarantees the legacy message appears at most once per repo, then never returns.
 
-**Migration (one time per repo).** On the first v5.0 run, if `$cfg` doesn't exist yet but a legacy `.claude/preflight.yml` is present in the repo, copy it **byte-for-byte** (`cp --`, not a parse-and-rewrite) to `$cfg` and tell Kyle once that the config has moved — but first sanity-check the source (anchored at `$root`, since preflight may run from a subdirectory): treat it as absent unless it is non-empty and has a `default_branch:` key *with a value*, allowing leading indentation (`grep -Eq '^[[:space:]]*default_branch:[[:space:]]*[^[:space:]#]'`). A truncated or valueless file never becomes the permanent source of truth. Migration is **one-way**: once `$cfg` exists it's authoritative and the in-repo file is never read again, so post-migration edits belong in `$cfg`. If that in-repo file is **tracked** (`git ls-files --error-unmatch .claude/preflight.yml` exits 0), add a one-time *optional* cleanup note — framed as housekeeping, never a blocker, never run by the skill — and run it from an otherwise-clean tree, scoped by pathspec so nothing unrelated rides along:
+**Migration (one time per repo).** On the first v5.0 run, if `$cfg` doesn't exist yet but a legacy `.claude/preflight.yml` is present in the repo, copy it **byte-for-byte** (`cp --`, not a parse-and-rewrite) to `$cfg` and tell Kyle once that the config has moved — but first sanity-check the source (anchored at `$root`, since preflight may run from a subdirectory): treat it as absent unless it has at least one real `key: value` line, allowing leading indentation (`grep -Eq '^[[:space:]]*[a-zA-Z0-9_]+:[[:space:]]*[^[:space:]#]'`). This rejects an empty, whitespace-only, or comment-only file (which would otherwise become the permanent source of truth) while still preserving a valid config that omits `default_branch` — the remote is authoritative for the default branch anyway. Migration is **one-way**: once `$cfg` exists it's authoritative and the in-repo file is never read again, so post-migration edits belong in `$cfg`. If that in-repo file is **tracked** (`git ls-files --error-unmatch .claude/preflight.yml` exits 0), add a one-time *optional* cleanup note — framed as housekeeping, never a blocker, never run by the skill — and run it from an otherwise-clean tree, scoped by pathspec so nothing unrelated rides along:
 
 ```bash
+# ── SUGGESTION FOR KYLE TO RUN — preflight NEVER executes this block ──
 git rm --cached .claude/preflight.yml          # stop tracking; keeps your local copy
-grep -qxF '.claude/preflight.yml' .gitignore 2>/dev/null || echo '.claude/preflight.yml' >> .gitignore
+if ! grep -qxF '.claude/preflight.yml' .gitignore 2>/dev/null; then
+  [ -s .gitignore ] && [ -n "$(tail -c1 .gitignore)" ] && echo >> .gitignore   # ensure trailing newline
+  echo '.claude/preflight.yml' >> .gitignore
+fi
 git add .gitignore
 git commit -m "chore: stop tracking .claude/preflight.yml" -- .claude/preflight.yml .gitignore
 ```

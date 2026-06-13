@@ -132,7 +132,9 @@ raw=$(git remote get-url origin 2>/dev/null | head -1)   # origin identity (1st 
 canon=$(printf '%s' "$raw" | tr 'A-Z' 'a-z' \
   | sed -E 's#^[a-z]+://##; s#^[^@/]+@##; s#:#/#; s#\.git$##; s#/+$##')
 stem=$(printf '%s' "$canon" | tr -c 'a-z0-9._-' '-' | sed -E 's#-+#-#g; s#^[-.]+##; s#[-.]+$##')
-hash=$(printf '%s' "$canon" | { shasum 2>/dev/null || sha1sum; } | cut -c1-12)
+hash=$(printf '%s' "$canon" | { shasum 2>/dev/null || sha1sum 2>/dev/null; } | cut -c1-12)
+case "$hash" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+  *) echo "preflight: no working shasum/sha1sum — cannot key config safely"; exit 1 ;; esac
 key="${stem:-repo}-${hash}"          # readable stem + collision-resistant hash; stem may be empty
 cfg="$HOME/.claude/preflight/${key}.yml"
 ```
@@ -143,14 +145,18 @@ Origin `git@github.com:My-Stacks/claude-code-skills.git` → key `github.com-my-
 
 **3. If `$cfg` does NOT exist, migrate or create:**
 
-   - **Legacy in-repo config present** (`$root/.claude/preflight.yml` exists from an older version — anchor to `$root`, not a relative path, since preflight may be invoked from a subdirectory): copy it **byte-for-byte** to `$cfg` — `cp -- "$root/.claude/preflight.yml" "$cfg"`, don't parse or re-serialize it (that would drop comments, ordering, and any field this version doesn't recognize). **But first sanity-check it:** treat it as absent (and fall through to the first-run questions) unless it is non-empty **and** has a `default_branch:` key with a value — `grep -Eq '^[[:space:]]*default_branch:[[:space:]]*[^[:space:]#]' "$root/.claude/preflight.yml"` (allows leading indentation; rejects an empty/valueless key). Never migrate a broken or truncated file, because it would then be the source of truth forever. On a successful copy, tell Kyle once, plainly: *"Moved your preflight config to a local-only file outside the repo (`$cfg`). Future runs read it from there — the in-repo copy is no longer used."* Then, **only if** that in-repo file is **tracked** (`git ls-files --error-unmatch "$root/.claude/preflight.yml"` exits 0), add a one-time optional-cleanup note (Kyle runs it, the skill never does):
+   - **Legacy in-repo config present** (`$root/.claude/preflight.yml` exists from an older version — anchor to `$root`, not a relative path, since preflight may be invoked from a subdirectory): copy it **byte-for-byte** to `$cfg` — `cp -- "$root/.claude/preflight.yml" "$cfg"`, don't parse or re-serialize it (that would drop comments, ordering, and any field this version doesn't recognize). **But first sanity-check it:** treat it as absent (and fall through to the first-run questions) unless it contains at least one real `key: value` line — `grep -Eq '^[[:space:]]*[a-zA-Z0-9_]+:[[:space:]]*[^[:space:]#]' "$root/.claude/preflight.yml"` (allows leading indentation; rejects an empty, whitespace-only, or comment-only file). This guards against migrating a truncated/garbage file — which would then be the source of truth forever — while still preserving a valid config that happens to omit `default_branch` (the remote is authoritative for that anyway). On a successful copy, tell Kyle once, plainly: *"Moved your preflight config to a local-only file outside the repo (`$cfg`). Future runs read it from there — the in-repo copy is no longer used."* Then, **only if** that in-repo file is **tracked** (`git ls-files --error-unmatch "$root/.claude/preflight.yml"` exits 0), add a one-time optional-cleanup note (Kyle runs it, the skill never does):
 
      ```bash
+     # ── SUGGESTION FOR KYLE TO RUN — preflight NEVER executes this block ──
      # optional tidy-up — run from the repo root on an otherwise-clean tree. Stops tracking the
      # now-unused in-repo copy (your local file stays); the pathspec keeps the commit to just these two:
      cd "$(git rev-parse --show-toplevel)"
      git rm --cached .claude/preflight.yml
-     grep -qxF '.claude/preflight.yml' .gitignore 2>/dev/null || echo '.claude/preflight.yml' >> .gitignore
+     if ! grep -qxF '.claude/preflight.yml' .gitignore 2>/dev/null; then
+       [ -s .gitignore ] && [ -n "$(tail -c1 .gitignore)" ] && echo >> .gitignore   # ensure trailing newline
+       echo '.claude/preflight.yml' >> .gitignore
+     fi
      git add .gitignore
      git commit -m "chore: stop tracking .claude/preflight.yml" -- .claude/preflight.yml .gitignore
      ```
