@@ -1,6 +1,6 @@
 ---
 name: prod-readiness-audit
-version: "1.0"
+version: "1.1"
 description: >-
   Audits any codebase for production-readiness across four buckets —
   infra/security/compliance, engineering, design/UX, and product analytics —
@@ -77,10 +77,10 @@ Audit progress:
 
 **Step 0 — Orient.** Get the lay of the land:
 - Frontend / prototype origin: Lovable, v0, Bolt, Replit, Cursor markers in `README`, comments, or commit history.
-- Backend: Supabase (`supabase/`, `@supabase/*`), Firebase, a custom API, or none.
-- Hosting: `vercel.json`, `netlify.toml`, `Dockerfile`, `fly.toml`, `render.yaml`, or unknown.
-- Observability: error tracking (`Sentry.init`), structured logs, metrics/APM (`prom-client`, `@opentelemetry`, `dd-trace`, `statsd`), `/health` — scored in bucket 02.
-- Analytics: `posthog`, `mixpanel`, `amplitude`, GA in deps or code — scored in bucket 04.
+- Backend: Supabase (`supabase/`, `@supabase/*`), Firebase / Cloud Functions (`firebase.json`, `functions/` directory, `firebase-functions` dep), Cloudflare Workers (`wrangler.toml`), a custom API, or none.
+- Hosting: `vercel.json`, `netlify.toml`, `firebase.json`, `wrangler.toml`, `Dockerfile`, `fly.toml`, `render.yaml`, or unknown.
+- Observability: error tracking (`Sentry.init` / DSN env var), structured logs, metrics — scored in bucket 02. On Cloud Functions look for `functions.logger` (GCP native) vs `console.log`. On Next.js look for `@sentry/nextjs` in `instrumentation.ts` or `_app.tsx`.
+- Analytics: `posthog-js` / `posthog-node` (behavioral platform) vs GTM / `@vercel/analytics` (traffic-only) in deps or code — scored in bucket 04.
 - AI: any LLM SDK (`openai`, `anthropic`, `@ai-sdk/*`, `langchain`, etc.).
 
 **Headless / backend service (no UI)?** Score its **observability** (logs + error
@@ -146,10 +146,12 @@ What separates "works in the demo" from "survives real users."
 - Signals: risky calls (`fetch`/axios/DB/LLM) wrapped in `try/catch`/`.catch`; smell for empty `catch {}`; an error boundary (`ErrorBoundary`, route `error.tsx`/`global-error.tsx`).
 - 🟢 risky paths wrapped + user-facing fallback + error boundary · 🟡 some handling, but empty catches / unguarded async remain · 🔴 errors largely unhandled or swallowed.
 
-**Logging + error tracking** — when something breaks in prod, the team finds out and can diagnose it. Three pillars — **logs, error tracking, metrics**.
-- Signals — logs + errors: error-tracking SDK (`@sentry/*`, bugsnag, rollbar) **initialized** (`Sentry.init`/DSN configured), not just installed; a structured logger (`pino`/`winston`) vs scattered `console.log`.
-- Signals — metrics/APM (a separate leg, often missing even when logs + Sentry exist): `prom-client`/`@opentelemetry`/`dd-trace`/`statsd`, a `/metrics` endpoint, `Counter`/`Gauge`/`Histogram`; RED per endpoint (Rate/Errors/Duration), queue/job metrics (BullMQ depth/failures), **DB monitoring** (slow queries, connection-pool metrics), `/health`. **Logs + Sentry present ≠ metrics exist** — verify separately.
-- 🟢 error tracking initialized + structured logging + metrics/APM (incl. DB monitoring) on the core paths · 🟡 logs + error tracking but **no metrics/APM** (can't answer latency/throughput/queue-depth) · 🔴 no error tracking; only `console.log`.
+**Logging + error tracking** — when something breaks in prod, the team finds out and can diagnose it. Two required pillars: **error tracking** and **structured logs**. Metrics are a bonus.
+- Signals — **Next.js / Vercel frontend**: `@sentry/nextjs` in deps **and** `Sentry.init()` wired in `instrumentation.ts` (App Router) or `_app.tsx` (Pages Router), with `SENTRY_DSN` in env. `@sentry/nextjs` in `package.json` alone is not a pass — check the init call.
+- Signals — **Firebase Cloud Functions backend**: `@sentry/google-cloud-serverless` or `@sentry/node` imported and `Sentry.init()` called at the top of each function entry point (before any handler export). Native structured logging: `functions.logger.info/error(...)` (writes to GCP Cloud Logging) vs raw `console.log`. GCP Cloud Monitoring provides basic function metrics (invocations, errors, latency) for free — check if alerting policies are configured there rather than a separate APM tool.
+- Signals — **Cloudflare Workers**: `@sentry/cloudflare` or manual `fetch` to Sentry DSN; structured logs via `console.log` land in Cloudflare Logpush / Workers Logs.
+- **Logs + Sentry present ≠ metrics exist** — verify alerting policies (GCP Monitoring alerts, Sentry issue alerts) are actually configured, not just the SDK installed.
+- 🟢 Sentry initialized on all tiers (frontend + each backend service) + structured logs + alerting configured · 🟡 Sentry on some tiers but missing others, or installed-not-initialized, or no alerting · 🔴 no error tracking anywhere; only `console.log` with no alerting.
 
 **AI tested beyond happy-path inputs** — *(⚪ N/A if the product has no AI)*. If it uses an LLM, it's exercised on messy/adversarial/empty inputs, with evals.
 - Signals: AI present? (`openai`/`anthropic`/`@ai-sdk`/`langchain`). Evals/tests: an `evals/` suite, mocked-provider tests, malformed-input/failure-path tests, input validation before the prompt.
@@ -182,12 +184,12 @@ API equivalents — see below — rather than N/A'ing them.)*
 ### 04 · Product analytics
 
 Can you see what *users* actually do — or are you guessing? This bucket is
-end-user behavior: **PostHog, Mixpanel, event tracking, knowing what users
-actually do.** (System-health observability lives in bucket 02.) Rule: **GA pageviews ≠ behavioral analytics.**
+end-user behavior: **PostHog event tracking, knowing what users actually do.**
+(System-health observability lives in bucket 02.) Rule: **GTM pageviews ≠ behavioral analytics.**
 
-**Analytics wired in** — a behavioral analytics flow, not just a pageview tag.
-- Signals: a behavioral platform (`posthog`/`mixpanel`/`amplitude`/`heap`) initialized + mounted, named events through a deliberate taxonomy (a central `track()` wrapper / `events.ts`), and `identify()` tying events to users. GA4 / `@vercel/analytics` / Plausible are traffic-only and need custom events layered on to count.
-- 🟢 behavioral platform + named events + `identify()` · 🟡 traffic-only (GA/Vercel/Plausible pageviews) or installed-but-not-mounted · 🔴 nothing.
+**Analytics wired in** — PostHog initialized and tracking behavior, not just pageviews.
+- Signals: `posthog-js` initialized (`posthog.init(key, { api_host, ... })`) and mounted at the app root — check `PostHogProvider` or equivalent wrapper in `_app.tsx` / root layout. `posthog.identify(userId, traits)` called on login/profile load. A central `track()` wrapper routing to PostHog (e.g. `src/utils/analytics.ts`). Named event constants in a dedicated file (e.g. `analytics-events.ts`). `@vercel/analytics` and GTM are traffic-only add-ons — they do not substitute for PostHog behavioral events.
+- 🟢 PostHog initialized + mounted + `identify()` + named event taxonomy · 🟡 PostHog installed but not mounted, or mounted without `identify()`, or only GTM/Vercel analytics · 🔴 nothing behavioral — pageviews only or no analytics.
 
 **You can see what users do, not guess** — could you reconstruct a user's journey and spot usage patterns?
 - Signals: funnel end-to-end as named events (signup → activation → core/repeated action → conversion → retention), usage-pattern events, and *properties* on events for segmentation. Missing the conversion step is the most common, most expensive gap.
