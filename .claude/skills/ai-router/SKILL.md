@@ -1,17 +1,19 @@
 ---
-name: ai-router
-version: "1.3"
-description: "Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Headless-safe with --post-to-pr for shadow review."
-trigger: /ai-router
+name: EnsembleReview
+version: "1.4"
+description: "EnsembleReview — orchestrated PR review-and-fix across Claude, GPT, Gemini + CodeRabbit, plus model-tier routing and ensemble Q&A. `/ai-router review` runs an autonomous two-round review→fix→re-review→merge-confidence cycle. Headless-safe with --post-to-pr for shadow review."
+trigger: /ai-router, /ensemble-review
 ---
 
 ## Version Check
 To check for updates: `curl -s https://raw.githubusercontent.com/My-Stacks/claude-code-skills/main/versions.yaml`
 Compare against this file's version in frontmatter.
 
-# AI Router Skill
+# EnsembleReview (AI Router) Skill
 
-Route tasks to the best Claude Code model tier, and optionally call external model APIs (Anthropic, OpenAI, Gemini) for ensemble responses. Requires `curl`, `jq`, `python3`, and (for `--post-to-pr` / `shadow-review`) `gh`.
+Route tasks to the best Claude Code model tier, call external model APIs (Anthropic, OpenAI, Gemini) for ensemble responses, and run a full **orchestrated PR review-and-fix cycle**. Requires `curl`, `jq`, `python3`, and (for `review` / `--post-to-pr` / `shadow-review`) `gh`.
+
+**Two triggers, one skill.** `/ai-router` (legacy, full command surface) and `/ensemble-review` (memorable alias) invoke the same skill. `/ensemble-review [<pr>] [flags]` is shorthand for `/ai-router review [<pr>] [flags]` — it jumps straight into the orchestrated review flow. Every other subcommand (`route`, `ask`, `ensemble`, `compare`, `shadow-review`, `config`, `setup`) is reached via either trigger, e.g. `/ensemble-review config` ≡ `/ai-router config`. The headless contract is unchanged: CI keeps calling `claude -p "/ai-router review N --post-to-pr N"`.
 
 External API calls go through `scripts/call-provider.sh` so they pass Claude Code's auto-mode classifier with a single `permissions.allow` rule per script.
 
@@ -26,11 +28,20 @@ File: `~/.orchestrator-config.json`
   "gemini_api_key": "AIza...",
   "default_anthropic_model": "claude-sonnet-4-6",
   "default_openai_model": "gpt-5.5",
-  "default_gemini_model": "gemini-3-flash-preview"
+  "default_gemini_model": "gemini-3-flash-preview",
+  "merge_confidence_threshold": 90,
+  "round2_scope": "fix-commits"
 }
 ```
 
-All keys optional. At least one required for API commands.
+All keys optional. At least one provider key required for API commands.
+
+**Orchestration tunables** (optional; defaults apply when absent — `setup` does not prompt for these, edit the config file to change them):
+
+| Key | Default | Effect |
+|-----|---------|--------|
+| `merge_confidence_threshold` | `90` | Phase 4 recommends merge at or above this percentage (0–100). |
+| `round2_scope` | `fix-commits` | What the Phase 3 targeted re-review diffs. `fix-commits` = `git diff <round1_head>..<new_head>` (only the fix commits). May also be a path-spec string (e.g. `src/auth`) to scope round 2 to specific files, or `full` to re-review the whole PR diff again. |
 
 ## First Run Setup
 
@@ -85,7 +96,8 @@ If missing, run setup:
 | `/ai-router route <task>` | Suggest best model tier | No |
 | `/ai-router ask <prompt>` | Send to one external model | Yes |
 | `/ai-router ensemble <prompt>` | Send to all configured models, synthesize | Yes |
-| `/ai-router review [<pr>] [--post-to-pr <pr>]` | Ensemble PR review; optionally post to PR | Yes |
+| `/ai-router review [<pr>]` (≡ `/ensemble-review [<pr>]`) | **Orchestrated** review→fix→re-review→merge-confidence cycle | Yes |
+| `/ai-router review [<pr>] --single [--post-to-pr <pr>]` | One ensemble pass, no fixing; optionally post to PR (headless/CI path) | Yes |
 | `/ai-router shadow-review [--post] [--pr <#>] [--wait-cr] [--wait-reviewers]` | Spawn a background review; default stdout-only and surfaces as soon as ai-router finishes. `--wait-cr` adds CodeRabbit to the AND-wait, `--wait-reviewers` adds any non-author reviewer. | Yes |
 | `/ai-router shadow-list` | List active shadow runs for this repo | No |
 | `/ai-router shadow-cancel [<pr>]` | Stop a running shadow-review (most-recent if no PR given) | No |
@@ -96,12 +108,13 @@ If missing, run setup:
 
 After setup, show the command menu:
 
-> **AI Router** ([N] providers active: [list])
+> **EnsembleReview** ([N] providers active: [list])
 >
 > `/ai-router route <task>` — suggest best model for a task
 > `/ai-router ask <prompt>` — send to one external model
 > `/ai-router ensemble <prompt>` — multi-model synthesis
-> `/ai-router review` — ensemble PR review (add `--post-to-pr <#>` to post)
+> `/ai-router review` (or `/ensemble-review`) — orchestrated review→fix→re-review→merge-confidence
+> `/ai-router review --single` — one ensemble pass only (add `--post-to-pr <#>` to post)
 > `/ai-router shadow-review` — background review + PR-comment polling
 > `/ai-router compare <prompt>` — side-by-side responses
 > `/ai-router config` — show config
@@ -185,9 +198,134 @@ Omit sections with no content. If a provider failed: "Gemini: unavailable (HTTP 
 
 ---
 
-## `/ai-router review [<pr-number>] [--post-to-pr <pr>]`
+## `/ai-router review [<pr>]` — Orchestrated review-and-fix  (alias: `/ensemble-review [<pr>]`)
 
-Ensemble PR review. Gathers diff context, sends to all configured models, synthesizes. Optionally posts the synthesis as a PR comment.
+The **default** for `review`. Instead of one ensemble pass, this drives the whole cycle Kyle used to run by hand: round-1 review (ensemble + CodeRabbit) → triage + fix + commit/push → round-2 targeted re-review → merge-confidence verdict. **Narrate each phase as you go** so Kyle can follow along.
+
+### When orchestration runs vs. single-pass
+
+- **Orchestrated (default):** interactive `/ai-router review [<pr>]` or `/ensemble-review [<pr>]`.
+- **Single-pass (no fixing, never commits):** when **any** of these is true — `--single` flag, `--post-to-pr` flag, or headless mode (`[ -n "$AI_ROUTER_RUN_ID" ]`). This is the CI/shadow path and the original behavior. Jump to **[Single-pass mode](#single-pass-mode)** below. This is what keeps the headless contract intact.
+
+### Hard guardrails (apply across all phases)
+
+- **≤ 2 CodeRabbit triggers** per PR (round-1 trigger + at most one round-2 re-trigger).
+- **≤ 2 ensemble rounds** per PR. After round 2, if must-fix findings remain, **STOP and report** — never keep looping.
+- **Exactly ONE rollup comment per round** (one review rollup, one disposition rollup). Never per-finding or per-thread reply spam.
+- **NEVER auto-merge.** Merge is always Kyle's decision.
+- **Provider failures are non-fatal:** continue with the remaining providers and note which failed (`"Gemini: unavailable (HTTP 429)"`). Respect the diff-size guard and emit the per-call cost summary every round (see [Cost Tracking](#cost-tracking)).
+
+Resolve once up front and reuse:
+
+```bash
+REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+# Resolve PR: arg if given, else the current branch's PR.
+PR="${ARG_PR:-$(gh pr view --json number -q .number 2>/dev/null)}"
+[ -z "$PR" ] && { echo "No PR for branch \`$(git branch --show-current)\`. Push and open one first."; exit 0; }
+ROUND1_HEAD=$(gh pr view "$PR" --json headRefOid -q .headRefOid)   # SHA at start of the cycle
+```
+
+If no PR resolves, **stop** and tell Kyle to open one — do not invent a diff.
+
+---
+
+### PHASE 1 — Round-1 review
+
+1. **Trigger CodeRabbit** (counts toward the ≤2 cap). Post `@coderabbitai full review` **from the operator's gh identity** — unset any bot token so a bot-authored PR isn't skipped (CodeRabbit ignores commands issued by bot tokens):
+
+   ```bash
+   env -u GH_TOKEN -u GITHUB_TOKEN gh pr comment "$PR" --body "@coderabbitai full review"
+   ```
+
+   Narrate it ("Asked CodeRabbit for a full review — it runs async; I'll fold its findings in during triage"). **Do not block** on CR here; it posts on its own schedule and is collected in Phase 2.
+2. **Run the ensemble review** against the full PR diff using the existing rubric and scope-check (see [Single-pass mode](#single-pass-mode) for diff-gathering, the rubric prompt, and the scope-check). All configured providers in parallel; continue past any provider failure.
+3. **Post ONE rollup synthesis comment** to the PR (the [PR Review Synthesis Format](#pr-review-synthesis-format)), via `post-review.sh`. This is round 1's single comment — not per-finding.
+
+### PHASE 2 — Triage + fix
+
+1. **Collect findings from BOTH sources.**
+   - *Ensemble:* the synthesis just produced.
+   - *CodeRabbit:* read its review body **and** inline comments via the gh API, and record **which SHA it reviewed** (CR is async and may have reviewed an older commit):
+
+     ```bash
+     # CR's latest review + the commit it reviewed:
+     gh api "repos/$REPO/pulls/$PR/reviews" \
+       --jq '[.[] | select((.user.login//"")|test("coderabbit";"i"))] | max_by(.submitted_at)
+             | {sha: .commit_id, at: .submitted_at, body}'
+     # CR's inline comments:
+     gh api "repos/$REPO/pulls/$PR/comments" \
+       --jq '[.[] | select((.user.login//"")|test("coderabbit";"i"))]
+             | map({path, line, sha: .commit_id, body})'
+     ```
+
+     If CR hasn't posted yet, give it a short grace (it usually lands within a couple of minutes of the trigger), then **proceed with whatever is available** — never block indefinitely. If CR's reviewed SHA ≠ current head, flag it **stale** and carry that note into the disposition (e.g. "CodeRabbit reviewed `abc1234`, head is `def5678` — its comments may not reflect the latest commit").
+2. **Decide per finding:** FIX (with a one-line plan) or DECLINE (one-line reason). Dedup overlapping ensemble/CR findings so each real issue is handled once.
+3. **Apply the fixes** to the working tree.
+4. **Run the project's test suite** (auto-detect: `package.json` `scripts.test` → `npm/pnpm/yarn test`; `pytest`/`pyproject.toml`; `Makefile` `test` target; `cargo test`; `go test ./...`). **Only proceed if green.** If red, fix or revert until green; if you can't get it green, STOP and report rather than committing broken code.
+5. **Commit + push.** Conventional commit referencing the ticket (derive from branch/PR title):
+
+   ```bash
+   git commit -m "fix: address round-1 review findings (refs <ticket>)"
+   git push
+   NEW_HEAD=$(git rev-parse HEAD)
+   ```
+6. **Post ONE rollup "disposition" comment:** what was **fixed** (each with the commit SHA), what was **declined** (each with its reason), and any **stale-CR** note. One comment, not per-thread replies.
+
+### PHASE 3 — Round-2 targeted re-review
+
+1. **Don't block on CodeRabbit** — it usually doesn't re-fire. You *may* re-trigger it **once** (only if still under the ≤2 cap), but proceed regardless:
+
+   ```bash
+   env -u GH_TOKEN -u GITHUB_TOKEN gh pr comment "$PR" --body "@coderabbitai review"
+   ```
+2. **Run a TARGETED ensemble pass** scoped per `round2_scope` (default `fix-commits`):
+
+   ```bash
+   git diff "$ROUND1_HEAD".."$NEW_HEAD"     # default: only the fix commits
+   ```
+
+   (If `round2_scope` is a path-spec, scope to those files; if `full`, re-diff the whole PR.) Prompt the models explicitly:
+   > "These are ONLY the fix commits applied after round 1. Verify each fix is correct and regression-free. Do NOT re-review the whole feature — focus on whether the round-1 findings were properly resolved and whether the fixes introduced new problems."
+3. **If round 2 surfaces new must-fix findings** and you're still within the ≤2-round budget, **loop back through Phase 2 once** (this consumes the second round). After that, no further rounds — stop and report any remainder.
+4. **Post ONE rollup** with the round-2 disposition.
+
+### PHASE 4 — Merge confidence
+
+After the rounds settle, compute and print a **Merge Confidence percentage with reasoning**, judged on: zero unresolved critical/major findings, tests passing, both tools converging (or divergences consciously resolved), and round 2 verifying the fixes clean.
+
+Scoring heuristic (start at 100, deduct — this is guidance; always show the reasoning, not just the number):
+
+| Condition | Effect |
+|-----------|--------|
+| Any unresolved **critical** finding | cap at ≤ 50% |
+| Tests not green (failing or not run) | cap at ≤ 50% |
+| Each unresolved **major** finding | −15 |
+| Round 2 surfaced an unresolved must-fix | −20 |
+| Each unresolved tool **divergence** (one says ship, other flags) | −10 |
+| A **declined** finding a human should eyeball | −5 (residual callout, not a hard block) |
+
+Compare against `merge_confidence_threshold` (config; default **90**):
+
+- **≥ threshold → recommend merge.** List any residual callouts to glance at first. **Do NOT auto-merge.**
+- **< threshold → explain exactly what's dragging it down.** If a specific extra review would raise confidence (another targeted pass on a risky file, or a security-focused single-model pass), **offer to run it**, and if Kyle agrees, run it and re-score. An offered pass that would exceed the ≤2-round / ≤2-CR caps is a fresh, user-authorized action — say so before running it.
+
+Print the verdict:
+
+```text
+## Merge Confidence: NN%
+- Findings:  <critical / major / minor — resolved vs. open>
+- Tests:     <pass | fail | not-run>
+- Convergence: <ensemble & CodeRabbit agree | divergences resolved | open divergence>
+- Round 2:   <clean | surfaced N new must-fix>
+Recommendation: <MERGE — Kyle approves & merges | HOLD — reasons>
+Residual callouts: <bullets for the human, or "none">
+```
+
+---
+
+## Single-pass mode
+
+Reached via `--single`, `--post-to-pr`, or headless mode. One ensemble pass: gathers diff context, sends to all configured models, synthesizes, optionally posts. **Never** fixes, commits, or pushes.
 
 1. Get the diff to review (priority order):
    - PR number given: `gh pr diff <number>`
@@ -208,7 +346,7 @@ Ensemble PR review. Gathers diff context, sends to all configured models, synthe
    ```
 8. **Always print** the final markdown to stdout — required for headless mode (`claude -p`) where there is no interactive output.
 
-**Headless contract:** `claude -p "/ai-router review 42 --post-to-pr 42"` exits 0 iff (a) ≥1 provider returned 200 and (b) the PR comment posted. Providers rendered in stable order: Anthropic → OpenAI → Gemini.
+**Headless contract:** `claude -p "/ai-router review 42 --post-to-pr 42"` exits 0 iff (a) ≥1 provider returned 200 and (b) the PR comment posted. Providers rendered in stable order: Anthropic → OpenAI → Gemini. (`--post-to-pr` forces single-pass — orchestration never runs headless, so CI never commits.)
 
 ### PR Review Synthesis Format
 

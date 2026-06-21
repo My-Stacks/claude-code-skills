@@ -42,6 +42,46 @@ When constructing review prompts, instruct each model to evaluate:
 
 Ask models to reference specific lines/hunks and categorize severity (critical/suggestion/nit).
 
+## Orchestrated review (`/ai-router review` / `/ensemble-review`)
+
+Since v1.4, `review` defaults to a multi-phase **review → fix → re-review → merge-confidence** cycle. Full phase-by-phase instructions live in SKILL.md → "Orchestrated review-and-fix"; this section captures the supporting detail.
+
+### Mode selection
+
+| Invocation | Mode |
+|------------|------|
+| `/ai-router review [<pr>]`, `/ensemble-review [<pr>]` (interactive) | Orchestrated (all 4 phases) |
+| `--single` | Single-pass only |
+| `--post-to-pr <#>` | Single-pass only (forces it — keeps CI from committing) |
+| Headless (`AI_ROUTER_RUN_ID` set, e.g. `shadow-review`) | Single-pass only |
+
+Orchestration never runs headless, so a background/CI run can never commit, push, or trigger CodeRabbit.
+
+### CodeRabbit handling
+
+- **Trigger from the operator identity, not a bot token.** CodeRabbit ignores commands issued by bot tokens (`GH_TOKEN`/`GITHUB_TOKEN`-authored comments on a bot-authored PR get skipped), so always post the trigger with those unset:
+  ```bash
+  env -u GH_TOKEN -u GITHUB_TOKEN gh pr comment "$PR" --body "@coderabbitai full review"
+  ```
+- **Async, never blocked on.** CR reviews on its own schedule; the cycle proceeds with whatever CR has posted by triage time.
+- **Stale-SHA detection.** CR's review carries the `commit_id` it reviewed. If that ≠ the PR head at triage time, the disposition must say so explicitly — CR's findings may predate the latest commit. Pull it via:
+  ```bash
+  gh api "repos/$REPO/pulls/$PR/reviews" \
+    --jq '[.[] | select((.user.login//"")|test("coderabbit";"i"))] | max_by(.submitted_at) | {sha: .commit_id, at: .submitted_at}'
+  ```
+- **≤ 2 triggers per PR** (round-1 full review + at most one round-2 `@coderabbitai review`).
+
+### Merge confidence
+
+Default threshold **90%** (`merge_confidence_threshold` in config). Computed from: zero unresolved critical/major findings, tests green, ensemble/CodeRabbit convergence (or consciously-resolved divergence), and a clean round-2 verification. Scoring heuristic and the verdict block are in SKILL.md → Phase 4. Never auto-merges regardless of score.
+
+### Config tunables
+
+| Config key | Default | Effect |
+|------------|---------|--------|
+| `merge_confidence_threshold` | `90` | Phase-4 merge-recommend cutoff (0–100). |
+| `round2_scope` | `fix-commits` | Phase-3 targeted-diff scope: `fix-commits` (`git diff <round1_head>..<new_head>`), a path-spec string, or `full`. |
+
 ## Headless / CI Usage
 
 The skill is safe to run under `claude -p` (headless mode), which is how `/ai-router shadow-review` works. Key contract:
@@ -172,7 +212,10 @@ Prices may change. These are used for cost estimates only.
 | ask | 1 | ~$0.005 | ~$0.05 |
 | ensemble | 3 | ~$0.012 | ~$0.12 |
 | compare | 3 | ~$0.012 | ~$0.12 |
-| review | 3 | ~$0.05 | ~$0.15 |
+| review --single | 3 | ~$0.05 | ~$0.15 |
+| review (orchestrated) | 6+ (2 rounds × providers) | ~$0.10 | ~$0.30+ |
 | route/config/setup | 0 | $0 | — |
+
+The orchestrated `review` runs up to two ensemble rounds (round-1 full diff + round-2 fix-commits diff), so budget roughly 2× a single-pass review plus the smaller round-2 pass. Emit the per-round cost summary each round.
 
 When the prompt is large (e.g., PR diffs), note the approximate token count so the user can decide whether to proceed.
