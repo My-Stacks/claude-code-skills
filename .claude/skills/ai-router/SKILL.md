@@ -213,7 +213,7 @@ Run the **single-pass** path (no fixing, never commits — jump to the "Single-p
 - headless mode — `[ -n "$AI_ROUTER_RUN_ID" ]`, **or**
 - **the session is non-interactive** — no TTY / running under `claude -p` / any context where you cannot interactively confirm with the operator.
 
-Run the **orchestrated** path (Phases 1–4, which commit and push) **only** in an interactive session invoked as `/ai-router review [<pr>]` or `/ensemble-review [<pr>]` with none of the above flags. **If you are uncertain whether the session is interactive, treat it as single-pass.** This is the load-bearing safety gate: a bare `claude -p "/ai-router review 42"` must never fix/commit/push — it falls through to single-pass because it is both non-interactive and headless. The headless `--post-to-pr` contract is therefore always single-pass.
+Run the **orchestrated** path (Phases 1–4, which commit and push) **only** in an interactive session invoked as `/ai-router review [<pr>]` or `/ensemble-review [<pr>]` with none of the above flags. **If you are uncertain whether the session is interactive, treat it as single-pass.** This is the load-bearing safety gate: a bare `claude -p "/ai-router review 42"` must never fix/commit/push — it falls through to single-pass because it is non-interactive (and usually headless too). The headless `--post-to-pr` contract is therefore always single-pass.
 
 Subcommand parsing: a **known subcommand token** (`config`, `setup`, `route`, `ask`, `ensemble`, `compare`, `shadow-*`, `--single`) always wins over a PR argument — `/ensemble-review config` is config, not "review PR `config`." Only a positive integer or a PR URL is treated as the review target.
 
@@ -280,13 +280,15 @@ If no PR resolves, **stop** and ask Kyle to open one — do not invent a diff. V
    - The current branch **is** the PR's head branch and `HEAD` matches the PR head OID (you are about to push to the right place).
    - The branch is **not** protected — refuse if it matches `^(main|master|develop|release/.*)$`.
    - The PR head is **not** a fork you lack push rights to.
-   - The working tree contains no *unrelated* pre-existing changes — `git status --porcelain` should show only files you are about to touch. If there is unrelated local work, STOP and ask rather than sweeping it into the fix commit.
+   - The working tree is **clean at this point** — `git status --porcelain` is empty *before* you start editing (you haven't applied fixes yet, so there's nothing to confuse with your own edits). If there is any pre-existing local work, STOP and ask rather than risk sweeping it into the fix commit; only proceed past dirty state with explicit operator approval.
 4. **Apply the fixes** to the working tree — only the files tied to accepted findings.
 5. **Run the project's test suite if one exists.** Detect by manifest, preferring the lockfile/`packageManager` field to pick the runner (`pnpm-lock.yaml`→pnpm, `yarn.lock`→yarn, else npm; `pytest`/`pyproject.toml`; `Makefile` `test`; `cargo test`; `go test ./...`). **Only proceed if green.** Make at most **3** fix attempts to get green; if still red, revert the uncommitted fixes, STOP, and report the failing tests. **Security:** do not auto-run an untrusted/fork PR's test suite with provider keys and `gh` auth in the environment (arbitrary-code/secret-exposure risk) — for untrusted sources, skip tests and say so. **If no test suite exists,** do not treat that as "green": note "no test suite — fixes unverified by tests" and dock merge confidence in Phase 4.
-6. **Commit + push.** Conventional commit referencing the ticket (derive a `PROJ-123`-style id from the branch/PR title if present, else omit the `refs`):
+6. **Commit + push.** Conventional commit referencing the ticket. Derive a `PROJ-123`-style id from the branch/PR title; build the `refs` suffix **only when one is found** so no literal `<ticket>` placeholder is ever committed:
 
    ```bash
-   git commit -m "fix: address round-1 review findings (refs <ticket>)"
+   TICKET=$(git branch --show-current | grep -oE '[A-Z]+-[0-9]+' | head -1)
+   REFS=${TICKET:+ (refs $TICKET)}
+   git commit -m "fix: address round-1 review findings${REFS}"
    git push || { echo "push rejected — STOP and report (do not force-push)"; exit 1; }
    NEW_HEAD=$(git rev-parse HEAD)
    ```
@@ -296,10 +298,16 @@ If no PR resolves, **stop** and ask Kyle to open one — do not invent a diff. V
 
 ### PHASE 3 — Round-2 targeted re-review
 
-1. **Don't block on CodeRabbit** — it usually doesn't re-fire. You *may* re-trigger it **once** (only if still under the ≤2 cap), but proceed regardless:
+1. **Don't block on CodeRabbit** — it usually doesn't re-fire. You *may* re-trigger it **once**, but **re-count the cap immediately before posting** (don't rely on the setup-time count — Phase 1 may have consumed a trigger), and proceed regardless of whether it fires:
 
    ```bash
-   env -u GH_TOKEN -u GITHUB_TOKEN gh pr comment "$PR" --body "@coderabbitai review"
+   CR_TRIGGERS=$(gh api "repos/$REPO/issues/$PR/comments" \
+     --jq '[.[] | select(.body|test("@coderabbitai (full )?review";"i"))] | length')
+   if [ "${CR_TRIGGERS:-0}" -lt 2 ]; then
+     env -u GH_TOKEN -u GITHUB_TOKEN gh pr comment "$PR" --body "@coderabbitai review"
+   else
+     echo "CodeRabbit trigger cap (2) reached — skipping round-2 trigger."
+   fi
    ```
 2. **Run a TARGETED ensemble pass** (this is round 2 — the final ensemble pass) scoped per `round2_scope` (default `fix-commits`):
 
@@ -311,7 +319,7 @@ If no PR resolves, **stop** and ask Kyle to open one — do not invent a diff. V
 
    For a path-spec, pass it as a single quoted `-- "$SCOPE"` argument and **reject any value beginning with `-`** (option-injection). For `full`, instruct models to **suppress findings already raised in round 1** and report only what the fix commits introduced or changed. Prompt the models explicitly:
    > "These are ONLY the fix commits applied after round 1. Verify each fix is correct and regression-free. Do NOT re-review the whole feature — focus on whether the round-1 findings were properly resolved and whether the fixes introduced new problems."
-3. **If round 2 surfaces new must-fix findings:** apply fixes in the working tree, re-run tests, commit, and push **once more** — but do **NOT** run another ensemble pass. Round 2 is the last ensemble round; any findings that remain after this fix go into the Phase 4 verdict as open items. (This is the hard ≤2-round cap — never a third pass.)
+3. **If round 2 surfaces new must-fix findings:** apply fixes **once more, reusing the exact Phase 2 rules** — the pre-flight safety check, the bounded ≤3 test-fix attempts, and the guarded `git push || STOP` (never `--force`) — then stop. Do **NOT** run another ensemble pass. Round 2 is the last ensemble round; any findings that remain after this fix go into the Phase 4 verdict as open items. (This is the hard ≤2-round cap — never a third pass.)
 4. **Post ONE rollup** with the round-2 disposition.
 
 ### PHASE 4 — Merge confidence
