@@ -50,12 +50,13 @@ Since v1.4, `review` defaults to a multi-phase **review → fix → re-review �
 
 | Invocation | Mode |
 |------------|------|
-| `/ai-router review [<pr>]`, `/ensemble-review [<pr>]` (interactive) | Orchestrated (all 4 phases) |
+| `/ai-router review [<pr>]`, `/ensemble-review [<pr>]` (interactive, no single-pass flags) | Orchestrated (all 4 phases) |
 | `--single` | Single-pass only |
 | `--post-to-pr <#>` | Single-pass only (forces it — keeps CI from committing) |
 | Headless (`AI_ROUTER_RUN_ID` set, e.g. `shadow-review`) | Single-pass only |
+| **Non-interactive** (no TTY / `claude -p` / can't confirm with operator) | Single-pass only |
 
-Orchestration never runs headless, so a background/CI run can never commit, push, or trigger CodeRabbit.
+Orchestration runs **only** in an interactive session with none of the single-pass flags — so a background/CI run, or any non-interactive `claude -p` invocation, can never commit, push, or trigger CodeRabbit. When in doubt about interactivity, the skill falls back to single-pass.
 
 ### CodeRabbit handling
 

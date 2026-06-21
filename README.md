@@ -113,7 +113,7 @@ To upgrade:
 cp -r .claude/skills/ai-router/ ~/.claude/skills/ai-router/
 ```
 
-(No new scripts or permissions required — the orchestration reuses the existing `call-provider.sh` / `post-review.sh` allow-rules, plus your usual `gh` permissions for the CodeRabbit trigger comments.)
+No new scripts or permissions are required — the orchestration reuses the existing `call-provider.sh` / `post-review.sh` allow-rules, plus your usual `gh` permissions for the CodeRabbit trigger comments. Note, though, that orchestrated mode is materially more privileged than the old PR-comment-only behavior: it **commits and pushes to the PR branch** and posts trigger comments, so it requires repo write access and a trusted, clean working tree. It runs interactively only — `--single` / `--post-to-pr` remain the non-mutating CI path.
 
 ### AI Router v1.3
 
