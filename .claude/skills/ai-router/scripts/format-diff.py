@@ -17,10 +17,12 @@ Deterministic, stdlib-only, read-only. No network, no writes, no LLM.
 Usage:
     git diff -U8 <range> | python3 format-diff.py
     python3 format-diff.py < some.diff
-    python3 format-diff.py some.diff
 
-Input:  a unified diff on stdin (or a file path arg) — `git diff` / `gh pr diff`.
+Input:  a unified diff on stdin — `git diff` / `gh pr diff`.
 Output: the reformatted diff on stdout.
+
+stdin-only by design: it does not accept a file-path argument, so the
+allowlisted invocation can't be turned into an arbitrary-file reader.
 
 Exit codes:
     0  ok (including empty input -> empty output)
@@ -32,21 +34,64 @@ import sys
 HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@(.*)$")
 
 
+_OCTAL = set("01234567")
+_C_ESCAPES = {"a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12, "r": 13, '"': 34, "\\": 92}
+
+
+def _unquote_git_path(p: str) -> str:
+    # Git wraps paths containing special or non-ASCII bytes in double quotes and
+    # C-escapes the contents (e.g. `"b/na\303\251me"`, `"a/with\ttab"`). Decode
+    # back to a real path so the `## File:` header and `file:line` citations stay
+    # accurate. Non-quoted paths pass through untouched.
+    if not (len(p) >= 2 and p[0] == '"' and p[-1] == '"'):
+        return p
+    s = p[1:-1]
+    out = bytearray()
+    i = 0
+    while i < len(s):
+        c = s[i]
+        if c == "\\" and i + 1 < len(s):
+            nxt = s[i + 1]
+            if nxt in _C_ESCAPES:
+                out.append(_C_ESCAPES[nxt])
+                i += 2
+                continue
+            if nxt in _OCTAL:
+                j, digits = i + 1, ""
+                while j < len(s) and len(digits) < 3 and s[j] in _OCTAL:
+                    digits += s[j]
+                    j += 1
+                out.append(int(digits, 8) & 0xFF)
+                i = j
+                continue
+            out.append(0x5C)  # unknown escape — keep the backslash
+            i += 1
+            continue
+        out.extend(c.encode("utf-8"))
+        i += 1
+    try:
+        return out.decode("utf-8")
+    except UnicodeDecodeError:
+        return out.decode("latin-1")
+
+
 def _src_path(line: str) -> str:
-    # "diff --git a/foo b/foo" -> "foo". Handles paths with spaces by taking the
-    # b/ side from the last " b/" occurrence; falls back to the a/ side.
+    # "diff --git a/foo b/foo" -> "foo". Best-effort initial guess only: for quoted
+    # or space-containing paths this line is ambiguous, so the authoritative path is
+    # taken from the +++/--- markers in reformat(). Falls back to the a/ side.
     rest = line[len("diff --git ") :]
     idx = rest.rfind(" b/")
     if idx != -1:
-        return rest[idx + 3 :].strip()
+        return _unquote_git_path(rest[idx + 1 :].strip())[2:]
     if rest.startswith("a/"):
-        return rest[2:].strip()
-    return rest.strip()
+        return _unquote_git_path(rest[2:].strip())
+    return _unquote_git_path(rest.strip())
 
 
 def _path_from_marker(line: str) -> str:
-    # "+++ b/foo" / "--- a/foo" -> "foo"; "/dev/null" stays as-is.
-    p = line[4:].strip()
+    # "+++ b/foo" / "--- a/foo" -> "foo"; "/dev/null" stays as-is. Dequote first,
+    # because git wraps the whole token (prefix included): `+++ "b/na\303\251me"`.
+    p = _unquote_git_path(line[4:].strip())
     if p.startswith(("a/", "b/")):
         p = p[2:]
     return p
@@ -59,6 +104,7 @@ def reformat(diff_text: str) -> str:
     n = len(lines)
     cur_path = None          # path announced via "## File:"
     pending_path = None      # from "diff --git", confirmed/overridden by +++/---
+    pending_minus = None     # a-side path from "--- ", used for deletions
     file_is_binary = False
     in_file_header = False
 
@@ -74,24 +120,30 @@ def reformat(diff_text: str) -> str:
         line = lines[i]
 
         if line.startswith("diff --git "):
-            pending_path = _src_path(line)
+            pending_path = _src_path(line)   # fallback; overridden by +++/--- below
+            pending_minus = None
             file_is_binary = False
             in_file_header = True
             i += 1
             continue
 
-        # Within a file header, learn the real path and skip git metadata lines.
+        # Within a file header, the +++/--- markers are the authoritative path
+        # source — each names exactly one path, unlike the ambiguous "diff --git"
+        # line (which breaks on quoted or space-containing names). The b-side (+++)
+        # wins; for deletions (+++ /dev/null) we fall back to the a-side (---).
+        # `---` precedes `+++` in the stream, so pending_minus is set in time.
+        if in_file_header and line.startswith("--- "):
+            p = _path_from_marker(line)
+            if p and p != "/dev/null":
+                pending_minus = p
+            i += 1
+            continue
         if in_file_header and line.startswith("+++ "):
             p = _path_from_marker(line)
             if p and p != "/dev/null":
                 pending_path = p
-            i += 1
-            continue
-        if in_file_header and line.startswith("--- "):
-            # For deletions (+++ /dev/null) the a/ path is the meaningful one.
-            p = _path_from_marker(line)
-            if p and p != "/dev/null":
-                pending_path = pending_path or p
+            elif pending_minus:
+                pending_path = pending_minus
             i += 1
             continue
         if line.startswith("Binary files ") or line.startswith("GIT binary patch"):
@@ -181,21 +233,19 @@ def reformat(diff_text: str) -> str:
 
 
 def main(argv):
-    if len(argv) > 2:
-        sys.stderr.write("usage: format-diff.py [diff-file]   (or pipe diff on stdin)\n")
+    if len(argv) == 2 and argv[1] in ("-h", "--help"):
+        sys.stderr.write(__doc__ + "\n")
+        return 0
+    if len(argv) > 1:
+        # stdin-only by design — no file-path argument. This keeps the
+        # `format-diff.py:*` auto-mode allow-rule from being usable to read an
+        # arbitrary file into the session.
+        sys.stderr.write(
+            "usage: format-diff.py < diff   (reads a unified diff from stdin)\n"
+            "note: stdin-only — does not accept a file-path argument.\n"
+        )
         return 64
-    if len(argv) == 2:
-        if argv[1] in ("-h", "--help"):
-            sys.stderr.write(__doc__)
-            return 0
-        try:
-            with open(argv[1], "r", encoding="utf-8", errors="replace") as f:
-                data = f.read()
-        except OSError as e:
-            sys.stderr.write(f"format-diff.py: cannot read {argv[1]}: {e}\n")
-            return 64
-    else:
-        data = sys.stdin.read()
+    data = sys.stdin.read()
     sys.stdout.write(reformat(data))
     return 0
 
