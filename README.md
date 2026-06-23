@@ -8,7 +8,7 @@ Reusable components for [Claude Code](https://docs.anthropic.com/en/docs/claude-
 |-----------|------|---------|-------------|
 | [linear](./.claude/skills/linear/) | Skill | 0.5.1 | Linear project management with session continuity. Buffered writes, board management, ticket creation, structured handoffs persisted to Linear. Auto-maintains `.latest-status.md`. |
 | [vault-backup](./.claude/skills/vault-backup/) | Skill | 1.0 | Save research, project outputs, and knowledge artifacts from any Claude Code workspace into a shared Obsidian knowledge vault. |
-| [ai-router](./.claude/skills/ai-router/) | Skill | 1.6 | Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Grounded PR review: line-numbered diff + anti-hallucination rules, findings **verified against the diff** (hallucinated ones dropped), posted as **inline comments** with committable suggestions by default (or one summary comment with `--summary-only`), and **auto-resolves its own stale threads** on re-review. Headless-safe with `--post-to-pr` and `/ai-router shadow-review`. Requires `curl`, `jq`, `python3`, and (for PR posting) `gh`. |
+| [ai-router](./.claude/skills/ai-router/) | Skill | 1.7 | Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Grounded PR review: line-numbered diff + anti-hallucination rules, findings **verified against the diff** (hallucinated ones dropped), posted as **inline comments** with committable suggestions by default, **auto-resolves its own stale threads**, and an opt-in **persona-gated auto-fixer** (`--fix=propose\|auto`) that applies suggestions behind a verify-and-revert guard. Headless-safe with `--post-to-pr` and `/ai-router shadow-review`. Requires `curl`, `jq`, `python3`, and (for PR posting) `gh`. |
 | [create-client-pdf](./.claude/skills/create-client-pdf/) | Skill | 1.2.1 | Convert a Markdown file with YAML frontmatter into a client-presentable PDF, branded for Stacklab or Stacklist. Requires Python + Playwright (see `INSTALL.md`). |
 | [preflight](./.claude/skills/preflight/) | Skill | 5.0 | Pre-session safe-sync briefing for git repos: fast-forwards active branches to origin, flags stale ones, then reports local state, open PRs, and where new work should branch from. Only safe, non-destructive writes (ff-only sync); config is stored per-user outside the repo and the skill makes zero commits. Requires `git`; PR features require authenticated `gh`. |
 | [prod-readiness-audit](./.claude/skills/prod-readiness-audit/) | Skill | 1.1 | Read-only audit of any codebase across four buckets — infra/security/compliance, engineering, design/UX, and product analytics — returning a red/yellow/green scorecard and the single highest-priority fix. Accepts an optional path argument to scope to a subdirectory. |
@@ -101,6 +101,23 @@ The `handoff` skill has been retired. Session continuity is now part of the `lin
 
 ```bash
 rm -rf ~/.claude/skills/handoff/
+```
+
+### AI Router v1.7
+
+Phase 3: **the auto-fixer.** Opt-in, persona-gated application of findings' suggestions. `apply-fix.py` replaces lines only if their current content still matches the grounded `shown_code` (so a shifted/stale file or wrong branch can't be corrupted); `fix-findings.sh` orchestrates with guardrails: refuses on main/master, applies bottom-up per file, and runs as **`propose`** (apply to the working tree, show diff, commit nothing — developer default) or **`auto`** (apply only the conservative allowlist — confirmed + suggestion + safe category + non-sensitive path + small — run `$AI_ROUTER_FIX_VERIFY_CMD`, then commit + push + resolve threads on pass, or revert on fail; never pushes untested — guided default). Set posture via `review_persona` in config (`developer`/`guided`) or `--fix=<report|suggest|propose|auto>` per run. Verified end-to-end in a sandbox repo (propose, auto-pass commit+push, auto-fail revert, allowlist/denylist exclusion, main guardrail). Shadow (always-on) auto-fix is the next step — it needs `git worktree` isolation so it can't touch your checked-out tree.
+
+To upgrade:
+
+```bash
+cp -r .claude/skills/ai-router/ ~/.claude/skills/ai-router/
+```
+
+Then add the new allow-rules to `~/.claude/settings.json` `permissions.allow` (auto-mode users). Note these can edit files and, in `--fix=auto`, commit + push the current branch (never main) — review the guardrails before allowlisting on a shared machine:
+
+```json
+"Bash(python3 ~/.claude/skills/ai-router/scripts/apply-fix.py:*)",
+"Bash(bash ~/.claude/skills/ai-router/scripts/fix-findings.sh:*)"
 ```
 
 ### AI Router v1.6

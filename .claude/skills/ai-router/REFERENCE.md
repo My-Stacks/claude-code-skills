@@ -129,9 +129,32 @@ they don't pile up across pushes. REST can't resolve review threads, so this use
 The hidden marker is the contract — a human's thread (no marker) is never touched, and a Phase 3
 fixer can match a specific finding's thread by `path`/`line` to resolve exactly what it fixed.
 
-Roadmap: Phase 3 — an opt-in `fix-findings` step that *applies* suggestions, persona-gated
-(developers get suggestions; a `guided` persona gets a guarded auto-fixer on a conservative
-allowlist, never main, tests must pass), resolving each thread it fixes via `resolve-threads.sh`.
+## The fixer — `fix-findings.sh` + `apply-fix.py` (v1.7, Phase 3)
+
+Opt-in, persona-gated application of findings' `suggestion` code. Posture ladder:
+`report` → `suggest` (committable inline, shipped v1.5) → `propose` → `auto`.
+Default from `review_persona` (`developer` → suggest, `guided` → auto); `--fix=<level>` overrides.
+
+**`apply-fix.py`** is the safety primitive: it replaces lines `[start,end]` of a file with the
+suggestion **only if** the file's current content at those lines still exactly equals the grounded
+`shown_code` from verify. A shifted line, an already-edited file, or the wrong branch checked out
+all fail the match and write nothing — so the fixer cannot corrupt a file.
+
+**`fix-findings.sh`** orchestrates, all guardrails enforced in-script:
+
+- refuses on `main`/`master`/detached HEAD; refuses if a target file has other uncommitted changes;
+- applies **bottom-up per file** (highest line first) so earlier edits don't shift later line numbers;
+- **propose:** applies every confirmed finding with a suggestion to the working tree, prints the diff, commits nothing;
+- **auto:** applies only the conservative allowlist — confirmed + has suggestion + category in
+  {correctness, maintainability, performance, tests} (security is excluded → stays a suggestion) +
+  file path not in the sensitive denylist (`AI_ROUTER_FIX_DENYLIST`: auth, crypto, schema, config,
+  payment, infra, `.github/workflows`, …) + cited range ≤20 lines and suggestion ≤25 lines;
+- auto then runs `$AI_ROUTER_FIX_VERIFY_CMD`; on pass it commits (one revertible commit) + pushes the
+  current branch + resolves the fixed threads via `resolve-threads.sh`; on fail it reverts every edit
+  and pushes nothing; with no verify command it won't push (downgrades to leaving edits for review).
+
+Not yet wired: shadow (always-on) auto-fix, which needs `git worktree` isolation so it can't touch
+the user's checked-out tree — the planned next step.
 
 ## Headless / CI Usage
 
@@ -209,7 +232,9 @@ Users with `permissions.defaultMode: "auto"` in `~/.claude/settings.json` need t
 "Bash(python3 ~/.claude/skills/ai-router/scripts/format-diff.py:*)",
 "Bash(python3 ~/.claude/skills/ai-router/scripts/verify-findings.py:*)",
 "Bash(bash ~/.claude/skills/ai-router/scripts/post-inline.sh:*)",
-"Bash(bash ~/.claude/skills/ai-router/scripts/resolve-threads.sh:*)"
+"Bash(bash ~/.claude/skills/ai-router/scripts/resolve-threads.sh:*)",
+"Bash(python3 ~/.claude/skills/ai-router/scripts/apply-fix.py:*)",
+"Bash(bash ~/.claude/skills/ai-router/scripts/fix-findings.sh:*)"
 ```
 
 If `~` is not expanded in your Claude Code version, use the absolute path form (`/Users/<you>/.claude/skills/...`).
