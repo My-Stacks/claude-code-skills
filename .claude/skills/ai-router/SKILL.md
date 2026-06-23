@@ -1,6 +1,6 @@
 ---
 name: ai-router
-version: "1.8"
+version: "1.8.1"
 description: "Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Grounded PR review (line-numbered diff, anti-hallucination rules, findings verified against the diff, inline comments, auto-resolves stale threads, persona-gated auto-fixer interactive + always-on via worktree-isolated shadow). Headless-safe with --post-to-pr for shadow review."
 trigger: /ai-router
 ---
@@ -244,10 +244,7 @@ Ensemble PR review. Gathers diff context, sends to all configured models, synthe
       ```bash
       bash ~/.claude/skills/ai-router/scripts/post-inline.sh <pr-number> "$RUN/verified.json" "$RUN/synth.md"
       ```
-      Then clean up stale threads from prior runs on this PR — resolve ai-router's own **outdated** threads (code that changed since, so the finding was almost certainly addressed). Human threads are never touched (matched by a hidden `<!-- ai-router-finding -->` marker):
-      ```bash
-      bash ~/.claude/skills/ai-router/scripts/resolve-threads.sh <pr-number>
-      ```
+      Each inline comment carries a hidden per-finding marker (`<!-- ai-router-finding key=… -->`) so the fixer can later resolve exactly the threads it fixes. Posting does NOT auto-resolve old threads — stale-thread cleanup is either earned (the fixer resolves what it fixed, step 11) or manual (`/ai-router resolve`).
     - **`--summary-only`:** opt down to a single summary comment instead of inline threads:
       ```bash
       bash ~/.claude/skills/ai-router/scripts/post-review.sh <pr-number> "$RUN/synth.md"
@@ -258,7 +255,7 @@ Ensemble PR review. Gathers diff context, sends to all configured models, synthe
     bash ~/.claude/skills/ai-router/scripts/fix-findings.sh "$RUN/verified.json" <propose|auto> [<pr-number>]
     ```
     - **propose:** applies confirmed findings' suggestions to the working tree and stops (prints the diff; nothing committed). Developer posture.
-    - **auto:** applies only the conservative allowlist (confirmed + suggestion + category in correctness/maintainability/performance/tests + not a sensitive path + small), runs `$AI_ROUTER_FIX_VERIFY_CMD`, and only on pass commits + pushes to the current branch (never main) and resolves the fixed threads; on fail it reverts. With no verify command set, it downgrades to propose (won't push untested). Guided posture.
+    - **auto:** applies only the conservative allowlist (confirmed + suggestion + category in correctness/maintainability/performance/tests + not a sensitive path + small), runs `$AI_ROUTER_FIX_VERIFY_CMD`, and only on pass commits + pushes to the current branch (never main) and resolves **exactly the threads it fixed** (by per-finding key — `resolve-threads.sh --keys`, not a staleness guess); on fail it reverts. With no verify command set, it downgrades to propose (won't push untested). Guided posture.
 
     Both refuse on main/master and only touch files with no other uncommitted changes.
 12. **Always print** the final markdown to stdout — required for headless mode (`claude -p`) where there is no interactive output. Then `rm -rf "$RUN"`.
@@ -292,16 +289,16 @@ Because the diff is grounded, every finding carries a real `file:line`. Dedup ac
 
 ## `/ai-router resolve <pr-number> [--all]`
 
-Resolve ai-router's own inline review threads on a PR. Only threads carrying the hidden `<!-- ai-router-finding -->` marker are touched — human threads are never resolved. Uses the GraphQL API (REST can't resolve threads).
+**Manual** cleanup of ai-router's own inline threads. Only threads carrying the hidden `<!-- ai-router-finding` marker are touched — human threads are never resolved. Uses the GraphQL API (REST can't resolve threads). This is a human-triggered command; the automated flow does NOT run these heuristic modes — the fixer resolves only what it verified-fixed (by key, step 11).
 
-- **default:** resolve only **outdated** ai-router threads — the code they point at changed since, so the finding was almost certainly addressed. This is the re-review hygiene pass (also run automatically after an inline post, review step 10).
-- **`--all`:** resolve every unresolved ai-router thread on the PR (manual cleanup, e.g. before closing a PR).
+- **default:** resolve only **outdated** ai-router threads — GitHub flagged the anchored lines as changed (a *heuristic* for "addressed"). Re-review hygiene.
+- **`--all`:** resolve every unresolved ai-router thread on the PR (e.g. before closing a PR).
 
 ```bash
 bash ~/.claude/skills/ai-router/scripts/resolve-threads.sh <pr-number> [--all]
 ```
 
-Prints `resolved <N> ai-router thread(s)`.
+(There is also a `--keys <file>` mode used internally by `fix-findings.sh` to resolve exactly the threads it fixed; not for manual use.) Prints `resolved <N> ai-router thread(s)`.
 
 ---
 

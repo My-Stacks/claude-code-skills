@@ -21,8 +21,26 @@ Args:
 Exit 0 on success; 64 usage; 65 malformed findings JSON.
 """
 import argparse
+import hashlib
 import json
 import sys
+
+
+def finding_key(f):
+    """Stable per-finding id, embedded in each comment's marker. fix-findings
+    recomputes the same key to resolve exactly the threads it fixed (and only
+    those). Must stay byte-identical to the bash computation in fix-findings.sh:
+    sha1("<file>:<start>:<end>:<category>")[:12], where end falls back to start
+    and category to "" — matching jq's `.end_line // .start_line` and
+    `.category // ""` (handles missing OR null, which dict.get does not)."""
+    path = (f.get("verify") or {}).get("resolved_file") or f.get("file") or ""
+    start = f.get("start_line")
+    end = f.get("end_line")
+    if end is None:
+        end = start
+    cat = f.get("category") or ""
+    raw = f"{path}:{start}:{end}:{cat}"
+    return hashlib.sha1(raw.encode()).hexdigest()[:12]
 
 
 def comment_body(f):
@@ -40,9 +58,10 @@ def comment_body(f):
     sugg = f.get("suggestion")
     if f.get("verify", {}).get("status") == "confirmed" and isinstance(sugg, str) and sugg.strip():
         body += "\n\n```suggestion\n" + sugg.rstrip("\n") + "\n```"
-    # Hidden marker so resolve-threads.sh can identify ai-router's own threads
-    # (and never touch a human's). Renders as nothing on GitHub.
-    body += "\n\n<!-- ai-router-finding -->"
+    # Hidden marker identifying ai-router's own threads (never a human's), plus a
+    # per-finding key so the fixer can resolve exactly the threads it fixed.
+    # Renders as nothing on GitHub.
+    body += f"\n\n<!-- ai-router-finding key={finding_key(f)} -->"
     return body
 
 

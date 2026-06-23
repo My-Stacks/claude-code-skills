@@ -110,15 +110,25 @@ fi
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/ai-router-fix-XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 APPLIED=()        # "file:start-end"
+APPLIED_KEYS=()   # per-finding key of each applied fix (matches the inline marker)
 SKIPPED=()        # "file:start-end (reason)"
 declare -a FILES  # changed files (unique)
 
+# Per-finding key — MUST match build-review-payload.py's finding_key():
+# sha1("<file>:<start>:<end>:<category>")[:12]. Lets us resolve exactly the
+# threads we fixed, by their marker key.
+finding_key() {
+  python3 -c 'import hashlib,sys; print(hashlib.sha1((":".join(sys.argv[1:5])).encode()).hexdigest()[:12])' \
+    "$1" "$2" "$3" "$4"
+}
+
 apply_one() {
   local i=$1
-  local f s e
+  local f s e cat
   f=$(jq -r ".[$i].verify.resolved_file // .[$i].file" <<<"$ELIGIBLE")
   s=$(jq -r ".[$i].start_line" <<<"$ELIGIBLE")
   e=$(jq -r ".[$i].end_line // .[$i].start_line" <<<"$ELIGIBLE")
+  cat=$(jq -r ".[$i].category // \"\"" <<<"$ELIGIBLE")
   jq -r ".[$i].verify.shown_code" <<<"$ELIGIBLE" > "$TMP/expected"
   jq -r ".[$i].suggestion" <<<"$ELIGIBLE" > "$TMP/repl"
   if [[ ! -f "$f" ]]; then SKIPPED+=("$f:$s-$e (file not found in tree)"); return; fi
@@ -127,6 +137,7 @@ apply_one() {
     --expected "$TMP/expected" --replacement "$TMP/repl" 2>"$TMP/err" || rc=$?
   if [[ $rc -eq 0 ]]; then
     APPLIED+=("$f:$s-$e")
+    APPLIED_KEYS+=("$(finding_key "$f" "$s" "$e" "$cat")")
     local seen=0; for x in "${FILES[@]:-}"; do [[ "$x" == "$f" ]] && seen=1; done
     [[ $seen -eq 0 ]] && FILES+=("$f")
   elif [[ $rc -eq 3 ]]; then SKIPPED+=("$f:$s-$e (stale — file changed since review)")
@@ -215,6 +226,11 @@ fi
 print_summary
 echo
 echo "auto: committed + pushed ${#APPLIED[@]} fix(es) to '$PUSH_TARGET'."
-if [[ -n "$PR" ]]; then
-  bash "$SCRIPT_DIR/resolve-threads.sh" "$PR" || echo "(thread resolve skipped/failed — non-fatal)"
+# Resolve exactly the threads we just fixed — by their per-finding key, not a
+# staleness heuristic. Only findings that were applied AND passed verify get
+# here, so each resolve is earned. Best-effort; never fail the push over it.
+if [[ -n "$PR" && ${#APPLIED_KEYS[@]} -gt 0 ]]; then
+  printf '%s\n' "${APPLIED_KEYS[@]}" > "$TMP/fixed.keys"
+  bash "$SCRIPT_DIR/resolve-threads.sh" "$PR" --keys "$TMP/fixed.keys" \
+    || echo "(thread resolve skipped/failed — non-fatal)"
 fi

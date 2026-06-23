@@ -8,7 +8,7 @@ Reusable components for [Claude Code](https://docs.anthropic.com/en/docs/claude-
 |-----------|------|---------|-------------|
 | [linear](./.claude/skills/linear/) | Skill | 0.5.1 | Linear project management with session continuity. Buffered writes, board management, ticket creation, structured handoffs persisted to Linear. Auto-maintains `.latest-status.md`. |
 | [vault-backup](./.claude/skills/vault-backup/) | Skill | 1.0 | Save research, project outputs, and knowledge artifacts from any Claude Code workspace into a shared Obsidian knowledge vault. |
-| [ai-router](./.claude/skills/ai-router/) | Skill | 1.8 | Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Grounded PR review: line-numbered diff + anti-hallucination rules, findings **verified against the diff** (hallucinated ones dropped), posted as **inline comments** with committable suggestions by default, **auto-resolves its own stale threads**, and a **persona-gated auto-fixer** — interactive (`--fix=propose\|auto`) and **always-on** via the shadow flow (`shadow-review --fix`), which fixes in an isolated `git worktree` so it never touches your checkout. Headless-safe with `--post-to-pr` and `/ai-router shadow-review`. Requires `curl`, `jq`, `python3`, and (for PR posting) `gh`. |
+| [ai-router](./.claude/skills/ai-router/) | Skill | 1.8.1 | Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Grounded PR review: line-numbered diff + anti-hallucination rules, findings **verified against the diff** (hallucinated ones dropped), posted as **inline comments** with committable suggestions by default, **resolves exactly the threads it verified-fixed** (by per-finding key), and a **persona-gated auto-fixer** — interactive (`--fix=propose\|auto`) and **always-on** via the shadow flow (`shadow-review --fix`), which fixes in an isolated `git worktree` so it never touches your checkout. Headless-safe with `--post-to-pr` and `/ai-router shadow-review`. Requires `curl`, `jq`, `python3`, and (for PR posting) `gh`. |
 | [create-client-pdf](./.claude/skills/create-client-pdf/) | Skill | 1.2.1 | Convert a Markdown file with YAML frontmatter into a client-presentable PDF, branded for Stacklab or Stacklist. Requires Python + Playwright (see `INSTALL.md`). |
 | [preflight](./.claude/skills/preflight/) | Skill | 5.0 | Pre-session safe-sync briefing for git repos: fast-forwards active branches to origin, flags stale ones, then reports local state, open PRs, and where new work should branch from. Only safe, non-destructive writes (ff-only sync); config is stored per-user outside the repo and the skill makes zero commits. Requires `git`; PR features require authenticated `gh`. |
 | [prod-readiness-audit](./.claude/skills/prod-readiness-audit/) | Skill | 1.1 | Read-only audit of any codebase across four buckets — infra/security/compliance, engineering, design/UX, and product analytics — returning a red/yellow/green scorecard and the single highest-priority fix. Accepts an optional path argument to scope to a subdirectory. |
@@ -101,6 +101,16 @@ The `handoff` skill has been retired. Session continuity is now part of the `lin
 
 ```bash
 rm -rf ~/.claude/skills/handoff/
+```
+
+### AI Router v1.8.1
+
+**Verified, key-based thread resolution.** Thread-resolve went from a heuristic to an earned action. Each inline comment now carries a per-finding key (`<!-- ai-router-finding key=sha1(file:start:end:category)[:12] -->`), and `fix-findings` resolves **only the threads whose findings it actually applied and test-passed** (`resolve-threads.sh --keys`). The automated `isOutdated` auto-resolve is retired — it was both a guess *and* a standalone external-write the headless safety classifier rightly flagged. The heuristic modes (`default` / `--all`) remain for **manual** `/ai-router resolve` only. Net: the only unattended GitHub mutation from resolve is now provably tied to a verified fix, and it runs as part of the fixer's already-authorized operation (no classifier circumvention). Key computation is byte-identical Python↔bash (verified). No new allow-rules.
+
+To upgrade:
+
+```bash
+cp -r .claude/skills/ai-router/ ~/.claude/skills/ai-router/
 ```
 
 ### AI Router v1.8

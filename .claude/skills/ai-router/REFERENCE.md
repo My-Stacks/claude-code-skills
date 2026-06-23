@@ -114,20 +114,29 @@ GitHub PR review (`POST /pulls/{pr}/reviews`, `event=COMMENT`):
 - every inline comment carries a hidden `<!-- ai-router-finding -->` marker so its thread can
   later be identified and resolved without touching human threads.
 
-## Resolving threads — `resolve-threads.sh` (v1.6)
+## Resolving threads — `resolve-threads.sh` (v1.6, by-key in v1.8.1)
 
-CodeRabbit-style hygiene: ai-router resolves its **own** inline threads once they're stale, so
-they don't pile up across pushes. REST can't resolve review threads, so this uses GraphQL
-(`reviewThreads` query + `resolveReviewThread` mutation).
+ai-router resolves its **own** inline threads. REST can't resolve review threads, so this uses
+GraphQL (`reviewThreads` query + `resolveReviewThread` mutation). Only threads whose first comment
+carries the `<!-- ai-router-finding` marker are ever touched — a human's thread is never resolved.
 
-- Only threads whose first comment carries `<!-- ai-router-finding -->` are ever resolved.
-- **default:** resolve only `isOutdated` threads — the code they anchor to changed since the
-  comment was posted, so the finding was almost certainly addressed. The review flow runs this
-  automatically right after an inline post (step 10), cleaning up the previous run's threads.
-- **`--all`:** resolve every unresolved ai-router thread (manual cleanup via `/ai-router resolve <pr> --all`).
+Three modes; **only the first runs automatically**:
 
-The hidden marker is the contract — a human's thread (no marker) is never touched, and a Phase 3
-fixer can match a specific finding's thread by `path`/`line` to resolve exactly what it fixed.
+- **`--keys <file>` (verified, automated):** resolve exactly the threads whose per-finding key is
+  in the file. `fix-findings.sh` passes the keys of findings it actually applied **and** test-passed,
+  so each resolve is *earned* — not a guess. This is the only resolve in the unattended path, and it
+  runs nested inside the already-authorized `fix-findings.sh` (its own legitimate fix→commit→push→close
+  operation), not as a standalone step.
+- **default `isOutdated` (heuristic, manual):** resolve threads GitHub flagged as outdated (anchored
+  lines changed — a *proxy* for "addressed"). Human-triggered via `/ai-router resolve <pr>` only.
+- **`--all` (manual):** every unresolved ai-router thread, e.g. before closing a PR.
+
+The per-finding **key** is `sha1("<file>:<start>:<end>:<category>")[:12]`, embedded in each inline
+comment's marker by `build-review-payload.py` and recomputed identically (Python ↔ bash) by
+`fix-findings.sh`. Why we retired the automated `isOutdated` pass: it was a heuristic *and* it ran as
+a standalone external-write tool call that the headless auto-mode safety classifier (rightly) flagged.
+By-key resolve is both more accurate (verified, not guessed) and a coherent part of the fixer's
+authorized operation.
 
 ## The fixer — `fix-findings.sh` + `apply-fix.py` (v1.7, Phase 3)
 
