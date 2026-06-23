@@ -40,6 +40,9 @@ def comment_body(f):
     sugg = f.get("suggestion")
     if f.get("verify", {}).get("status") == "confirmed" and isinstance(sugg, str) and sugg.strip():
         body += "\n\n```suggestion\n" + sugg.rstrip("\n") + "\n```"
+    # Hidden marker so resolve-threads.sh can identify ai-router's own threads
+    # (and never touch a human's). Renders as nothing on GitHub.
+    body += "\n\n<!-- ai-router-finding -->"
     return body
 
 

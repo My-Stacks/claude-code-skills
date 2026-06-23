@@ -110,11 +110,28 @@ GitHub PR review (`POST /pulls/{pr}/reviews`, `event=COMMENT`):
   code) — the human clicks "Commit suggestion" (this is the L1 "suggest" posture; auto-apply is Phase 3);
 - `unverified` findings are appended to the review body under "Not grounded", never posted inline
   (GitHub rejects comments on out-of-diff lines — so the verify gate is also what makes inline posting valid);
-- same input-file safety model as `post-review.sh` (trusted tmpdir, owner check, no symlinks).
+- same input-file safety model as `post-review.sh` (trusted tmpdir, owner check, no symlinks);
+- every inline comment carries a hidden `<!-- ai-router-finding -->` marker so its thread can
+  later be identified and resolved without touching human threads.
+
+## Resolving threads — `resolve-threads.sh` (v1.6)
+
+CodeRabbit-style hygiene: ai-router resolves its **own** inline threads once they're stale, so
+they don't pile up across pushes. REST can't resolve review threads, so this uses GraphQL
+(`reviewThreads` query + `resolveReviewThread` mutation).
+
+- Only threads whose first comment carries `<!-- ai-router-finding -->` are ever resolved.
+- **default:** resolve only `isOutdated` threads — the code they anchor to changed since the
+  comment was posted, so the finding was almost certainly addressed. The review flow runs this
+  automatically right after an inline post (step 10), cleaning up the previous run's threads.
+- **`--all`:** resolve every unresolved ai-router thread (manual cleanup via `/ai-router resolve <pr> --all`).
+
+The hidden marker is the contract — a human's thread (no marker) is never touched, and a Phase 3
+fixer can match a specific finding's thread by `path`/`line` to resolve exactly what it fixed.
 
 Roadmap: Phase 3 — an opt-in `fix-findings` step that *applies* suggestions, persona-gated
 (developers get suggestions; a `guided` persona gets a guarded auto-fixer on a conservative
-allowlist, never main, tests must pass).
+allowlist, never main, tests must pass), resolving each thread it fixes via `resolve-threads.sh`.
 
 ## Headless / CI Usage
 
@@ -191,7 +208,8 @@ Users with `permissions.defaultMode: "auto"` in `~/.claude/settings.json` need t
 "Bash(bash ~/.claude/skills/ai-router/scripts/shadow-poll.sh:*)",
 "Bash(python3 ~/.claude/skills/ai-router/scripts/format-diff.py:*)",
 "Bash(python3 ~/.claude/skills/ai-router/scripts/verify-findings.py:*)",
-"Bash(bash ~/.claude/skills/ai-router/scripts/post-inline.sh:*)"
+"Bash(bash ~/.claude/skills/ai-router/scripts/post-inline.sh:*)",
+"Bash(bash ~/.claude/skills/ai-router/scripts/resolve-threads.sh:*)"
 ```
 
 If `~` is not expanded in your Claude Code version, use the absolute path form (`/Users/<you>/.claude/skills/...`).

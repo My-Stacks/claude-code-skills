@@ -1,7 +1,7 @@
 ---
 name: ai-router
-version: "1.5"
-description: "Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Grounded PR review (line-numbered diff, anti-hallucination rules, findings verified against the diff, inline comments). Headless-safe with --post-to-pr for shadow review."
+version: "1.6"
+description: "Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Grounded PR review (line-numbered diff, anti-hallucination rules, findings verified against the diff, inline comments, auto-resolves its own stale threads). Headless-safe with --post-to-pr for shadow review."
 trigger: /ai-router
 ---
 
@@ -86,6 +86,7 @@ If missing, run setup:
 | `/ai-router ask <prompt>` | Send to one external model | Yes |
 | `/ai-router ensemble <prompt>` | Send to all configured models, synthesize | Yes |
 | `/ai-router review [<pr>] [--post-to-pr <pr>] [--summary-only]` | Ensemble PR review, verified against the diff; posts inline comments by default (`--summary-only` for one comment) | Yes |
+| `/ai-router resolve <pr> [--all]` | Resolve ai-router's own inline threads (outdated by default, `--all` for all) | No |
 | `/ai-router shadow-review [--post] [--pr <#>] [--wait-cr] [--wait-reviewers]` | Spawn a background review; default stdout-only and surfaces as soon as ai-router finishes. `--wait-cr` adds CodeRabbit to the AND-wait, `--wait-reviewers` adds any non-author reviewer. | Yes |
 | `/ai-router shadow-list` | List active shadow runs for this repo | No |
 | `/ai-router shadow-cancel [<pr>]` | Stop a running shadow-review (most-recent if no PR given) | No |
@@ -237,6 +238,10 @@ Ensemble PR review. Gathers diff context, sends to all configured models, synthe
       ```bash
       bash ~/.claude/skills/ai-router/scripts/post-inline.sh <pr-number> "$RUN/verified.json" "$RUN/synth.md"
       ```
+      Then clean up stale threads from prior runs on this PR — resolve ai-router's own **outdated** threads (code that changed since, so the finding was almost certainly addressed). Human threads are never touched (matched by a hidden `<!-- ai-router-finding -->` marker):
+      ```bash
+      bash ~/.claude/skills/ai-router/scripts/resolve-threads.sh <pr-number>
+      ```
     - **`--summary-only`:** opt down to a single summary comment instead of inline threads:
       ```bash
       bash ~/.claude/skills/ai-router/scripts/post-review.sh <pr-number> "$RUN/synth.md"
@@ -268,6 +273,21 @@ Because the diff is grounded, every finding carries a real `file:line`. Dedup ac
 ### Summary
 [Overall assessment]
 ```
+
+---
+
+## `/ai-router resolve <pr-number> [--all]`
+
+Resolve ai-router's own inline review threads on a PR. Only threads carrying the hidden `<!-- ai-router-finding -->` marker are touched — human threads are never resolved. Uses the GraphQL API (REST can't resolve threads).
+
+- **default:** resolve only **outdated** ai-router threads — the code they point at changed since, so the finding was almost certainly addressed. This is the re-review hygiene pass (also run automatically after an inline post, review step 10).
+- **`--all`:** resolve every unresolved ai-router thread on the PR (manual cleanup, e.g. before closing a PR).
+
+```bash
+bash ~/.claude/skills/ai-router/scripts/resolve-threads.sh <pr-number> [--all]
+```
+
+Prints `resolved <N> ai-router thread(s)`.
 
 ---
 
@@ -555,10 +575,11 @@ Add to `~/.claude/settings.json` `permissions.allow`:
 "Bash(bash ~/.claude/skills/ai-router/scripts/shadow-poll.sh:*)",
 "Bash(python3 ~/.claude/skills/ai-router/scripts/format-diff.py:*)",
 "Bash(python3 ~/.claude/skills/ai-router/scripts/verify-findings.py:*)",
-"Bash(bash ~/.claude/skills/ai-router/scripts/post-inline.sh:*)"
+"Bash(bash ~/.claude/skills/ai-router/scripts/post-inline.sh:*)",
+"Bash(bash ~/.claude/skills/ai-router/scripts/resolve-threads.sh:*)"
 ```
 
-Without these, `defaultMode: "auto"` will prompt on every call. (`format-diff.py` and `verify-findings.py` are read-only — no network, no writes; `post-inline.sh` posts to a PR, same trust model as `post-review.sh`.) (Allow-rule paths must match the literal command Claude invokes; if `~` doesn't expand in your Claude Code version, use `/Users/<you>/.claude/skills/ai-router/scripts/...`.)
+Without these, `defaultMode: "auto"` will prompt on every call. (`format-diff.py` and `verify-findings.py` are read-only — no network, no writes; `post-inline.sh` and `resolve-threads.sh` write to a PR, same trust model as `post-review.sh`.) (Allow-rule paths must match the literal command Claude invokes; if `~` doesn't expand in your Claude Code version, use `/Users/<you>/.claude/skills/ai-router/scripts/...`.)
 
 ### Model Override
 

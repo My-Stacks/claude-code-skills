@@ -66,7 +66,7 @@ SHA=$(gh pr view "$PR" --json headRefOid -q .headRefOid)
 
 SKILL_MD="$SCRIPT_DIR/../SKILL.md"
 SKILL_VER=$(awk -F'"' '/^version:/ {print $2; exit}' "$SKILL_MD" 2>/dev/null || true)
-SKILL_VER=${SKILL_VER:-1.5}
+SKILL_VER=${SKILL_VER:-1.6}
 RUN_ID=${AI_ROUTER_RUN_ID:-$(python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null || echo "run-$(date +%s)-$$")}
 [[ "$RUN_ID" =~ ^[A-Za-z0-9._:-]+$ ]] || { echo "post-inline.sh: invalid RUN_ID: $RUN_ID" >&2; exit 2; }
 
