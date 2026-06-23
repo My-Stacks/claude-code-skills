@@ -47,8 +47,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "not a git repo" >&2; exit 2; }
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 
+# AI_ROUTER_FIX_PUSH_REF: when set, we're in a detached worktree (the shadow
+# flow) and push the resulting commit to that remote branch instead of the
+# current local branch. Lets auto-fix run on an isolated checkout that never
+# touches the user's working tree.
+PUSH_REF=${AI_ROUTER_FIX_PUSH_REF:-}
+
 # --- Guardrails ------------------------------------------------------------
-if [[ "$BRANCH" == "main" || "$BRANCH" == "master" || "$BRANCH" == "HEAD" ]]; then
+if [[ -n "$PUSH_REF" ]]; then
+  if [[ "$PUSH_REF" == "main" || "$PUSH_REF" == "master" ]]; then
+    echo "fix-findings.sh: refusing to push fixes to '$PUSH_REF'." >&2
+    exit 2
+  fi
+elif [[ "$BRANCH" == "main" || "$BRANCH" == "master" || "$BRANCH" == "HEAD" ]]; then
   echo "fix-findings.sh: refusing to fix on '$BRANCH' — check out a feature branch first." >&2
   exit 2
 fi
@@ -187,17 +198,23 @@ echo "auto: verify passed."
 
 git add -- "${FILES[@]}"
 git commit -F "$TMP/msg" >/dev/null
-# Plain push to the current (non-main, verified above) branch. Never force.
-if ! git push origin "$BRANCH" >/dev/null 2>"$TMP/push.err"; then
+# Push to the PR branch. PUSH_REF mode (detached worktree) pushes HEAD to the
+# named remote branch; otherwise push the current branch. Never force.
+if [[ -n "$PUSH_REF" ]]; then
+  PUSH_TARGET="$PUSH_REF"; PUSH_SPEC="HEAD:$PUSH_REF"
+else
+  PUSH_TARGET="$BRANCH"; PUSH_SPEC="$BRANCH"
+fi
+if ! git push origin "$PUSH_SPEC" >/dev/null 2>"$TMP/push.err"; then
   echo "auto: committed locally but push failed:" >&2
   cat "$TMP/push.err" >&2
-  echo "(commit is on '$BRANCH'; push manually.)"
+  echo "(commit is local; push '$PUSH_SPEC' manually.)"
   exit 1
 fi
 
 print_summary
 echo
-echo "auto: committed + pushed ${#APPLIED[@]} fix(es) to '$BRANCH'."
+echo "auto: committed + pushed ${#APPLIED[@]} fix(es) to '$PUSH_TARGET'."
 if [[ -n "$PR" ]]; then
   bash "$SCRIPT_DIR/resolve-threads.sh" "$PR" || echo "(thread resolve skipped/failed — non-fatal)"
 fi

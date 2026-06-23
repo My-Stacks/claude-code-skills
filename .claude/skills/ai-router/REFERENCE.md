@@ -153,8 +153,19 @@ all fail the match and write nothing — so the fixer cannot corrupt a file.
   current branch + resolves the fixed threads via `resolve-threads.sh`; on fail it reverts every edit
   and pushes nothing; with no verify command it won't push (downgrades to leaving edits for review).
 
-Not yet wired: shadow (always-on) auto-fix, which needs `git worktree` isolation so it can't touch
-the user's checked-out tree — the planned next step.
+### Always-on auto-fix in the shadow (v1.8)
+
+`shadow-review --fix` runs the auto-fixer on every PR in the background, for the `guided` persona.
+Since the shadow shares the user's working directory, it does NOT fix in place: `shadow-runner.sh`
+fetches the PR's head branch and checks it out in an **isolated detached `git worktree`** under the
+state dir, runs `review … --fix=auto` there, and `fix-findings.sh` pushes `HEAD` to the PR branch
+via `AI_ROUTER_FIX_PUSH_REF` (so a detached worktree can update the branch). The user's checkout and
+current branch are never touched. The worktree is removed on every exit, with `git worktree prune`
+to reclaim metadata after a hard kill.
+
+Auto-fix is skipped (review-only) for fork PRs (no push access) or when `AI_ROUTER_FIX_VERIFY_CMD`
+is unset. `shadow-spawn.sh --fix` persists the choice to `$STATE/fix` and passes it as the 6th arg
+to `shadow-runner.sh`.
 
 ## Headless / CI Usage
 

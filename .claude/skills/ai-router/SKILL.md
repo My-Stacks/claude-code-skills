@@ -1,7 +1,7 @@
 ---
 name: ai-router
-version: "1.7"
-description: "Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Grounded PR review (line-numbered diff, anti-hallucination rules, findings verified against the diff, inline comments, auto-resolves stale threads, optional persona-gated auto-fixer). Headless-safe with --post-to-pr for shadow review."
+version: "1.8"
+description: "Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Grounded PR review (line-numbered diff, anti-hallucination rules, findings verified against the diff, inline comments, auto-resolves stale threads, persona-gated auto-fixer interactive + always-on via worktree-isolated shadow). Headless-safe with --post-to-pr for shadow review."
 trigger: /ai-router
 ---
 
@@ -93,7 +93,7 @@ If missing, run setup:
 | `/ai-router ensemble <prompt>` | Send to all configured models, synthesize | Yes |
 | `/ai-router review [<pr>] [--post-to-pr <pr>] [--summary-only] [--fix=<level>]` | Ensemble PR review, verified against the diff; posts inline comments by default; `--fix=propose\|auto` also applies fixes (persona-gated) | Yes |
 | `/ai-router resolve <pr> [--all]` | Resolve ai-router's own inline threads (outdated by default, `--all` for all) | No |
-| `/ai-router shadow-review [--post] [--pr <#>] [--wait-cr] [--wait-reviewers]` | Spawn a background review; default stdout-only and surfaces as soon as ai-router finishes. `--wait-cr` adds CodeRabbit to the AND-wait, `--wait-reviewers` adds any non-author reviewer. | Yes |
+| `/ai-router shadow-review [--post] [--pr <#>] [--wait-cr] [--wait-reviewers] [--fix]` | Spawn a background review; default stdout-only and surfaces as soon as ai-router finishes. `--wait-cr` adds CodeRabbit to the AND-wait, `--wait-reviewers` adds any non-author reviewer. `--fix` auto-fixes in an isolated worktree (guided persona). | Yes |
 | `/ai-router shadow-list` | List active shadow runs for this repo | No |
 | `/ai-router shadow-cancel [<pr>]` | Stop a running shadow-review (most-recent if no PR given) | No |
 | `/ai-router compare <prompt>` | Side-by-side without synthesis | Yes |
@@ -305,11 +305,13 @@ Prints `resolved <N> ai-router thread(s)`.
 
 ---
 
-## `/ai-router shadow-review [--post] [--pr <#>] [--wait-cr] [--wait-reviewers]`
+## `/ai-router shadow-review [--post] [--pr <#>] [--wait-cr] [--wait-reviewers] [--fix]`
 
 Run an ensemble PR review in a background headless Claude Code instance ("shadow") that has minimal context bleed from the active session (see Isolation below). The shadow writes the synthesized review to `$STATE/shadow.log`; the active session polls every 3 minutes and surfaces the review when ready.
 
 **Posting is opt-in.** Default is stdout/log only — the user reads the synthesis, decides what to keep, and posts in their own voice. Pass `--post` to post to the PR; the headless run uses the same `review` flow, so it posts **inline comments by default** (a PR review carrying the `<!-- ai-router:review:inline … -->` marker). The poller matches ai-router's post by `run-id`, checking both the issue-comments and pulls/reviews endpoints, so it detects the inline review (or a summary comment) either way.
+
+**Fixing is opt-in (`--fix`).** This is the always-on auto-fixer for the `guided` persona — auto-fix on every PR. Because the shadow shares the user's working directory, it does NOT fix in place: `shadow-runner.sh` checks out the PR's head branch in an **isolated detached `git worktree`** under the state dir, runs the review there with `--fix=auto`, commits in the worktree, and pushes `HEAD` to the PR branch — the user's checkout and current branch are never touched. The worktree is removed on any exit (and `git worktree prune` reclaims metadata after a hard kill). Auto-fix is **skipped (review-only)** when: it's a fork PR (can't push), or `AI_ROUTER_FIX_VERIFY_CMD` is unset (an unattended fix must be test-gated, and the worktree is discarded after — an un-pushable fix would be wasted work). The same conservative allowlist as interactive `--fix=auto` applies (never main, security/sensitive paths excluded, tests must pass or it reverts).
 
 **Waiting is opt-in (AND semantics).** With no `--wait-*` flag, the run surfaces as `ONLY_AI_ROUTER_READY` as soon as the headless ai-router review finishes (usually 2–4 min). Add flags to extend the wait — every flag is an AND clause:
 
@@ -366,12 +368,13 @@ If the parent session ends after spawning but before the cron fires `ALL_READY` 
 
 3. **Confirm** with a single Y/N: "Shadow-review PR #N. Spawns a headless claude in background, polls every 3 min, 30 min timeout. Posting to PR: \<yes/no\>. Waiting: \<none | CodeRabbit | reviewers | CodeRabbit+reviewers\>. OK?"
 
-4. **Spawn** (pass only the flags the user actually opted into):
+4. **Spawn** (pass only the flags the user actually opted into; also pass `--fix` when the user asked for it OR `review_persona` is `guided`):
    ```bash
    STATE=$(bash ~/.claude/skills/ai-router/scripts/shadow-spawn.sh <PR> \
      [--wait-cr] \
      [--wait-reviewers] \
-     [--post])
+     [--post] \
+     [--fix])   # --fix → worktree-isolated auto-fix (guided persona default; needs AI_ROUTER_FIX_VERIFY_CMD)
    ```
 
 5. **Schedule the poll** via `CronCreate` with cron `*/3 * * * *`. Save the cron ID to `$STATE/cron.id`. Use this prompt verbatim (substituting `<PR>` and `<STATE>`):

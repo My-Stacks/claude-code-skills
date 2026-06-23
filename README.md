@@ -8,7 +8,7 @@ Reusable components for [Claude Code](https://docs.anthropic.com/en/docs/claude-
 |-----------|------|---------|-------------|
 | [linear](./.claude/skills/linear/) | Skill | 0.5.1 | Linear project management with session continuity. Buffered writes, board management, ticket creation, structured handoffs persisted to Linear. Auto-maintains `.latest-status.md`. |
 | [vault-backup](./.claude/skills/vault-backup/) | Skill | 1.0 | Save research, project outputs, and knowledge artifacts from any Claude Code workspace into a shared Obsidian knowledge vault. |
-| [ai-router](./.claude/skills/ai-router/) | Skill | 1.7 | Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Grounded PR review: line-numbered diff + anti-hallucination rules, findings **verified against the diff** (hallucinated ones dropped), posted as **inline comments** with committable suggestions by default, **auto-resolves its own stale threads**, and an opt-in **persona-gated auto-fixer** (`--fix=propose\|auto`) that applies suggestions behind a verify-and-revert guard. Headless-safe with `--post-to-pr` and `/ai-router shadow-review`. Requires `curl`, `jq`, `python3`, and (for PR posting) `gh`. |
+| [ai-router](./.claude/skills/ai-router/) | Skill | 1.8 | Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Grounded PR review: line-numbered diff + anti-hallucination rules, findings **verified against the diff** (hallucinated ones dropped), posted as **inline comments** with committable suggestions by default, **auto-resolves its own stale threads**, and a **persona-gated auto-fixer** — interactive (`--fix=propose\|auto`) and **always-on** via the shadow flow (`shadow-review --fix`), which fixes in an isolated `git worktree` so it never touches your checkout. Headless-safe with `--post-to-pr` and `/ai-router shadow-review`. Requires `curl`, `jq`, `python3`, and (for PR posting) `gh`. |
 | [create-client-pdf](./.claude/skills/create-client-pdf/) | Skill | 1.2.1 | Convert a Markdown file with YAML frontmatter into a client-presentable PDF, branded for Stacklab or Stacklist. Requires Python + Playwright (see `INSTALL.md`). |
 | [preflight](./.claude/skills/preflight/) | Skill | 5.0 | Pre-session safe-sync briefing for git repos: fast-forwards active branches to origin, flags stale ones, then reports local state, open PRs, and where new work should branch from. Only safe, non-destructive writes (ff-only sync); config is stored per-user outside the repo and the skill makes zero commits. Requires `git`; PR features require authenticated `gh`. |
 | [prod-readiness-audit](./.claude/skills/prod-readiness-audit/) | Skill | 1.1 | Read-only audit of any codebase across four buckets — infra/security/compliance, engineering, design/UX, and product analytics — returning a red/yellow/green scorecard and the single highest-priority fix. Accepts an optional path argument to scope to a subdirectory. |
@@ -101,6 +101,16 @@ The `handoff` skill has been retired. Session continuity is now part of the `lin
 
 ```bash
 rm -rf ~/.claude/skills/handoff/
+```
+
+### AI Router v1.8
+
+**Always-on auto-fix in the shadow flow.** `shadow-review --fix` runs the Phase 3 auto-fixer on every PR in the background (the `guided` persona's default). Because the shadow shares your working directory, it does **not** fix in place: `shadow-runner.sh` checks out the PR's head branch in an isolated detached `git worktree`, runs `review --fix=auto` there, and pushes `HEAD` to the PR branch (`fix-findings.sh` gained `AI_ROUTER_FIX_PUSH_REF` for the detached-push case). Your checkout and current branch are never touched; the worktree is removed on every exit. Auto-fix is skipped (review-only) for fork PRs or when `AI_ROUTER_FIX_VERIFY_CMD` is unset. Verified in a sandbox: worktree isolate/cleanup leaves the user's branch + uncommitted work untouched; detached-worktree fix commits and pushes to the PR branch. No new allow-rules (shadow scripts already allowlisted). This completes the CodeRabbit replacement: grounded, verified, inline, self-resolving, and self-fixing on every PR.
+
+To upgrade:
+
+```bash
+cp -r .claude/skills/ai-router/ ~/.claude/skills/ai-router/
 ```
 
 ### AI Router v1.7
