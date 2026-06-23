@@ -146,20 +146,21 @@ The skill is safe to run under `claude -p` (headless mode), which is how `/ai-ro
 | 10 | `gh pr comment` failed (post-review.sh only) |
 | 64 | Usage error |
 
-### Finding the shadow's PR comment
+### Finding the shadow's post
+
+By default the post is an inline **review** (in `pulls/<PR>/reviews`); with `--summary-only` it's an issue **comment** (in `issues/<PR>/comments`). Both carry the same `run-id`, so match on it across both endpoints:
 
 ```bash
+# inline review (default)
+gh api repos/OWNER/REPO/pulls/<PR>/reviews \
+  --jq --arg rid "$RUN_ID" '[.[] | select((.body // "") | contains("run-id=" + $rid))] | last'
+
+# summary comment (--summary-only)
 gh api repos/OWNER/REPO/issues/<PR>/comments \
-  --jq '[.[] | select(.body | contains("<!-- ai-router:review:v"))] | last'
+  --jq --arg rid "$RUN_ID" '[.[] | select((.body // "") | contains("run-id=" + $rid))] | last'
 ```
 
-To match a specific run:
-
-```bash
-gh api repos/OWNER/REPO/issues/<PR>/comments \
-  --jq --arg rid "$RUN_ID" \
-       '[.[] | select(.body | contains("run-id=" + $rid))] | last'
-```
+`shadow-poll.sh` checks both automatically.
 
 ## Signature Marker Contract
 

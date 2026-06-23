@@ -275,7 +275,7 @@ Because the diff is grounded, every finding carries a real `file:line`. Dedup ac
 
 Run an ensemble PR review in a background headless Claude Code instance ("shadow") that has minimal context bleed from the active session (see Isolation below). The shadow writes the synthesized review to `$STATE/shadow.log`; the active session polls every 3 minutes and surfaces the review when ready.
 
-**Posting is opt-in.** Default is stdout/log only — the user reads the synthesis, decides what to keep, and posts in their own voice. Pass `--post` to also post the raw synthesis as a PR comment with the `<!-- ai-router:review:v… -->` signature marker.
+**Posting is opt-in.** Default is stdout/log only — the user reads the synthesis, decides what to keep, and posts in their own voice. Pass `--post` to post to the PR; the headless run uses the same `review` flow, so it posts **inline comments by default** (a PR review carrying the `<!-- ai-router:review:inline … -->` marker). The poller matches ai-router's post by `run-id`, checking both the issue-comments and pulls/reviews endpoints, so it detects the inline review (or a summary comment) either way.
 
 **Waiting is opt-in (AND semantics).** With no `--wait-*` flag, the run surfaces as `ONLY_AI_ROUTER_READY` as soon as the headless ai-router review finishes (usually 2–4 min). Add flags to extend the wait — every flag is an AND clause:
 
@@ -452,6 +452,8 @@ Rendered by the parent assistant when the poll returns `ALL_READY` or `ONLY_AI_R
 ```
 
 The `run-id` field is the contract — `shadow-poll.sh` matches `contains("run-id=<uuid>")` for the exact spawn. Re-running shadow-review on the same PR creates a new comment with a new `run-id`.
+
+The default inline path (`post-inline.sh`) carries the same `run-id` in an `<!-- ai-router:review:inline v<MAJ.MIN> run-id=<uuid> -->` marker on the PR **review** body. Because the marker shape differs but the `run-id` does not, the poller matches on `run-id` alone and checks both the issue-comments and pulls/reviews endpoints — so it finds the post whether it was inline (a review) or `--summary-only` (an issue comment).
 
 ---
 
