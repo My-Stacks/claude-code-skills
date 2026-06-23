@@ -81,8 +81,40 @@ category + issue + one-line fix) so synthesis can dedup across providers by `fil
 > Attribution: the line-numbered `__new hunk__`/`__old hunk__` reformat, expanded/asymmetric
 > context, and self-reflection ideas are adapted from [PR-Agent](https://github.com/The-PR-Agent/pr-agent)
 > (Apache-2.0). The algorithms are reimplemented here in our own code; no prompt text is
-> copied verbatim. Future phases: a deterministic repo-grounded verify pass, inline
-> `suggestion` comments, and an opt-in `fix-findings` step (persona-gated).
+> copied verbatim.
+
+## Verify pass + inline comments (v1.5)
+
+PR-Agent can only *approximate* grounding with an LLM self-reflection pass — it has no
+repo access. ai-router runs in the repo, so it grounds findings deterministically.
+
+**`verify-findings.py`** (read-only, stdlib-only) — reads the findings JSON on stdin and
+`--diff $RUN/diff.txt`, and annotates each finding with `verify.status`:
+
+| status | meaning | inline? |
+|--------|---------|:------:|
+| `confirmed` | every cited line was in the reviewed diff | yes |
+| `partial` | some cited lines were in the diff | yes |
+| `unverified` | file/lines not in the reviewed diff — the usual hallucination signature | no (listed in body) |
+
+It verifies against the **grounded diff**, not the working tree, on purpose: a review of a
+PR *number* may run from a different branch, so the working tree can be the wrong content;
+the diff is always exactly what the models saw. It also returns the real `shown_code` for the
+grounded lines and which were `+` additions (safe targets for inline placement).
+
+**`post-inline.sh`** + **`lib/build-review-payload.py`** — turn verified findings into a single
+GitHub PR review (`POST /pulls/{pr}/reviews`, `event=COMMENT`):
+
+- one inline comment per `confirmed`/`partial` finding, placed at its grounded line(s);
+- a committable ```suggestion block when a `confirmed` finding carries `suggestion` (replacement
+  code) — the human clicks "Commit suggestion" (this is the L1 "suggest" posture; auto-apply is Phase 3);
+- `unverified` findings are appended to the review body under "Not grounded", never posted inline
+  (GitHub rejects comments on out-of-diff lines — so the verify gate is also what makes inline posting valid);
+- same input-file safety model as `post-review.sh` (trusted tmpdir, owner check, no symlinks).
+
+Roadmap: Phase 3 — an opt-in `fix-findings` step that *applies* suggestions, persona-gated
+(developers get suggestions; a `guided` persona gets a guarded auto-fixer on a conservative
+allowlist, never main, tests must pass).
 
 ## Headless / CI Usage
 
@@ -156,7 +188,9 @@ Users with `permissions.defaultMode: "auto"` in `~/.claude/settings.json` need t
 "Bash(bash ~/.claude/skills/ai-router/scripts/post-review.sh:*)",
 "Bash(bash ~/.claude/skills/ai-router/scripts/shadow-spawn.sh:*)",
 "Bash(bash ~/.claude/skills/ai-router/scripts/shadow-poll.sh:*)",
-"Bash(python3 ~/.claude/skills/ai-router/scripts/format-diff.py:*)"
+"Bash(python3 ~/.claude/skills/ai-router/scripts/format-diff.py:*)",
+"Bash(python3 ~/.claude/skills/ai-router/scripts/verify-findings.py:*)",
+"Bash(bash ~/.claude/skills/ai-router/scripts/post-inline.sh:*)"
 ```
 
 If `~` is not expanded in your Claude Code version, use the absolute path form (`/Users/<you>/.claude/skills/...`).

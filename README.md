@@ -8,7 +8,7 @@ Reusable components for [Claude Code](https://docs.anthropic.com/en/docs/claude-
 |-----------|------|---------|-------------|
 | [linear](./.claude/skills/linear/) | Skill | 0.5.1 | Linear project management with session continuity. Buffered writes, board management, ticket creation, structured handoffs persisted to Linear. Auto-maintains `.latest-status.md`. |
 | [vault-backup](./.claude/skills/vault-backup/) | Skill | 1.0 | Save research, project outputs, and knowledge artifacts from any Claude Code workspace into a shared Obsidian knowledge vault. |
-| [ai-router](./.claude/skills/ai-router/) | Skill | 1.4 | Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Grounded PR review (line-numbered, hunk-split diff + anti-hallucination rules so models cite real lines). Headless-safe with `--post-to-pr` and `/ai-router shadow-review` (background review + PR-comment polling). Requires `curl`, `jq`, `python3`, and (for PR posting) `gh`. |
+| [ai-router](./.claude/skills/ai-router/) | Skill | 1.5 | Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Grounded PR review: line-numbered diff + anti-hallucination rules, findings **verified against the diff** (hallucinated ones dropped), posted as a summary or **inline comments** with committable suggestions (`--inline`). Headless-safe with `--post-to-pr` and `/ai-router shadow-review`. Requires `curl`, `jq`, `python3`, and (for PR posting) `gh`. |
 | [create-client-pdf](./.claude/skills/create-client-pdf/) | Skill | 1.2.1 | Convert a Markdown file with YAML frontmatter into a client-presentable PDF, branded for Stacklab or Stacklist. Requires Python + Playwright (see `INSTALL.md`). |
 | [preflight](./.claude/skills/preflight/) | Skill | 5.0 | Pre-session safe-sync briefing for git repos: fast-forwards active branches to origin, flags stale ones, then reports local state, open PRs, and where new work should branch from. Only safe, non-destructive writes (ff-only sync); config is stored per-user outside the repo and the skill makes zero commits. Requires `git`; PR features require authenticated `gh`. |
 | [prod-readiness-audit](./.claude/skills/prod-readiness-audit/) | Skill | 1.1 | Read-only audit of any codebase across four buckets — infra/security/compliance, engineering, design/UX, and product analytics — returning a red/yellow/green scorecard and the single highest-priority fix. Accepts an optional path argument to scope to a subdirectory. |
@@ -102,6 +102,25 @@ The `handoff` skill has been retired. Session continuity is now part of the `lin
 ```bash
 rm -rf ~/.claude/skills/handoff/
 ```
+
+### AI Router v1.5
+
+Phase 2 of the CodeRabbit replacement: **verified findings + inline comments.** After the ensemble reviews the grounded diff, every finding is checked against the diff the models actually saw (`scripts/verify-findings.py`): `confirmed` (all cited lines were in the diff), `partial`, or `unverified` (file/lines not in the diff — the usual hallucination signature). Unverified findings are demoted and never asserted as bugs. With `--inline`, grounded findings post as inline PR review comments at the real lines (`scripts/post-inline.sh`), with a committable ```suggestion block where a provider gave safe replacement code; ungrounded findings go in the review body, never inline. Verifying against the diff (not the working tree) keeps it correct even when reviewing a PR number from another branch. Config schema unchanged — back-compat.
+
+To upgrade:
+
+```bash
+cp -r .claude/skills/ai-router/ ~/.claude/skills/ai-router/
+```
+
+Then add the two new allow-rules to `~/.claude/settings.json` `permissions.allow` (auto-mode users):
+
+```json
+"Bash(python3 ~/.claude/skills/ai-router/scripts/verify-findings.py:*)",
+"Bash(bash ~/.claude/skills/ai-router/scripts/post-inline.sh:*)"
+```
+
+Roadmap: Phase 3 — an opt-in `fix-findings` step that *applies* suggestions, persona-gated (developers get suggestions; a `guided` persona gets a guarded auto-fixer on a conservative allowlist, never main, tests must pass).
 
 ### AI Router v1.4
 

@@ -1,7 +1,7 @@
 ---
 name: ai-router
-version: "1.4"
-description: "Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Grounded PR review (line-numbered diff, anti-hallucination rules). Headless-safe with --post-to-pr for shadow review."
+version: "1.5"
+description: "Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Grounded PR review (line-numbered diff, anti-hallucination rules, findings verified against the diff, inline comments). Headless-safe with --post-to-pr for shadow review."
 trigger: /ai-router
 ---
 
@@ -85,7 +85,7 @@ If missing, run setup:
 | `/ai-router route <task>` | Suggest best model tier | No |
 | `/ai-router ask <prompt>` | Send to one external model | Yes |
 | `/ai-router ensemble <prompt>` | Send to all configured models, synthesize | Yes |
-| `/ai-router review [<pr>] [--post-to-pr <pr>]` | Ensemble PR review; optionally post to PR | Yes |
+| `/ai-router review [<pr>] [--post-to-pr <pr>] [--inline]` | Ensemble PR review, verified against the diff; post as summary or inline comments | Yes |
 | `/ai-router shadow-review [--post] [--pr <#>] [--wait-cr] [--wait-reviewers]` | Spawn a background review; default stdout-only and surfaces as soon as ai-router finishes. `--wait-cr` adds CodeRabbit to the AND-wait, `--wait-reviewers` adds any non-author reviewer. | Yes |
 | `/ai-router shadow-list` | List active shadow runs for this repo | No |
 | `/ai-router shadow-cancel [<pr>]` | Stop a running shadow-review (most-recent if no PR given) | No |
@@ -185,9 +185,9 @@ Omit sections with no content. If a provider failed: "Gemini: unavailable (HTTP 
 
 ---
 
-## `/ai-router review [<pr-number>] [--post-to-pr <pr>]`
+## `/ai-router review [<pr-number>] [--post-to-pr <pr>] [--inline]`
 
-Ensemble PR review. Gathers diff context, sends to all configured models, synthesizes. Optionally posts the synthesis as a PR comment.
+Ensemble PR review. Gathers diff context, sends to all configured models, synthesizes, **verifies each finding against the reviewed diff**, then optionally posts — as a single summary comment, or (with `--inline`) as inline comments at the real lines with committable suggestions.
 
 1. Get the diff to review (priority order). Use expanded context (`-U`) on local diffs so models see the enclosing scope, not just 3 lines — part of the grounding below:
    - PR number given: `gh pr diff <number>` (GitHub serves a fixed-context diff)
@@ -216,22 +216,38 @@ Ensemble PR review. Gathers diff context, sends to all configured models, synthe
    > - **category:** correctness | security | performance | maintainability | tests
    > - **issue:** what is wrong and the concrete scenario that triggers it
    > - **fix:** one-line direction (no code dump)
+   > - **suggestion:** (optional) the exact replacement code for the cited lines — include ONLY for a safe, mechanical, single-hunk fix; omit otherwise
    >
    > If you find no issues, output exactly: No issues found."
 5. Prepend `$RUN/diff.txt` to the prompt under a `The PR code diff:` header.
 6. Send to all configured providers in parallel.
-7. Synthesize using the PR Review Synthesis format below into a temp markdown file.
-8. If `--post-to-pr <#>` (or a PR was resolved and the user passed `--post`):
-   ```bash
-   bash ~/.claude/skills/ai-router/scripts/post-review.sh <pr-number> <synth-file>
+7. **Extract findings to JSON.** From the per-provider finding blocks, build `$RUN/findings.json` — an array of objects:
+   ```json
+   {"severity":"CRITICAL|SUGGESTION|NIT","category":"...","file":"path","start_line":13,"end_line":14,"issue":"...","fix":"...","suggestion":"<optional replacement code>","sources":["anthropic","gemini"]}
    ```
-9. **Always print** the final markdown to stdout — required for headless mode (`claude -p`) where there is no interactive output.
+   Dedup across providers by `file:line` + category, merging `sources` (two models at the same spot = one finding, higher confidence). Carry `suggestion` only when a provider gave safe single-hunk replacement code.
+8. **Verify against the reviewed diff (repo-grounding — the anti-hallucination gate):**
+   ```bash
+   python3 ~/.claude/skills/ai-router/scripts/verify-findings.py --diff "$RUN/diff.txt" < "$RUN/findings.json" > "$RUN/verified.json"
+   ```
+   Each finding gains `verify.status`: **confirmed** (all cited lines were in the diff), **partial** (some), or **unverified** (file/lines not in the reviewed diff — the usual hallucination signature). Treat `unverified` as untrusted: never present it as a confirmed bug; surface it separately as "could not ground."
+9. Synthesize using the PR Review Synthesis format below into `$RUN/synth.md`, ordered by verified status (confirmed first; unverified demoted to its own section).
+10. **Post (opt-in):**
+    - **`--inline`** (a PR must be resolved, via `<pr-number>` or `--post-to-pr <#>`): post grounded findings as inline review comments — one per confirmed/partial finding, with a committable ```suggestion block where `suggestion` is present. Ungrounded findings go in the review body, never inline (GitHub rejects out-of-diff lines):
+      ```bash
+      bash ~/.claude/skills/ai-router/scripts/post-inline.sh <pr-number> "$RUN/verified.json" "$RUN/synth.md"
+      ```
+    - **`--post-to-pr <#>`** without `--inline`: post the synthesis as one summary comment (v1.4 behavior):
+      ```bash
+      bash ~/.claude/skills/ai-router/scripts/post-review.sh <pr-number> "$RUN/synth.md"
+      ```
+11. **Always print** the final markdown to stdout — required for headless mode (`claude -p`) where there is no interactive output. Then `rm -rf "$RUN"`.
 
-**Headless contract:** `claude -p "/ai-router review 42 --post-to-pr 42"` exits 0 iff (a) ≥1 provider returned 200 and (b) the PR comment posted. Providers rendered in stable order: Anthropic → OpenAI → Gemini.
+**Headless contract:** `claude -p "/ai-router review 42 --post-to-pr 42"` exits 0 iff (a) ≥1 provider returned 200 and (b) the PR comment posted (summary comment, or the inline review when `--inline` is set). Providers rendered in stable order: Anthropic → OpenAI → Gemini.
 
 ### PR Review Synthesis Format
 
-Because the diff is grounded, every finding carries a real `file:line`. Dedup across providers by `file:line` + category: two models flagging the same location is one finding (flag it as cross-model — higher confidence), not two. Keep the `file:line` on every bullet so the reader can jump straight to the code.
+Because the diff is grounded, every finding carries a real `file:line`. Dedup across providers by `file:line` + category: two models flagging the same location is one finding (flag it as cross-model — higher confidence), not two. Keep the `file:line` on every bullet so the reader can jump straight to the code. Order by `verify.status` from step 8 — confirmed findings first, unverified demoted to their own section and never asserted as bugs.
 
 ```markdown
 ## Ensemble PR Review
@@ -244,6 +260,9 @@ Because the diff is grounded, every finding carries a real `file:line`. Dedup ac
 
 ### Model-Specific Catches
 [Issues found by only one model — lower confidence, worth checking. Each: `file:line` — issue.]
+
+### Could not ground (excluded from inline)
+[Findings whose `verify.status` is `unverified` — they cite code outside the reviewed diff (often hallucinated or out of scope). List them, do not assert them. Omit this section if empty.]
 
 ### Summary
 [Overall assessment]
@@ -531,10 +550,12 @@ Add to `~/.claude/settings.json` `permissions.allow`:
 "Bash(bash ~/.claude/skills/ai-router/scripts/post-review.sh:*)",
 "Bash(bash ~/.claude/skills/ai-router/scripts/shadow-spawn.sh:*)",
 "Bash(bash ~/.claude/skills/ai-router/scripts/shadow-poll.sh:*)",
-"Bash(python3 ~/.claude/skills/ai-router/scripts/format-diff.py:*)"
+"Bash(python3 ~/.claude/skills/ai-router/scripts/format-diff.py:*)",
+"Bash(python3 ~/.claude/skills/ai-router/scripts/verify-findings.py:*)",
+"Bash(bash ~/.claude/skills/ai-router/scripts/post-inline.sh:*)"
 ```
 
-Without these, `defaultMode: "auto"` will prompt on every call. (`format-diff.py` is read-only — no network, no writes — but allowlisting it keeps the review flow prompt-free.) (Allow-rule paths must match the literal command Claude invokes; if `~` doesn't expand in your Claude Code version, use `/Users/<you>/.claude/skills/ai-router/scripts/...`.)
+Without these, `defaultMode: "auto"` will prompt on every call. (`format-diff.py` and `verify-findings.py` are read-only — no network, no writes; `post-inline.sh` posts to a PR, same trust model as `post-review.sh`.) (Allow-rule paths must match the literal command Claude invokes; if `~` doesn't expand in your Claude Code version, use `/Users/<you>/.claude/skills/ai-router/scripts/...`.)
 
 ### Model Override
 
