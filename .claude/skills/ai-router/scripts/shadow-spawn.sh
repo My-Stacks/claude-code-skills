@@ -26,7 +26,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/lib/config.sh"
 
-[[ $# -ge 1 ]] || { echo "usage: shadow-spawn.sh <pr-number> [--wait-cr] [--wait-reviewers] [--post]" >&2; exit 2; }
+[[ $# -ge 1 ]] || { echo "usage: shadow-spawn.sh <pr-number> [--wait-cr] [--wait-reviewers] [--post] [--fix]" >&2; exit 2; }
 PR=$1; shift
 
 [[ "$PR" =~ ^[1-9][0-9]*$ ]] || { echo "invalid PR number: $PR (must be positive integer)" >&2; exit 2; }
@@ -37,11 +37,13 @@ PR=$1; shift
 WAIT_CR=false
 WAIT_REVIEWERS=false
 POST=false   # default: synthesis goes to shadow.log, NOT to a PR comment
+FIX=""       # --fix enables worktree-isolated auto-fix in shadow-runner.sh
 while (( $# > 0 )); do
   case "$1" in
     --wait-cr)        WAIT_CR=true;        shift ;;
     --wait-reviewers) WAIT_REVIEWERS=true; shift ;;
     --post)           POST=true;           shift ;;
+    --fix)            FIX=auto;            shift ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac
 done
@@ -96,6 +98,7 @@ printf '%s\n' "$PR"             > "$STATE/pr"
 printf '%s\n' "$WAIT_CR"        > "$STATE/wait_cr"
 printf '%s\n' "$WAIT_REVIEWERS" > "$STATE/wait_reviewers"
 printf '%s\n' "$POST"           > "$STATE/post"
+printf '%s\n' "$FIX"            > "$STATE/fix"
 printf '%s\n' "$PROVIDERS"      > "$STATE/providers"
 printf '%s\n' "$REPO_FULL"      > "$STATE/repo"
 printf '%s\n' "$PR_AUTHOR"      > "$STATE/pr_author"
@@ -111,7 +114,7 @@ python3 -c '
 import os, sys, subprocess
 os.setsid()
 sys.exit(subprocess.run(["bash", *sys.argv[1:]]).returncode)
-' "$SCRIPT_DIR/lib/shadow-runner.sh" "$PR" "$RUN_ID" "$PROVIDERS" "$POST" "$STATE" \
+' "$SCRIPT_DIR/lib/shadow-runner.sh" "$PR" "$RUN_ID" "$PROVIDERS" "$POST" "$STATE" "$FIX" \
   </dev/null >/dev/null 2>&1 &
 
 PID=$!

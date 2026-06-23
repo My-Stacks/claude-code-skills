@@ -119,8 +119,15 @@ fi
 #   POST=true:  the headless instance posted to the PR; we match by run-id marker.
 #   POST=false: synthesis lives in $STATE/shadow.log; readiness is shadow.status=="done".
 if [[ "$POST" == "true" ]]; then
+  # The headless review posts inline by default (a PR review under pulls/reviews)
+  # or, with --summary-only, an issue comment. Both carry the same run-id marker,
+  # so match either endpoint — issue comments first, then reviews.
   AIROUTER=$(jq --arg rid "$RUN_ID" \
-    '[.[] | select(.body | contains("run-id=" + $rid))] | last // null' <<<"$COMMENTS")
+    '[.[] | select((.body // "") | contains("run-id=" + $rid))] | last // null' <<<"$COMMENTS")
+  if [[ "$AIROUTER" == "null" ]]; then
+    AIROUTER=$(jq --arg rid "$RUN_ID" \
+      '[.[] | select((.body // "") | contains("run-id=" + $rid))] | last // null' <<<"$CR_REVIEWS")
+  fi
 else
   if [[ "$SHADOW_STATUS" == "done" && -s "$STATE/shadow.log" ]]; then
     AIROUTER=$(jq -n --rawfile body "$STATE/shadow.log" \
@@ -150,11 +157,12 @@ REVIEWERS=$(jq --arg started "$STARTED" --arg author "$PR_AUTHOR" --arg rid "$RU
     | select((.created_at // "") > $started)
     | select((.body // "") | contains("run-id=" + $rid) | not)
   ]' <<<"$COMMENTS")
-REVIEWER_REVIEWS=$(jq --arg started "$STARTED" --arg author "$PR_AUTHOR" '
+REVIEWER_REVIEWS=$(jq --arg started "$STARTED" --arg author "$PR_AUTHOR" --arg rid "$RUN_ID" '
   [ .[]
     | select((.user.login // "") != $author)
     | select((.user.login // "") | test("coderabbit"; "i") | not)
     | select((.submitted_at // "") > $started)
+    | select((.body // "") | contains("run-id=" + $rid) | not)
   ]' <<<"$CR_REVIEWS")
 # Merge issue-comment and formal-review hits into one reviewers array.
 REVIEWERS=$(jq -n --argjson c "$REVIEWERS" --argjson r "$REVIEWER_REVIEWS" '$c + $r')

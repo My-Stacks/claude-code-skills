@@ -1,7 +1,7 @@
 ---
 name: ai-router
-version: "1.3"
-description: "Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Headless-safe with --post-to-pr for shadow review."
+version: "1.9"
+description: "Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Grounded PR review (line-numbered diff, anti-hallucination rules, findings verified against the diff, inline comments, auto-resolves stale threads, persona-gated auto-fixer interactive + always-on via worktree-isolated shadow). Headless-safe with --post-to-pr for shadow review."
 trigger: /ai-router
 ---
 
@@ -26,11 +26,17 @@ File: `~/.orchestrator-config.json`
   "gemini_api_key": "AIza...",
   "default_anthropic_model": "claude-sonnet-4-6",
   "default_openai_model": "gpt-5.5",
-  "default_gemini_model": "gemini-3-flash-preview"
+  "default_gemini_model": "gemini-3-flash-preview",
+  "review_persona": "developer"
 }
 ```
 
-All keys optional. At least one required for API commands.
+All keys optional. At least one API key required for API commands. `review_persona`
+sets the default fix posture for `review` (Phase 3): `developer` (default) →
+`suggest` (committable inline suggestions, no auto-edits); `guided` → `auto`
+(guarded auto-fixer). Override per run with `--fix=<level>`. The `auto` posture
+needs a test command in env: `AI_ROUTER_FIX_VERIFY_CMD` (e.g. `npm test`) — without
+it, `auto` won't push, it downgrades to leaving the edits for review.
 
 ## First Run Setup
 
@@ -85,8 +91,9 @@ If missing, run setup:
 | `/ai-router route <task>` | Suggest best model tier | No |
 | `/ai-router ask <prompt>` | Send to one external model | Yes |
 | `/ai-router ensemble <prompt>` | Send to all configured models, synthesize | Yes |
-| `/ai-router review [<pr>] [--post-to-pr <pr>]` | Ensemble PR review; optionally post to PR | Yes |
-| `/ai-router shadow-review [--post] [--pr <#>] [--wait-cr] [--wait-reviewers]` | Spawn a background review; default stdout-only and surfaces as soon as ai-router finishes. `--wait-cr` adds CodeRabbit to the AND-wait, `--wait-reviewers` adds any non-author reviewer. | Yes |
+| `/ai-router review [<pr>] [--post-to-pr <pr>] [--summary-only] [--fix=<level>]` | Ensemble PR review, verified against the diff; posts inline comments by default; `--fix=propose\|auto` also applies fixes (persona-gated) | Yes |
+| `/ai-router resolve <pr> [--all]` | Resolve ai-router's own inline threads (outdated by default, `--all` for all) | No |
+| `/ai-router shadow-review [--post] [--pr <#>] [--wait-cr] [--wait-reviewers] [--fix]` | Spawn a background review; default stdout-only and surfaces as soon as ai-router finishes. `--wait-cr` adds CodeRabbit to the AND-wait, `--wait-reviewers` adds any non-author reviewer. `--fix` auto-fixes in an isolated worktree (guided persona). | Yes |
 | `/ai-router shadow-list` | List active shadow runs for this repo | No |
 | `/ai-router shadow-cancel [<pr>]` | Stop a running shadow-review (most-recent if no PR given) | No |
 | `/ai-router compare <prompt>` | Side-by-side without synthesis | Yes |
@@ -185,44 +192,94 @@ Omit sections with no content. If a provider failed: "Gemini: unavailable (HTTP 
 
 ---
 
-## `/ai-router review [<pr-number>] [--post-to-pr <pr>]`
+## `/ai-router review [<pr-number>] [--post-to-pr <pr>] [--summary-only] [--fix=<level>]`
 
-Ensemble PR review. Gathers diff context, sends to all configured models, synthesizes. Optionally posts the synthesis as a PR comment.
+Ensemble PR review. Gathers diff context, sends to all configured models, synthesizes, **verifies each finding against the reviewed diff**, then — when a PR is given — posts grounded findings as **inline comments** at the real lines with committable suggestions. Posting is opt-in (needs `<pr-number>` or `--post-to-pr <#>`); pass `--summary-only` to post one summary comment instead of inline threads. `--fix=<report|suggest|propose|auto>` controls whether ai-router also *applies* fixes (default from the `review_persona` config — see Phase 3 in step 11).
 
-1. Get the diff to review (priority order):
-   - PR number given: `gh pr diff <number>`
-   - On a branch: `git diff $(git merge-base HEAD main)..HEAD`
-   - Staged: `git diff --cached`
-   - Last resort: `git diff HEAD~1` (if `git rev-list --count HEAD` > 1)
-2. **Scope-check the diff.** This branches on whether we're running headless (shadow) vs interactive:
-   - **Headless mode** — detected by `[ -n "$AI_ROUTER_RUN_ID" ]` (set by `lib/shadow-runner.sh`). NEVER ask the user; there is no interactive user. If diff > 500K chars, truncate to the last 500K and prepend a header line: `[diff truncated from <N>K chars to 500K — showing tail]`. Otherwise pass through. Cost is already bounded by the shadow's runtime cap + per-call `MAX_TOKENS`.
-   - **Interactive mode** — if diff > 150K chars, warn and ask the user to scope. Below 150K, pass through (modern provider context windows handle this comfortably).
-3. Construct the review prompt with the full rubric:
-   > "Review this code diff. Evaluate: (1) Correctness — logic errors, off-by-one, null handling, race conditions. (2) Security — injection, auth bypass, secrets exposure, OWASP top 10. (3) Performance — N+1 queries, unnecessary allocations, missing indexes. (4) Maintainability — naming, complexity, dead code, missing error handling. (5) Tests — coverage gaps, flaky patterns, missing edge cases. Be specific with file and line references. Categorize each finding as critical, suggestion, or nit."
-4. Prepend the diff to the prompt.
-5. Send to all configured providers in parallel.
-6. Synthesize using the PR Review Synthesis format below into a temp markdown file.
-7. If `--post-to-pr <#>` (or a PR was resolved and the user passed `--post`):
+1. Get the diff to review (priority order). Use expanded context (`-U`) on local diffs so models see the enclosing scope, not just 3 lines — part of the grounding below:
+   - PR number given: `gh pr diff <number>` (GitHub serves a fixed-context diff)
+   - On a branch: `git diff -U${AI_ROUTER_DIFF_CONTEXT:-8} "$(git merge-base HEAD main)"..HEAD`
+   - Staged: `git diff -U${AI_ROUTER_DIFF_CONTEXT:-8} --cached`
+   - Last resort: `git diff -U${AI_ROUTER_DIFF_CONTEXT:-8} HEAD~1` (if `git rev-list --count HEAD` > 1)
+2. **Ground the diff (anti-hallucination — do this before any model sees it).** Pipe the raw diff through the line-numbering pre-processor:
    ```bash
-   bash ~/.claude/skills/ai-router/scripts/post-review.sh <pr-number> <synth-file>
+   RUN=$(mktemp -d "${TMPDIR:-/tmp}/ai-router-run-XXXXXX")
+   <diff-command> | python3 ~/.claude/skills/ai-router/scripts/format-diff.py > "$RUN/diff.txt"
    ```
-8. **Always print** the final markdown to stdout — required for headless mode (`claude -p`) where there is no interactive output.
+   It splits each hunk into a `__new hunk__` section (every line prefixed with its **real** new-file line number) and an optional `__old hunk__` section (removed code). Models then cite actual line numbers instead of inventing them, and a future verify pass can map each finding back to the working tree. Feed `$RUN/diff.txt` — never the raw diff — to the providers. If it's empty, there's nothing to review; say so and stop.
+3. **Scope-check `$RUN/diff.txt`.** Branches on whether we're running headless (shadow) vs interactive:
+   - **Headless mode** — detected by `[ -n "$AI_ROUTER_RUN_ID" ]` (set by `lib/shadow-runner.sh`). NEVER ask the user; there is no interactive user. If it's > 500K chars, truncate to the last 500K and prepend a header line: `[diff truncated from <N>K chars to 500K — showing tail]`. Otherwise pass through. Cost is already bounded by the shadow's runtime cap + per-call `MAX_TOKENS`.
+   - **Interactive mode** — if > 150K chars, warn and ask the user to scope. Below 150K, pass through (modern provider context windows handle this comfortably).
+4. Construct the review prompt. It MUST explain the grounded format and enforce the grounding rules — these are what keep the review from hallucinating:
+   > "You are reviewing a Git PR diff in a grounded format. Each file is introduced by `## File: '<path>'`. Each hunk is split into a `__new hunk__` section (code after the change, every line prefixed with its real line number) and an optional `__old hunk__` section (removed code, no numbers). Leading `+`/`-`/space marks added/removed/unchanged lines; the line numbers are reference-only, not part of the code.
+   >
+   > Review ONLY new code (lines starting with `+`) and issues this PR introduces. Evaluate: (1) Correctness — logic errors, off-by-one, null handling, race conditions. (2) Security — injection, auth bypass, secrets exposure, OWASP top 10. (3) Performance — N+1 queries, unnecessary allocations, missing indexes. (4) Maintainability — naming, complexity, dead code, missing error handling. (5) Tests — coverage gaps, flaky patterns, missing edge cases.
+   >
+   > Grounding rules (follow strictly — they cut false positives): You see only changed segments, not the whole repository. Do NOT flag imports, declarations, or names that may be defined elsewhere. Do NOT claim a change breaks other code unless the specific affected path is visible in the diff. Prefer not reporting over guessing — only flag an issue you can tie to a concrete trigger scenario. For a high-impact but uncertain issue (e.g. data loss, security), you may report it but must state what remains uncertain. Cite real line numbers taken from a `__new hunk__` section.
+   >
+   > For each issue, output exactly this block:
+   > ### \<CRITICAL|SUGGESTION|NIT\>: \<short title\>
+   > - **file:** \`path:Lstart-Lend\`
+   > - **category:** correctness | security | performance | maintainability | tests
+   > - **issue:** what is wrong and the concrete scenario that triggers it
+   > - **fix:** one-line direction (no code dump)
+   > - **suggestion:** (optional) the exact replacement code for the cited lines — include ONLY for a safe, mechanical, single-hunk fix; omit otherwise
+   >
+   > If you find no issues, output exactly: No issues found."
+5. Prepend `$RUN/diff.txt` to the prompt under a `The PR code diff:` header.
+6. Send to all configured providers in parallel.
+7. **Extract findings to JSON.** From the per-provider finding blocks, build `$RUN/findings.json` — an array of objects:
+   ```json
+   {"severity":"CRITICAL|SUGGESTION|NIT","category":"...","file":"path","start_line":13,"end_line":14,"issue":"...","fix":"...","suggestion":"<optional replacement code>","sources":["anthropic","gemini"]}
+   ```
+   Dedup across providers by `file:line` + category, merging `sources` (two models at the same spot = one finding, higher confidence). Carry `suggestion` only when a provider gave safe single-hunk replacement code.
+8. **Verify against the reviewed diff (repo-grounding — the anti-hallucination gate):**
+   ```bash
+   python3 ~/.claude/skills/ai-router/scripts/verify-findings.py --diff "$RUN/diff.txt" < "$RUN/findings.json" > "$RUN/verified.json"
+   ```
+   Each finding gains `verify.status`: **confirmed** (all cited lines were in the diff), **partial** (some), or **unverified** (file/lines not in the reviewed diff — the usual hallucination signature). Treat `unverified` as untrusted: never present it as a confirmed bug; surface it separately as "could not ground."
+9. Synthesize using the PR Review Synthesis format below into `$RUN/synth.md`, ordered by verified status (confirmed first; unverified demoted to its own section).
+10. **Post — opt-in via `<pr-number>` or `--post-to-pr <#>`; inline is the default style.** When a PR is resolved and posting is requested:
+    - **default (inline):** post grounded findings as a PR review — one inline comment per confirmed/partial finding at its real line(s), with a committable ```suggestion block where `suggestion` is present. Ungrounded findings go in the review body, never inline (GitHub rejects out-of-diff lines):
+      ```bash
+      bash ~/.claude/skills/ai-router/scripts/post-inline.sh <pr-number> "$RUN/verified.json" "$RUN/synth.md"
+      ```
+      Each inline comment carries a hidden per-finding marker (`<!-- ai-router-finding key=… -->`) so the fixer can later resolve exactly the threads it fixes. Posting does NOT auto-resolve old threads — stale-thread cleanup is either earned (the fixer resolves what it fixed, step 11) or manual (`/ai-router resolve`).
+    - **`--summary-only`:** opt down to a single summary comment instead of inline threads:
+      ```bash
+      bash ~/.claude/skills/ai-router/scripts/post-review.sh <pr-number> "$RUN/synth.md"
+      ```
+    Running `review` with no PR resolved posts nothing — it just prints to stdout (step 12).
+11. **Fix (opt-in, Phase 3).** Determine the effective fix level: `--fix=<level>` if given, else the persona default from config (`review_persona`: `developer` → `suggest`, `guided` → `auto`; absent → `suggest`). `report`/`suggest` apply no edits (suggest = the committable inline suggestions already posted in step 10). For `propose`/`auto`, apply the fixes — safe because `apply-fix.py` only edits lines whose current content still matches the grounded `shown_code`, so a wrong branch / changed file just no-ops:
+    ```bash
+    bash ~/.claude/skills/ai-router/scripts/fix-findings.sh "$RUN/verified.json" <propose|auto> [<pr-number>]
+    ```
+    - **propose:** applies confirmed findings' suggestions to the working tree and stops (prints the diff; nothing committed). Developer posture.
+    - **auto:** applies only the conservative allowlist (confirmed + suggestion + category in correctness/maintainability/performance/tests + not a sensitive path + small), runs `$AI_ROUTER_FIX_VERIFY_CMD`, and only on pass commits + pushes to the current branch (never main) and resolves **exactly the threads it fixed** (by per-finding key — `resolve-threads.sh --keys`, not a staleness guess); on fail it reverts. With no verify command set, it downgrades to propose (won't push untested). Guided posture.
 
-**Headless contract:** `claude -p "/ai-router review 42 --post-to-pr 42"` exits 0 iff (a) ≥1 provider returned 200 and (b) the PR comment posted. Providers rendered in stable order: Anthropic → OpenAI → Gemini.
+    Both refuse on main/master and only touch files with no other uncommitted changes.
+12. **Always print** the final markdown to stdout — required for headless mode (`claude -p`) where there is no interactive output. Then `rm -rf "$RUN"`.
+
+**Headless contract:** `claude -p "/ai-router review 42 --post-to-pr 42"` exits 0 iff (a) ≥1 provider returned 200 and (b) the PR comment posted (the inline review by default, or a summary comment with `--summary-only`). Providers rendered in stable order: Anthropic → OpenAI → Gemini.
 
 ### PR Review Synthesis Format
+
+Because the diff is grounded, every finding carries a real `file:line`. Dedup across providers by `file:line` + category: two models flagging the same location is one finding (flag it as cross-model — higher confidence), not two. Keep the `file:line` on every bullet so the reader can jump straight to the code. Order by `verify.status` from step 8 — confirmed findings first, unverified demoted to their own section and never asserted as bugs.
 
 ```markdown
 ## Ensemble PR Review
 
 ### Critical Issues (flagged by 2+ models)
-[Highest priority — issues multiple models independently caught]
+[Highest priority — issues multiple models independently caught. Each: `file:line` — issue.]
 
 ### Suggestions
-[Deduplicated improvements from any model]
+[Deduplicated improvements from any model. Each: `file:line` — issue.]
 
 ### Model-Specific Catches
-[Issues found by only one model — lower confidence, worth checking]
+[Issues found by only one model — lower confidence, worth checking. Each: `file:line` — issue.]
+
+### Could not ground (excluded from inline)
+[Findings whose `verify.status` is `unverified` — they cite code outside the reviewed diff (often hallucinated or out of scope). List them, do not assert them. Omit this section if empty.]
 
 ### Summary
 [Overall assessment]
@@ -230,11 +287,28 @@ Ensemble PR review. Gathers diff context, sends to all configured models, synthe
 
 ---
 
-## `/ai-router shadow-review [--post] [--pr <#>] [--wait-cr] [--wait-reviewers]`
+## `/ai-router resolve <pr-number> [--all]`
+
+**Manual** cleanup of ai-router's own inline threads. Only threads carrying the hidden `<!-- ai-router-finding` marker are touched — human threads are never resolved. Uses the GraphQL API (REST can't resolve threads). This is a human-triggered command; the automated flow does NOT run these heuristic modes — the fixer resolves only what it verified-fixed (by key, step 11).
+
+- **default:** resolve only **outdated** ai-router threads — GitHub flagged the anchored lines as changed (a *heuristic* for "addressed"). Re-review hygiene.
+- **`--all`:** resolve every unresolved ai-router thread on the PR (e.g. before closing a PR).
+
+```bash
+bash ~/.claude/skills/ai-router/scripts/resolve-threads.sh <pr-number> [--all]
+```
+
+(There is also a `--keys <file>` mode used internally by `fix-findings.sh` to resolve exactly the threads it fixed; not for manual use.) Prints `resolved <N> ai-router thread(s)`.
+
+---
+
+## `/ai-router shadow-review [--post] [--pr <#>] [--wait-cr] [--wait-reviewers] [--fix]`
 
 Run an ensemble PR review in a background headless Claude Code instance ("shadow") that has minimal context bleed from the active session (see Isolation below). The shadow writes the synthesized review to `$STATE/shadow.log`; the active session polls every 3 minutes and surfaces the review when ready.
 
-**Posting is opt-in.** Default is stdout/log only — the user reads the synthesis, decides what to keep, and posts in their own voice. Pass `--post` to also post the raw synthesis as a PR comment with the `<!-- ai-router:review:v… -->` signature marker.
+**Posting is opt-in.** Default is stdout/log only — the user reads the synthesis, decides what to keep, and posts in their own voice. Pass `--post` to post to the PR; the headless run uses the same `review` flow, so it posts **inline comments by default** (a PR review carrying the `<!-- ai-router:review:inline … -->` marker). The poller matches ai-router's post by `run-id`, checking both the issue-comments and pulls/reviews endpoints, so it detects the inline review (or a summary comment) either way.
+
+**Fixing is opt-in (`--fix`).** This is the always-on auto-fixer for the `guided` persona — auto-fix on every PR. Because the shadow shares the user's working directory, it does NOT fix in place: `shadow-runner.sh` checks out the PR's head branch in an **isolated detached `git worktree`** under the state dir, runs the review there with `--fix=auto`, commits in the worktree, and pushes `HEAD` to the PR branch — the user's checkout and current branch are never touched. The worktree is removed on any exit (and `git worktree prune` reclaims metadata after a hard kill). Auto-fix is **skipped (review-only)** when: it's a fork PR (can't push), or `AI_ROUTER_FIX_VERIFY_CMD` is unset (an unattended fix must be test-gated, and the worktree is discarded after — an un-pushable fix would be wasted work). The same conservative allowlist as interactive `--fix=auto` applies (never main, security/sensitive paths excluded, tests must pass or it reverts).
 
 **Waiting is opt-in (AND semantics).** With no `--wait-*` flag, the run surfaces as `ONLY_AI_ROUTER_READY` as soon as the headless ai-router review finishes (usually 2–4 min). Add flags to extend the wait — every flag is an AND clause:
 
@@ -291,12 +365,13 @@ If the parent session ends after spawning but before the cron fires `ALL_READY` 
 
 3. **Confirm** with a single Y/N: "Shadow-review PR #N. Spawns a headless claude in background, polls every 3 min, 30 min timeout. Posting to PR: \<yes/no\>. Waiting: \<none | CodeRabbit | reviewers | CodeRabbit+reviewers\>. OK?"
 
-4. **Spawn** (pass only the flags the user actually opted into):
+4. **Spawn** (pass only the flags the user actually opted into; also pass `--fix` when the user asked for it OR `review_persona` is `guided`):
    ```bash
    STATE=$(bash ~/.claude/skills/ai-router/scripts/shadow-spawn.sh <PR> \
      [--wait-cr] \
      [--wait-reviewers] \
-     [--post])
+     [--post] \
+     [--fix])   # --fix → worktree-isolated auto-fix (guided persona default; needs AI_ROUTER_FIX_VERIFY_CMD)
    ```
 
 5. **Schedule the poll** via `CronCreate` with cron `*/3 * * * *`. Save the cron ID to `$STATE/cron.id`. Use this prompt verbatim (substituting `<PR>` and `<STATE>`):
@@ -412,6 +487,8 @@ Rendered by the parent assistant when the poll returns `ALL_READY` or `ONLY_AI_R
 
 The `run-id` field is the contract — `shadow-poll.sh` matches `contains("run-id=<uuid>")` for the exact spawn. Re-running shadow-review on the same PR creates a new comment with a new `run-id`.
 
+The default inline path (`post-inline.sh`) carries the same `run-id` in an `<!-- ai-router:review:inline v<MAJ.MIN> run-id=<uuid> -->` marker on the PR **review** body. Because the marker shape differs but the `run-id` does not, the poller matches on `run-id` alone and checks both the issue-comments and pulls/reviews endpoints — so it finds the post whether it was inline (a review) or `--summary-only` (an issue comment).
+
 ---
 
 ## `/ai-router compare <prompt>`
@@ -509,10 +586,16 @@ Add to `~/.claude/settings.json` `permissions.allow`:
 "Bash(bash ~/.claude/skills/ai-router/scripts/validate-key.sh:*)",
 "Bash(bash ~/.claude/skills/ai-router/scripts/post-review.sh:*)",
 "Bash(bash ~/.claude/skills/ai-router/scripts/shadow-spawn.sh:*)",
-"Bash(bash ~/.claude/skills/ai-router/scripts/shadow-poll.sh:*)"
+"Bash(bash ~/.claude/skills/ai-router/scripts/shadow-poll.sh:*)",
+"Bash(python3 ~/.claude/skills/ai-router/scripts/format-diff.py:*)",
+"Bash(python3 ~/.claude/skills/ai-router/scripts/verify-findings.py:*)",
+"Bash(bash ~/.claude/skills/ai-router/scripts/post-inline.sh:*)",
+"Bash(bash ~/.claude/skills/ai-router/scripts/resolve-threads.sh:*)",
+"Bash(python3 ~/.claude/skills/ai-router/scripts/apply-fix.py:*)",
+"Bash(bash ~/.claude/skills/ai-router/scripts/fix-findings.sh:*)"
 ```
 
-Without these, `defaultMode: "auto"` will prompt on every call. (Allow-rule paths must match the literal command Claude invokes; if `~` doesn't expand in your Claude Code version, use `/Users/<you>/.claude/skills/ai-router/scripts/...`.)
+Without these, `defaultMode: "auto"` will prompt on every call. (`format-diff.py` and `verify-findings.py` are read-only; `post-inline.sh` / `resolve-threads.sh` write to a PR; `apply-fix.py` / `fix-findings.sh` edit the working tree and `fix-findings.sh --fix=auto` can commit + push to the current branch — never main. Review the fix guardrails before allowlisting on a shared machine.) (Allow-rule paths must match the literal command Claude invokes; if `~` doesn't expand in your Claude Code version, use `/Users/<you>/.claude/skills/ai-router/scripts/...`.)
 
 ### Model Override
 

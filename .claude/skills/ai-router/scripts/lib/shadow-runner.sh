@@ -11,12 +11,64 @@
 
 set -euo pipefail
 
-[[ $# -eq 5 ]] || { echo "shadow-runner.sh: bad argc ($#) — expected 5" >&2; exit 64; }
-PR=$1; RUN_ID=$2; PROVIDERS=$3; POST=$4; STATE=$5
+[[ $# -eq 6 ]] || { echo "shadow-runner.sh: bad argc ($#) — expected 6" >&2; exit 64; }
+PR=$1; RUN_ID=$2; PROVIDERS=$3; POST=$4; STATE=$5; FIX=$6
+
+# The repo the shadow was spawned in. Worktree ops run from here, and review-only
+# runs use it as cwd (unchanged behavior).
+REPO_DIR=$PWD
 
 # Atomic pgid write. Equals the new session leader (this bash process).
 PGID=$(ps -o pgid= -p $$ | tr -d ' ')
 printf '%s\n' "$PGID" > "$STATE/shadow.pgid.tmp" && mv "$STATE/shadow.pgid.tmp" "$STATE/shadow.pgid"
+
+# --- Optional worktree-isolated auto-fix -----------------------------------
+# FIX=auto runs the review on an ISOLATED detached `git worktree` of the PR's
+# head branch, so an unattended fix can never touch the user's checked-out tree
+# or current branch. The fix commits in the worktree and pushes HEAD to the PR
+# branch (AI_ROUTER_FIX_PUSH_REF). We refuse — and fall back to review-only —
+# for fork PRs (can't push to the fork) or when no verify command is set (an
+# unattended fix must be test-gated, and the worktree is discarded after, so an
+# un-pushable fix would just be wasted work).
+RUN_CWD=$REPO_DIR
+WT=""
+PUSH_REF=""
+if [[ "$FIX" == "auto" ]]; then
+  if [[ -z "${AI_ROUTER_FIX_VERIFY_CMD:-}" ]]; then
+    echo "shadow-runner: FIX=auto but AI_ROUTER_FIX_VERIFY_CMD unset — review-only." >&2
+    FIX=""
+  elif ! git -C "$REPO_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "shadow-runner: not a git repo — review-only." >&2
+    FIX=""
+  else
+    HEAD_BRANCH=$(gh pr view "$PR" --json headRefName -q .headRefName 2>/dev/null || echo "")
+    IS_FORK=$(gh pr view "$PR" --json isCrossRepository -q .isCrossRepository 2>/dev/null || echo "true")
+    if [[ -z "$HEAD_BRANCH" || "$IS_FORK" == "true" ]]; then
+      echo "shadow-runner: fork PR or unknown head branch — auto-fix can't push; review-only." >&2
+      FIX=""
+    else
+      WT="$STATE/worktree"
+      git -C "$REPO_DIR" worktree remove --force "$WT" 2>/dev/null || true
+      git -C "$REPO_DIR" worktree prune 2>/dev/null || true
+      if git -C "$REPO_DIR" fetch -q origin "$HEAD_BRANCH" \
+         && git -C "$REPO_DIR" worktree add -q --detach "$WT" "origin/$HEAD_BRANCH"; then
+        RUN_CWD="$WT"
+        PUSH_REF="$HEAD_BRANCH"
+      else
+        echo "shadow-runner: worktree setup failed — review-only." >&2
+        git -C "$REPO_DIR" worktree remove --force "$WT" 2>/dev/null || true
+        WT=""; FIX=""
+      fi
+    fi
+  fi
+fi
+
+# Remove the worktree on ANY exit (normal, error, runtime-cap, or cancel). A
+# hard SIGKILL of the runner can still leak it; `git worktree prune` on the next
+# run reclaims the metadata. Cancel maps SIGTERM/INT to exit so this fires.
+cleanup_wt() { [[ -n "$WT" ]] && { git -C "$REPO_DIR" worktree remove --force "$WT" 2>/dev/null || true; git -C "$REPO_DIR" worktree prune 2>/dev/null || true; }; }
+trap cleanup_wt EXIT
+trap 'exit 143' INT TERM
 
 # Build the claude -p prompt. PR is interpolated into the string, but
 # shadow-spawn.sh strictly validated it (^[1-9][0-9]*$) so injection is blocked.
@@ -25,6 +77,7 @@ if [[ "$POST" == "true" ]]; then
 else
   PROMPT="/ai-router review $PR"
 fi
+[[ "$FIX" == "auto" ]] && PROMPT="$PROMPT --fix=auto"
 
 # Isolation: scrub inherited env. The shadow scrubs API keys, Anthropic
 # console creds, and anything else the parent happened to export. Keep ONLY
@@ -77,8 +130,12 @@ ENV_EXTRA=()
 [[ -n "${AI_ROUTER_POST_GRACE:-}" ]]     && ENV_EXTRA+=(AI_ROUTER_POST_GRACE="$AI_ROUTER_POST_GRACE")
 [[ -n "${GH_TOKEN:-}" ]]                 && ENV_EXTRA+=(GH_TOKEN="$GH_TOKEN")
 [[ -n "${GITHUB_TOKEN:-}" ]]             && ENV_EXTRA+=(GITHUB_TOKEN="$GITHUB_TOKEN")
+# Auto-fix passthrough (only meaningful when FIX survived the checks above).
+[[ -n "$PUSH_REF" ]]                          && ENV_EXTRA+=(AI_ROUTER_FIX_PUSH_REF="$PUSH_REF")
+[[ "$FIX" == "auto" && -n "${AI_ROUTER_FIX_VERIFY_CMD:-}" ]] && ENV_EXTRA+=(AI_ROUTER_FIX_VERIFY_CMD="$AI_ROUTER_FIX_VERIFY_CMD")
+[[ -n "${AI_ROUTER_FIX_DENYLIST:-}" ]]        && ENV_EXTRA+=(AI_ROUTER_FIX_DENYLIST="$AI_ROUTER_FIX_DENYLIST")
 set +e
-env -i \
+( cd "$RUN_CWD" && env -i \
   HOME="$HOME" \
   PATH="$PATH" \
   TMPDIR="${TMPDIR:-/tmp}" \
@@ -126,7 +183,7 @@ except subprocess.TimeoutExpired:
         except ProcessLookupError: pass
         proc.wait()
     sys.exit(142)
-' "$RUNTIME_CAP" claude -p "$PROMPT" --output-format text \
+' "$RUNTIME_CAP" claude -p "$PROMPT" --output-format text ) \
   > "$STATE/shadow.log" 2>&1
 rc=$?
 set -e

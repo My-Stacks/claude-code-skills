@@ -8,7 +8,7 @@ Reusable components for [Claude Code](https://docs.anthropic.com/en/docs/claude-
 |-----------|------|---------|-------------|
 | [linear](./.claude/skills/linear/) | Skill | 0.5.1 | Linear project management with session continuity. Buffered writes, board management, ticket creation, structured handoffs persisted to Linear. Auto-maintains `.latest-status.md`. |
 | [vault-backup](./.claude/skills/vault-backup/) | Skill | 1.0 | Save research, project outputs, and knowledge artifacts from any Claude Code workspace into a shared Obsidian knowledge vault. |
-| [ai-router](./.claude/skills/ai-router/) | Skill | 1.3 | Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Headless-safe with `--post-to-pr` and `/ai-router shadow-review` (background review + PR-comment polling). Requires `curl`, `jq`, `python3`, and (for PR posting) `gh`. |
+| [ai-router](./.claude/skills/ai-router/) | Skill | 1.9 | Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Grounded PR review: line-numbered diff + anti-hallucination rules, findings **verified against the diff** (hallucinated ones dropped), posted as **inline comments** with committable suggestions by default, **resolves exactly the threads it verified-fixed** (by per-finding key), and a **persona-gated auto-fixer** — interactive (`--fix=propose\|auto`) and **always-on** via the shadow flow (`shadow-review --fix`), which fixes in an isolated `git worktree` so it never touches your checkout. Headless-safe with `--post-to-pr` and `/ai-router shadow-review`. Requires `curl`, `jq`, `python3`, and (for PR posting) `gh`. |
 | [create-client-pdf](./.claude/skills/create-client-pdf/) | Skill | 1.2.1 | Convert a Markdown file with YAML frontmatter into a client-presentable PDF, branded for Stacklab or Stacklist. Requires Python + Playwright (see `INSTALL.md`). |
 | [preflight](./.claude/skills/preflight/) | Skill | 5.0 | Pre-session safe-sync briefing for git repos: fast-forwards active branches to origin, flags stale ones, then reports local state, open PRs, and where new work should branch from. Only safe, non-destructive writes (ff-only sync); config is stored per-user outside the repo and the skill makes zero commits. Requires `git`; PR features require authenticated `gh`. |
 | [prod-readiness-audit](./.claude/skills/prod-readiness-audit/) | Skill | 1.1 | Read-only audit of any codebase across four buckets — infra/security/compliance, engineering, design/UX, and product analytics — returning a red/yellow/green scorecard and the single highest-priority fix. Accepts an optional path argument to scope to a subdirectory. |
@@ -102,6 +102,126 @@ The `handoff` skill has been retired. Session continuity is now part of the `lin
 ```bash
 rm -rf ~/.claude/skills/handoff/
 ```
+
+### AI Router v1.9
+
+**Full test suite — the last prioritized hardening item.** `tests/run.sh` is a hermetic suite (no network, no real GitHub — `gh` is stubbed in the bash suites; stdlib `unittest` + bash + `jq`), 97 cases, emphasizing edge cases, regressions, and worst-case safety:
+- **Deterministic primitives:** `format-diff` (C-quoted paths, binary/new/deleted/renamed, no-newline, empty/garbage, stdin-only), `verify-findings` (confirmed/partial/unverified/invalid, wrong-dir-same-basename rejection, schema gate, malformed JSON), `apply-fix` (stale/out-of-range refusal, newline + indentation sensitivity), `finding_key` (CLI↔import parity + golden value), `build-review-payload` (committable suggestion, contiguous vs non-contiguous, exclusions).
+- **Safety logic:** `fix-findings` (refuse main/dirty, propose-no-commit, verify-fail **revert**, no-verify downgrade, trivial-verify warning, allowlist/denylist/oversize exclusion, stale skip, detached push-by-ref) and `resolve-threads` (per-mode selection + the invariant that a **human thread is never resolved**). Run it with `bash .claude/skills/ai-router/tests/run.sh`; it's also a sensible self-check `AI_ROUTER_FIX_VERIFY_CMD` when editing ai-router itself.
+
+This closes all four architecture-review items.
+
+To upgrade:
+
+```bash
+cp -r .claude/skills/ai-router/ ~/.claude/skills/ai-router/
+```
+
+### AI Router v1.8.2
+
+**Hardening pass (post-architecture-review).** Three robustness fixes, no behavior change to the happy path:
+- **Single source of truth for the finding key** — `lib/finding_key.py`. `build-review-payload.py` imports it; `fix-findings.sh` calls it as a CLI. Removes the hand-maintained python↔bash duplicate (a silent-divergence risk where keys could stop matching with no error).
+- **`findings.json` is now validated** at the `verify-findings.py` boundary: `file` + `start_line` are required (else the finding is `invalid` — surfaced, never posted or fixed); the rest is normalized/defaulted. Malformed model output degrades loudly, not silently.
+- **Trivial verify-command warning** — `fix-findings.sh --fix=auto` warns loudly if `AI_ROUTER_FIX_VERIFY_CMD` is `true`/`:` (the auto-fix push would otherwise be "verified" in name only).
+- **Documented the headless permission posture** (auto + allow-rules vs `dontAsk` + explicit allow-list) in REFERENCE.
+
+Deferred from the review: a checked-in `tests/` suite for the deterministic primitives (the one prioritized item not yet done).
+
+To upgrade:
+
+```bash
+cp -r .claude/skills/ai-router/ ~/.claude/skills/ai-router/
+```
+
+### AI Router v1.8.1
+
+**Verified, key-based thread resolution.** Thread-resolve went from a heuristic to an earned action. Each inline comment now carries a per-finding key (`<!-- ai-router-finding key=sha1(file:start:end:category)[:12] -->`), and `fix-findings` resolves **only the threads whose findings it actually applied and test-passed** (`resolve-threads.sh --keys`). The automated `isOutdated` auto-resolve is retired — it was both a guess *and* a standalone external-write the headless safety classifier rightly flagged. The heuristic modes (`default` / `--all`) remain for **manual** `/ai-router resolve` only. Net: the only unattended GitHub mutation from resolve is now provably tied to a verified fix, and it runs as part of the fixer's already-authorized operation (no classifier circumvention). Key computation is byte-identical Python↔bash (verified). No new allow-rules.
+
+To upgrade:
+
+```bash
+cp -r .claude/skills/ai-router/ ~/.claude/skills/ai-router/
+```
+
+### AI Router v1.8
+
+**Always-on auto-fix in the shadow flow.** `shadow-review --fix` runs the Phase 3 auto-fixer on every PR in the background (the `guided` persona's default). Because the shadow shares your working directory, it does **not** fix in place: `shadow-runner.sh` checks out the PR's head branch in an isolated detached `git worktree`, runs `review --fix=auto` there, and pushes `HEAD` to the PR branch (`fix-findings.sh` gained `AI_ROUTER_FIX_PUSH_REF` for the detached-push case). Your checkout and current branch are never touched; the worktree is removed on every exit. Auto-fix is skipped (review-only) for fork PRs or when `AI_ROUTER_FIX_VERIFY_CMD` is unset. Verified in a sandbox: worktree isolate/cleanup leaves the user's branch + uncommitted work untouched; detached-worktree fix commits and pushes to the PR branch. No new allow-rules (shadow scripts already allowlisted). This completes the CodeRabbit replacement: grounded, verified, inline, self-resolving, and self-fixing on every PR.
+
+To upgrade:
+
+```bash
+cp -r .claude/skills/ai-router/ ~/.claude/skills/ai-router/
+```
+
+### AI Router v1.7
+
+Phase 3: **the auto-fixer.** Opt-in, persona-gated application of findings' suggestions. `apply-fix.py` replaces lines only if their current content still matches the grounded `shown_code` (so a shifted/stale file or wrong branch can't be corrupted); `fix-findings.sh` orchestrates with guardrails: refuses on main/master, applies bottom-up per file, and runs as **`propose`** (apply to the working tree, show diff, commit nothing — developer default) or **`auto`** (apply only the conservative allowlist — confirmed + suggestion + safe category + non-sensitive path + small — run `$AI_ROUTER_FIX_VERIFY_CMD`, then commit + push + resolve threads on pass, or revert on fail; never pushes untested — guided default). Set posture via `review_persona` in config (`developer`/`guided`) or `--fix=<report|suggest|propose|auto>` per run. Verified end-to-end in a sandbox repo (propose, auto-pass commit+push, auto-fail revert, allowlist/denylist exclusion, main guardrail). Shadow (always-on) auto-fix is the next step — it needs `git worktree` isolation so it can't touch your checked-out tree.
+
+To upgrade:
+
+```bash
+cp -r .claude/skills/ai-router/ ~/.claude/skills/ai-router/
+```
+
+Then add the new allow-rules to `~/.claude/settings.json` `permissions.allow` (auto-mode users). Note these can edit files and, in `--fix=auto`, commit + push the current branch (never main) — review the guardrails before allowlisting on a shared machine:
+
+```json
+"Bash(python3 ~/.claude/skills/ai-router/scripts/apply-fix.py:*)",
+"Bash(bash ~/.claude/skills/ai-router/scripts/fix-findings.sh:*)"
+```
+
+### AI Router v1.6
+
+Phase 2.5: **ai-router resolves its own inline threads** (CodeRabbit-style hygiene). Every inline comment now carries a hidden `<!-- ai-router-finding -->` marker. `scripts/resolve-threads.sh` (GraphQL — REST can't resolve threads) resolves ai-router's own threads, never a human's: by default only the **outdated** ones (the code they anchor to changed, so the finding was almost certainly addressed), or all of them with `--all`. The review flow runs the outdated pass automatically after an inline post, so stale threads don't pile up across pushes; `/ai-router resolve <pr> [--all]` does it manually. Verified live (post marked thread → resolve → gone). Sets up Phase 3, where the fixer resolves each thread it fixes.
+
+To upgrade:
+
+```bash
+cp -r .claude/skills/ai-router/ ~/.claude/skills/ai-router/
+```
+
+Then add the new allow-rule to `~/.claude/settings.json` `permissions.allow` (auto-mode users):
+
+```json
+"Bash(bash ~/.claude/skills/ai-router/scripts/resolve-threads.sh:*)"
+```
+
+### AI Router v1.5
+
+Phase 2 of the CodeRabbit replacement: **verified findings + inline comments.** After the ensemble reviews the grounded diff, every finding is checked against the diff the models actually saw (`scripts/verify-findings.py`): `confirmed` (all cited lines were in the diff), `partial`, or `unverified` (file/lines not in the diff — the usual hallucination signature). Unverified findings are demoted and never asserted as bugs. When a PR is given, grounded findings post as inline PR review comments at the real lines **by default** (`scripts/post-inline.sh`), with a committable ```suggestion block where a provider gave safe replacement code; ungrounded findings go in the review body, never inline. Pass `--summary-only` to post a single summary comment instead. Verifying against the diff (not the working tree) keeps it correct even when reviewing a PR number from another branch. `shadow-review --post` also posts inline by default now; its poller matches ai-router's post by `run-id` across both the issue-comments and pulls/reviews endpoints, so it detects an inline review or a summary comment either way. Config schema unchanged — back-compat.
+
+To upgrade:
+
+```bash
+cp -r .claude/skills/ai-router/ ~/.claude/skills/ai-router/
+```
+
+Then add the two new allow-rules to `~/.claude/settings.json` `permissions.allow` (auto-mode users):
+
+```json
+"Bash(python3 ~/.claude/skills/ai-router/scripts/verify-findings.py:*)",
+"Bash(bash ~/.claude/skills/ai-router/scripts/post-inline.sh:*)"
+```
+
+Roadmap: Phase 3 — an opt-in `fix-findings` step that *applies* suggestions, persona-gated (developers get suggestions; a `guided` persona gets a guarded auto-fixer on a conservative allowlist, never main, tests must pass).
+
+### AI Router v1.4
+
+Grounded PR review — the first phase of replacing CodeRabbit with ai-router's own ensemble. `/ai-router review` now reformats the diff before any model sees it: local diffs are fetched with expanded context (`git diff -U8`) and piped through a new read-only pre-processor, `scripts/format-diff.py`, which splits each hunk into a line-numbered `__new hunk__` section and an `__old hunk__` section. Models cite **real** line numbers instead of inventing them, and the review prompt adds explicit anti-hallucination rules (don't flag names defined elsewhere, don't claim breakage you can't see, prefer not-reporting over guessing). Findings carry a real `file:line` and are deduped across providers by location. Technique adapted from [PR-Agent](https://github.com/The-PR-Agent/pr-agent) (Apache-2.0); algorithms reimplemented, no prompt text copied. Config schema unchanged — back-compat.
+
+To upgrade:
+
+```bash
+cp -r .claude/skills/ai-router/ ~/.claude/skills/ai-router/
+```
+
+Then add the new allow-rule to `~/.claude/settings.json` `permissions.allow` (auto-mode users):
+
+```json
+"Bash(python3 ~/.claude/skills/ai-router/scripts/format-diff.py:*)"
+```
+
+Roadmap: Phase 2 — a deterministic repo-grounded verify pass + inline `suggestion` comments; Phase 3 — an opt-in `fix-findings` step, persona-gated (devs get suggestions, a `guided` persona gets a guarded auto-fixer on a conservative allowlist).
 
 ### AI Router v1.3
 
