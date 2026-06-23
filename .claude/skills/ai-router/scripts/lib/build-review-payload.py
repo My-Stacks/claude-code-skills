@@ -79,13 +79,17 @@ def main(argv):
         status = v.get("status")
         if status in ("confirmed", "partial"):
             path = v.get("resolved_file") or f.get("file")
-            lines = v.get("added_lines") or v.get("lines_grounded") or []
+            # Only attach to verified ADDED lines (review-only-+code), never to
+            # context lines that happen to be grounded.
+            lines = sorted(set(v.get("added_lines") or []))
             if not path or not lines:
                 excluded.append((f, "no groundable added line to attach to"))
                 continue
-            lo, hi = min(lines), max(lines)
+            lo, hi = lines[0], lines[-1]
             c = {"path": path, "side": "RIGHT", "line": hi, "body": comment_body(f)}
-            if hi != lo:
+            # Multi-line range only when the added lines are contiguous — GitHub
+            # rejects a start_line..line span that isn't fully inside one hunk.
+            if hi != lo and lines == list(range(lo, hi + 1)):
                 c["start_line"] = lo
                 c["start_side"] = "RIGHT"
             comments.append(c)

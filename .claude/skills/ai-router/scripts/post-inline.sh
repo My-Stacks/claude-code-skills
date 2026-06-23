@@ -72,18 +72,21 @@ RUN_ID=${AI_ROUTER_RUN_ID:-$(python3 -c 'import uuid; print(uuid.uuid4())' 2>/de
 
 TMPDIR_BASE="${AI_ROUTER_TMPDIR:-${TMPDIR:-/tmp}}"
 PAYLOAD=$(mktemp "$TMPDIR_BASE/ai-router-review.XXXXXX")
-trap 'rm -f "$PAYLOAD"' EXIT
+ERRFILE=$(mktemp "$TMPDIR_BASE/ai-router-builderr.XXXXXX")
+trap 'rm -f "$PAYLOAD" "$ERRFILE"' EXIT
 
-# Build the review payload. stdout (JSON) -> PAYLOAD; stderr (counts) -> COUNTS.
-# Order matters: 2>&1 binds stderr to the capture pipe, then >"$PAYLOAD" sends
-# stdout to the file — so the JSON never gets polluted by the counts line.
-if ! COUNTS=$(python3 "$SCRIPT_DIR/lib/build-review-payload.py" \
+# Build the review payload: stdout (JSON) -> PAYLOAD, stderr (counts/errors) ->
+# ERRFILE. Separate files mean a Python traceback can't pollute the JSON or
+# masquerade as the success counts line.
+if ! python3 "$SCRIPT_DIR/lib/build-review-payload.py" \
       --commit "$SHA" --body-file "$SUMMARY_FILE" \
       --version "$SKILL_VER" --run-id "$RUN_ID" \
-      < "$FINDINGS_FILE" 2>&1 >"$PAYLOAD"); then
+      < "$FINDINGS_FILE" >"$PAYLOAD" 2>"$ERRFILE"; then
   echo "post-inline.sh: failed to build review payload" >&2
+  cat "$ERRFILE" >&2
   exit 10
 fi
+COUNTS=$(cat "$ERRFILE")
 
 if ! gh api -X POST "repos/$REPO/pulls/$PR/reviews" --input "$PAYLOAD" >/dev/null; then
   echo "gh review API failed for PR #$PR" >&2

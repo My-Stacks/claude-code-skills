@@ -57,7 +57,7 @@ def index_diff(diff_text):
         if line == "__new hunk__":
             in_new = True
             continue
-        if line == "__old hunk__" or line.startswith("@@ ") or line.startswith("## File:"):
+        if line == "__old hunk__" or line.startswith("@@ "):
             in_new = False
             continue
         if in_new and cur is not None:
@@ -72,15 +72,18 @@ def index_diff(diff_text):
 
 
 def resolve_path(file_field, index):
-    """Match a finding's file to a diff path: exact, else unique suffix/basename match."""
+    """Match a finding's file to a diff path: exact, else a unique path-boundary suffix."""
+    if not file_field:
+        return None
     if file_field in index:
         return file_field
-    # tolerate a leading ./ or differing prefix depth
-    cands = [p for p in index if p.endswith(file_field) or file_field.endswith(p)]
-    if len(cands) == 1:
-        return cands[0]
-    base = file_field.rsplit("/", 1)[-1]
-    cands = [p for p in index if p.rsplit("/", 1)[-1] == base]
+    # Only the safe direction: a diff path ending with the finding's path on a
+    # path-component boundary (handles the model citing a prefix-trimmed path,
+    # e.g. 'auth/utils.py' for 'src/auth/utils.py'). We deliberately do NOT do
+    # the reverse direction or a bare-basename match — both would ground a
+    # finding to an unrelated same-named file (diff 'utils.py' vs finding
+    # 'src/auth/utils.py', or 'src/a/utils.py' vs 'src/b/utils.py').
+    cands = [p for p in index if p.endswith("/" + file_field)]
     if len(cands) == 1:
         return cands[0]
     return None
