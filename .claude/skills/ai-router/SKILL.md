@@ -1,7 +1,7 @@
 ---
 name: ai-router
-version: "1.3"
-description: "Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Headless-safe with --post-to-pr for shadow review."
+version: "1.4"
+description: "Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Grounded PR review (line-numbered diff, anti-hallucination rules). Headless-safe with --post-to-pr for shadow review."
 trigger: /ai-router
 ---
 
@@ -189,40 +189,61 @@ Omit sections with no content. If a provider failed: "Gemini: unavailable (HTTP 
 
 Ensemble PR review. Gathers diff context, sends to all configured models, synthesizes. Optionally posts the synthesis as a PR comment.
 
-1. Get the diff to review (priority order):
-   - PR number given: `gh pr diff <number>`
-   - On a branch: `git diff $(git merge-base HEAD main)..HEAD`
-   - Staged: `git diff --cached`
-   - Last resort: `git diff HEAD~1` (if `git rev-list --count HEAD` > 1)
-2. **Scope-check the diff.** This branches on whether we're running headless (shadow) vs interactive:
-   - **Headless mode** — detected by `[ -n "$AI_ROUTER_RUN_ID" ]` (set by `lib/shadow-runner.sh`). NEVER ask the user; there is no interactive user. If diff > 500K chars, truncate to the last 500K and prepend a header line: `[diff truncated from <N>K chars to 500K — showing tail]`. Otherwise pass through. Cost is already bounded by the shadow's runtime cap + per-call `MAX_TOKENS`.
-   - **Interactive mode** — if diff > 150K chars, warn and ask the user to scope. Below 150K, pass through (modern provider context windows handle this comfortably).
-3. Construct the review prompt with the full rubric:
-   > "Review this code diff. Evaluate: (1) Correctness — logic errors, off-by-one, null handling, race conditions. (2) Security — injection, auth bypass, secrets exposure, OWASP top 10. (3) Performance — N+1 queries, unnecessary allocations, missing indexes. (4) Maintainability — naming, complexity, dead code, missing error handling. (5) Tests — coverage gaps, flaky patterns, missing edge cases. Be specific with file and line references. Categorize each finding as critical, suggestion, or nit."
-4. Prepend the diff to the prompt.
-5. Send to all configured providers in parallel.
-6. Synthesize using the PR Review Synthesis format below into a temp markdown file.
-7. If `--post-to-pr <#>` (or a PR was resolved and the user passed `--post`):
+1. Get the diff to review (priority order). Use expanded context (`-U`) on local diffs so models see the enclosing scope, not just 3 lines — part of the grounding below:
+   - PR number given: `gh pr diff <number>` (GitHub serves a fixed-context diff)
+   - On a branch: `git diff -U${AI_ROUTER_DIFF_CONTEXT:-8} "$(git merge-base HEAD main)"..HEAD`
+   - Staged: `git diff -U${AI_ROUTER_DIFF_CONTEXT:-8} --cached`
+   - Last resort: `git diff -U${AI_ROUTER_DIFF_CONTEXT:-8} HEAD~1` (if `git rev-list --count HEAD` > 1)
+2. **Ground the diff (anti-hallucination — do this before any model sees it).** Pipe the raw diff through the line-numbering pre-processor:
+   ```bash
+   RUN=$(mktemp -d "${TMPDIR:-/tmp}/ai-router-run-XXXXXX")
+   <diff-command> | python3 ~/.claude/skills/ai-router/scripts/format-diff.py > "$RUN/diff.txt"
+   ```
+   It splits each hunk into a `__new hunk__` section (every line prefixed with its **real** new-file line number) and an optional `__old hunk__` section (removed code). Models then cite actual line numbers instead of inventing them, and a future verify pass can map each finding back to the working tree. Feed `$RUN/diff.txt` — never the raw diff — to the providers. If it's empty, there's nothing to review; say so and stop.
+3. **Scope-check `$RUN/diff.txt`.** Branches on whether we're running headless (shadow) vs interactive:
+   - **Headless mode** — detected by `[ -n "$AI_ROUTER_RUN_ID" ]` (set by `lib/shadow-runner.sh`). NEVER ask the user; there is no interactive user. If it's > 500K chars, truncate to the last 500K and prepend a header line: `[diff truncated from <N>K chars to 500K — showing tail]`. Otherwise pass through. Cost is already bounded by the shadow's runtime cap + per-call `MAX_TOKENS`.
+   - **Interactive mode** — if > 150K chars, warn and ask the user to scope. Below 150K, pass through (modern provider context windows handle this comfortably).
+4. Construct the review prompt. It MUST explain the grounded format and enforce the grounding rules — these are what keep the review from hallucinating:
+   > "You are reviewing a Git PR diff in a grounded format. Each file is introduced by `## File: '<path>'`. Each hunk is split into a `__new hunk__` section (code after the change, every line prefixed with its real line number) and an optional `__old hunk__` section (removed code, no numbers). Leading `+`/`-`/space marks added/removed/unchanged lines; the line numbers are reference-only, not part of the code.
+   >
+   > Review ONLY new code (lines starting with `+`) and issues this PR introduces. Evaluate: (1) Correctness — logic errors, off-by-one, null handling, race conditions. (2) Security — injection, auth bypass, secrets exposure, OWASP top 10. (3) Performance — N+1 queries, unnecessary allocations, missing indexes. (4) Maintainability — naming, complexity, dead code, missing error handling. (5) Tests — coverage gaps, flaky patterns, missing edge cases.
+   >
+   > Grounding rules (follow strictly — they cut false positives): You see only changed segments, not the whole repository. Do NOT flag imports, declarations, or names that may be defined elsewhere. Do NOT claim a change breaks other code unless the specific affected path is visible in the diff. Prefer not reporting over guessing — only flag an issue you can tie to a concrete trigger scenario. For a high-impact but uncertain issue (e.g. data loss, security), you may report it but must state what remains uncertain. Cite real line numbers taken from a `__new hunk__` section.
+   >
+   > For each issue, output exactly this block:
+   > ### \<CRITICAL|SUGGESTION|NIT\>: \<short title\>
+   > - **file:** \`path:Lstart-Lend\`
+   > - **category:** correctness | security | performance | maintainability | tests
+   > - **issue:** what is wrong and the concrete scenario that triggers it
+   > - **fix:** one-line direction (no code dump)
+   >
+   > If you find no issues, output exactly: No issues found."
+5. Prepend `$RUN/diff.txt` to the prompt under a `The PR code diff:` header.
+6. Send to all configured providers in parallel.
+7. Synthesize using the PR Review Synthesis format below into a temp markdown file.
+8. If `--post-to-pr <#>` (or a PR was resolved and the user passed `--post`):
    ```bash
    bash ~/.claude/skills/ai-router/scripts/post-review.sh <pr-number> <synth-file>
    ```
-8. **Always print** the final markdown to stdout — required for headless mode (`claude -p`) where there is no interactive output.
+9. **Always print** the final markdown to stdout — required for headless mode (`claude -p`) where there is no interactive output.
 
 **Headless contract:** `claude -p "/ai-router review 42 --post-to-pr 42"` exits 0 iff (a) ≥1 provider returned 200 and (b) the PR comment posted. Providers rendered in stable order: Anthropic → OpenAI → Gemini.
 
 ### PR Review Synthesis Format
 
+Because the diff is grounded, every finding carries a real `file:line`. Dedup across providers by `file:line` + category: two models flagging the same location is one finding (flag it as cross-model — higher confidence), not two. Keep the `file:line` on every bullet so the reader can jump straight to the code.
+
 ```markdown
 ## Ensemble PR Review
 
 ### Critical Issues (flagged by 2+ models)
-[Highest priority — issues multiple models independently caught]
+[Highest priority — issues multiple models independently caught. Each: `file:line` — issue.]
 
 ### Suggestions
-[Deduplicated improvements from any model]
+[Deduplicated improvements from any model. Each: `file:line` — issue.]
 
 ### Model-Specific Catches
-[Issues found by only one model — lower confidence, worth checking]
+[Issues found by only one model — lower confidence, worth checking. Each: `file:line` — issue.]
 
 ### Summary
 [Overall assessment]
@@ -509,10 +530,11 @@ Add to `~/.claude/settings.json` `permissions.allow`:
 "Bash(bash ~/.claude/skills/ai-router/scripts/validate-key.sh:*)",
 "Bash(bash ~/.claude/skills/ai-router/scripts/post-review.sh:*)",
 "Bash(bash ~/.claude/skills/ai-router/scripts/shadow-spawn.sh:*)",
-"Bash(bash ~/.claude/skills/ai-router/scripts/shadow-poll.sh:*)"
+"Bash(bash ~/.claude/skills/ai-router/scripts/shadow-poll.sh:*)",
+"Bash(python3 ~/.claude/skills/ai-router/scripts/format-diff.py:*)"
 ```
 
-Without these, `defaultMode: "auto"` will prompt on every call. (Allow-rule paths must match the literal command Claude invokes; if `~` doesn't expand in your Claude Code version, use `/Users/<you>/.claude/skills/ai-router/scripts/...`.)
+Without these, `defaultMode: "auto"` will prompt on every call. (`format-diff.py` is read-only — no network, no writes — but allowlisting it keeps the review flow prompt-free.) (Allow-rule paths must match the literal command Claude invokes; if `~` doesn't expand in your Claude Code version, use `/Users/<you>/.claude/skills/ai-router/scripts/...`.)
 
 ### Model Override
 

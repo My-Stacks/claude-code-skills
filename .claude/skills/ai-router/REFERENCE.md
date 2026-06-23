@@ -42,6 +42,48 @@ When constructing review prompts, instruct each model to evaluate:
 
 Ask models to reference specific lines/hunks and categorize severity (critical/suggestion/nit).
 
+## Grounding (anti-hallucination) — `format-diff.py`
+
+Raw `git diff` is a poor input for a reviewer: the model has to guess line numbers
+(it routinely invents them) and only sees 3 lines of context, so it speculates about
+code it can't see. `/ai-router review` mitigates both before any model is called:
+
+1. **Expanded context.** Local diffs are fetched with `git diff -U${AI_ROUTER_DIFF_CONTEXT:-8}`
+   (8 lines instead of 3), giving the model the enclosing scope. (`gh pr diff` serves a
+   fixed-context diff — PR-number reviews get GitHub's default; local-branch reviews get
+   the expansion.)
+2. **Line-numbered, hunk-split reformat** via `scripts/format-diff.py` (stdin → stdout,
+   read-only, stdlib-only). It rewrites the diff into:
+
+   ```text
+   ## File: 'src/auth.py'
+
+   @@ ... @@ def login(user):
+   __new hunk__
+   13 +    cache.set(user.id, token, ttl=3600)
+   14 +    audit_log(user.id, "login")
+   15      return token
+   __old hunk__
+   -    cache.set(user.id, token)
+        return token
+   ```
+
+   The `__new hunk__` numbers are the real new-file line numbers, so findings cite
+   actual lines and a later verify pass can map each one back to the working tree.
+   Binary files are dropped; deleted/renamed/new files are handled.
+3. **Grounding rules in the prompt** (see SKILL.md → review step 4): only review `+`
+   lines; don't flag names that may be defined elsewhere; don't claim a change breaks
+   other code unless the path is visible; prefer not-reporting over guessing.
+
+Findings are emitted as fixed blocks (`### <SEVERITY>: <title>` + `file:Lstart-Lend` +
+category + issue + one-line fix) so synthesis can dedup across providers by `file:line`.
+
+> Attribution: the line-numbered `__new hunk__`/`__old hunk__` reformat, expanded/asymmetric
+> context, and self-reflection ideas are adapted from [PR-Agent](https://github.com/The-PR-Agent/pr-agent)
+> (Apache-2.0). The algorithms are reimplemented here in our own code; no prompt text is
+> copied verbatim. Future phases: a deterministic repo-grounded verify pass, inline
+> `suggestion` comments, and an opt-in `fix-findings` step (persona-gated).
+
 ## Headless / CI Usage
 
 The skill is safe to run under `claude -p` (headless mode), which is how `/ai-router shadow-review` works. Key contract:
@@ -58,6 +100,7 @@ The skill is safe to run under `claude -p` (headless mode), which is how `/ai-ro
 | `AI_ROUTER_RUN_ID` | new UUID | Embedded in the comment marker so the shadow poll can match the comment from one specific run. |
 | `AI_ROUTER_PROVIDERS` | `anthropic,openai,gemini` | CSV listed in the comment marker. |
 | `AI_ROUTER_SHADOW_TIMEOUT` | `1800` (s) | Shadow poll timeout. |
+| `AI_ROUTER_DIFF_CONTEXT` | `8` | Lines of context for local `git diff -U` before the grounding reformat. Higher = more enclosing scope, more tokens. |
 
 ### Exit codes
 
@@ -112,7 +155,8 @@ Users with `permissions.defaultMode: "auto"` in `~/.claude/settings.json` need t
 "Bash(bash ~/.claude/skills/ai-router/scripts/validate-key.sh:*)",
 "Bash(bash ~/.claude/skills/ai-router/scripts/post-review.sh:*)",
 "Bash(bash ~/.claude/skills/ai-router/scripts/shadow-spawn.sh:*)",
-"Bash(bash ~/.claude/skills/ai-router/scripts/shadow-poll.sh:*)"
+"Bash(bash ~/.claude/skills/ai-router/scripts/shadow-poll.sh:*)",
+"Bash(python3 ~/.claude/skills/ai-router/scripts/format-diff.py:*)"
 ```
 
 If `~` is not expanded in your Claude Code version, use the absolute path form (`/Users/<you>/.claude/skills/...`).
@@ -149,7 +193,10 @@ chmod 600 ~/.orchestrator-config.json
 ```
 
 ### Large diffs in review
-If the diff exceeds ~80K characters, the skill warns and asks the user to scope the review. To manually scope: `gh pr diff 42 -- src/` or pass specific file paths.
+The diff is reformatted by `format-diff.py` first, then size-checked: interactive mode warns and asks the user to scope above ~150K chars; headless (shadow) mode truncates to the last 500K chars. To manually scope: `gh pr diff 42 -- src/` or pass specific file paths. Lower `AI_ROUTER_DIFF_CONTEXT` (e.g. `3`) to shrink a borderline diff without dropping files.
+
+### Review cites a line that looks off
+Line numbers come from the `__new hunk__` side of `format-diff.py` (real new-file numbers). If a citation seems wrong, confirm you fed `$RUN/diff.txt` (the reformatted output) to the providers, not the raw `git diff`. Feeding the raw diff is the usual cause of hallucinated line numbers.
 
 ## Pricing Reference (per 1M tokens, estimates as of 2026-03)
 

@@ -65,7 +65,7 @@ command -v gh >/dev/null 2>&1 || { echo "missing dependency: gh" >&2; exit 3; }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_MD="$SCRIPT_DIR/../SKILL.md"
 SKILL_VER=$(awk -F'"' '/^version:/ {print $2; exit}' "$SKILL_MD" 2>/dev/null || true)
-SKILL_VER=${SKILL_VER:-1.3}
+SKILL_VER=${SKILL_VER:-1.4}
 
 TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 # UUID via python3 — uuidgen isn't on every system and its output format is
