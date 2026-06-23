@@ -114,12 +114,11 @@ APPLIED_KEYS=()   # per-finding key of each applied fix (matches the inline mark
 SKIPPED=()        # "file:start-end (reason)"
 declare -a FILES  # changed files (unique)
 
-# Per-finding key — MUST match build-review-payload.py's finding_key():
-# sha1("<file>:<start>:<end>:<category>")[:12]. Lets us resolve exactly the
-# threads we fixed, by their marker key.
+# Per-finding key via the single source of truth (lib/finding_key.py) — the same
+# module build-review-payload.py imports, so there is no second implementation to
+# drift. Lets us resolve exactly the threads we fixed, by their marker key.
 finding_key() {
-  python3 -c 'import hashlib,sys; print(hashlib.sha1((":".join(sys.argv[1:5])).encode()).hexdigest()[:12])' \
-    "$1" "$2" "$3" "$4"
+  python3 "$SCRIPT_DIR/lib/finding_key.py" "$1" "$2" "$3" "$4"
 }
 
 apply_one() {
@@ -186,6 +185,14 @@ if [[ -z "${AI_ROUTER_FIX_VERIFY_CMD:-}" ]]; then
   exit 0
 fi
 
+# A trivial verify command makes "verified" hollow — we'd push whatever the
+# ensemble wrote, unattended. Warn loudly (don't silently treat it as a real gate).
+case "$(printf '%s' "$AI_ROUTER_FIX_VERIFY_CMD" | tr -d '[:space:]')" in
+  true|:|/bin/true|/usr/bin/true)
+    echo "fix-findings.sh: WARNING — AI_ROUTER_FIX_VERIFY_CMD is trivial ('$AI_ROUTER_FIX_VERIFY_CMD')." >&2
+    echo "  The auto-fix push will NOT be meaningfully verified — set a real test/build command." >&2
+    ;;
+esac
 echo "auto: running verify command: $AI_ROUTER_FIX_VERIFY_CMD"
 if ! bash -c "$AI_ROUTER_FIX_VERIFY_CMD" >"$TMP/verify.log" 2>&1; then
   revert_all

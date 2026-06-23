@@ -28,7 +28,10 @@ Output: the same array on stdout, each finding annotated with:
 
 status: confirmed = every cited line was in the diff; partial = some were;
 unverified = file not in the PR diff, or none of the cited lines were shown
-(the usual signature of a hallucinated or out-of-scope finding).
+(the usual signature of a hallucinated or out-of-scope finding);
+invalid = the finding is malformed (missing required `file`/`start_line`) — a
+schema problem, surfaced explicitly rather than silently degraded. None of
+unverified/invalid are ever posted inline or auto-fixed.
 
 Deterministic, stdlib-only, read-only. Exit 0 on success; 64 on usage error;
 65 on malformed findings JSON.
@@ -89,14 +92,30 @@ def resolve_path(file_field, index):
     return None
 
 
+def _invalid(reason):
+    # Malformed finding — surfaced explicitly (never silently treated as a
+    # grounding miss, never posted, never fixed). Distinct from "unverified".
+    return {"status": "invalid", "lines_grounded": [], "added_lines": [],
+            "shown_code": "", "reason": reason}
+
+
 def verify_one(f, index):
+    # Schema gate: `file` + `start_line` are required to ground, place, and key a
+    # finding. The rest (end_line/category/severity/issue/...) is normalized or
+    # defaulted, not rejected.
     file_field = str(f.get("file", "")).strip()
+    if not file_field:
+        return _invalid("finding missing required field 'file'")
     try:
         start = int(f.get("start_line"))
-        end = int(f.get("end_line", f.get("start_line")))
     except (TypeError, ValueError):
-        return {"status": "unverified", "lines_grounded": [], "added_lines": [],
-                "shown_code": "", "reason": "finding has no usable start_line/end_line"}
+        return _invalid("finding missing/invalid required field 'start_line'")
+    if start < 1:
+        return _invalid(f"start_line must be >= 1 (got {start})")
+    try:
+        end = int(f.get("end_line", start))
+    except (TypeError, ValueError):
+        end = start
     if end < start:
         start, end = end, start
 

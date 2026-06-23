@@ -131,12 +131,13 @@ Three modes; **only the first runs automatically**:
   lines changed — a *proxy* for "addressed"). Human-triggered via `/ai-router resolve <pr>` only.
 - **`--all` (manual):** every unresolved ai-router thread, e.g. before closing a PR.
 
-The per-finding **key** is `sha1("<file>:<start>:<end>:<category>")[:12]`, embedded in each inline
-comment's marker by `build-review-payload.py` and recomputed identically (Python ↔ bash) by
-`fix-findings.sh`. Why we retired the automated `isOutdated` pass: it was a heuristic *and* it ran as
-a standalone external-write tool call that the headless auto-mode safety classifier (rightly) flagged.
-By-key resolve is both more accurate (verified, not guessed) and a coherent part of the fixer's
-authorized operation.
+The per-finding **key** is `sha1("<file>:<start>:<end>:<category>")[:12]`, computed by a **single
+source of truth** — `lib/finding_key.py`. `build-review-payload.py` imports it (`key_from_finding`)
+to stamp each inline marker; `fix-findings.sh` calls the same file as a CLI to resolve what it fixed.
+One implementation, no hand-maintained python↔bash copy to drift. Why we retired the automated
+`isOutdated` pass: it was a heuristic *and* it ran as a standalone external-write tool call that the
+headless auto-mode safety classifier (rightly) flagged. By-key resolve is both more accurate
+(verified, not guessed) and a coherent part of the fixer's authorized operation.
 
 ## The fixer — `fix-findings.sh` + `apply-fix.py` (v1.7, Phase 3)
 
@@ -182,6 +183,19 @@ The skill is safe to run under `claude -p` (headless mode), which is how `/ai-ro
 
 - All provider calls go through `scripts/call-provider.sh`. The prompt is piped on stdin so the literal Bash command line is constant — pattern-matching allow-rules work cleanly.
 - `/ai-router review <PR#> --post-to-pr <PR#>` writes the synthesis to stdout AND posts it as a PR comment via `scripts/post-review.sh`. Exit 0 iff at least one provider returned 200 and `gh pr comment` succeeded.
+
+### Permission posture (headless)
+
+The headless shadow runs under whatever `permissions` the user's `~/.claude/settings.json` sets. Two supported postures:
+
+- **`defaultMode: auto` + the ai-router allow-rules** (the documented default). Allow-listed scripts run without prompting. **Caveat:** auto-mode keeps an independent safety gate for "external writes" — a *standalone* `gh api graphql` mutation can be flagged even when allow-listed. ai-router avoids this by design: the only unattended GitHub mutation is the by-key resolve, which runs *inside* the already-authorized `fix-findings.sh` (a coherent fix→commit→push→close operation), not as a separate step. The standalone heuristic resolve is **manual only** (`/ai-router resolve`). Do **not** "fix" a classifier block by nesting a flagged call solely to hide it — that's circumvention; the classifier blocks it on purpose.
+- **`--permission-mode dontAsk` + an explicit allow-list** (for fully unattended CI). dontAsk honors `permissions.allow` and skips the classifier, but denies anything *not* allow-listed — so you must allow-list every command the flow uses (`gh pr diff`, `git diff`, `git merge-base`, `mktemp`, the ai-router scripts, …). More setup, fully explicit, no classifier surprises.
+
+Auto-fix is intentionally test-gated: with no `AI_ROUTER_FIX_VERIFY_CMD` it downgrades to propose (won't push); with a *trivial* one (`true`/`:`) `fix-findings.sh` warns loudly that "verified" is hollow. The strength of the auto-fix guarantee is exactly the strength of that command.
+
+### Findings schema
+
+`findings.json` (built by the assistant from the ensemble) is validated at the `verify-findings.py` boundary, not just trusted: `file` + `start_line` are required (else the finding is marked `invalid` and surfaced, never posted or fixed); `end_line`/`category`/`severity`/`issue` are normalized/defaulted. Malformed model output degrades *loudly*, not silently.
 
 ### Env vars
 
