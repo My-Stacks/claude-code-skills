@@ -275,6 +275,19 @@ If `~` is not expanded in your Claude Code version, use the absolute path form (
 
 Why this works: the auto-mode classifier scores the literal command string. A bash invocation of a checked-in script has constant shape — review once, allow forever. The previous v1.2 design embedded multi-line `python3 << 'PYEOF' … curl https://api.anthropic.com … PYEOF` heredocs that varied byte-for-byte every call, so no allow pattern could match cleanly and the classifier denied them by default.
 
+## Tests
+
+```bash
+bash ~/.claude/skills/ai-router/scripts/../tests/run.sh   # or: bash .claude/skills/ai-router/tests/run.sh
+```
+
+Hermetic (no network, no real GitHub — `gh` is stubbed in the bash suites), stdlib-only (`unittest` + bash + `jq`). Exit 0 iff everything passes, so it works as a CI gate or a self-check. Coverage emphasizes edge cases, regressions, and worst-case "never do the wrong thing" safety:
+
+- **Deterministic primitives (python, `unittest`):** `format-diff` (line numbering, new/deleted/renamed/binary files, C-quoted paths, no-newline marker, empty/garbage input, stdin-only); `verify-findings` (confirmed/partial/unverified/**invalid**, path resolution incl. wrong-dir-same-basename rejection, schema gate, malformed JSON); `apply-fix` (match/**stale**/out-of-range, newline preservation, indentation sensitivity); `finding_key` (**CLI↔import parity**, golden value, fallbacks, precedence); `build-review-payload` (committable suggestion, contiguous vs non-contiguous targeting, unverified/invalid excluded).
+- **Safety logic (bash, git sandbox + `gh` stub):** `fix-findings` (refuse main / dirty target, propose-no-commit, auto-pass commit+push, **verify-fail revert**, no-verify downgrade, trivial-verify warning, allowlist/denylist/oversize exclusion, stale skip, detached push-by-ref); `resolve-threads` (by-key / outdated / all selection, and the invariant that a **human (un-markered) thread is NEVER resolved in any mode**).
+
+The whole suite is also a sensible `AI_ROUTER_FIX_VERIFY_CMD` when changing ai-router itself.
+
 ## Troubleshooting
 
 ### Classifier denied a Bash call ("auto mode classifier")
