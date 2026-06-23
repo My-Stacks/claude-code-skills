@@ -85,7 +85,7 @@ If missing, run setup:
 | `/ai-router route <task>` | Suggest best model tier | No |
 | `/ai-router ask <prompt>` | Send to one external model | Yes |
 | `/ai-router ensemble <prompt>` | Send to all configured models, synthesize | Yes |
-| `/ai-router review [<pr>] [--post-to-pr <pr>] [--inline]` | Ensemble PR review, verified against the diff; post as summary or inline comments | Yes |
+| `/ai-router review [<pr>] [--post-to-pr <pr>] [--summary-only]` | Ensemble PR review, verified against the diff; posts inline comments by default (`--summary-only` for one comment) | Yes |
 | `/ai-router shadow-review [--post] [--pr <#>] [--wait-cr] [--wait-reviewers]` | Spawn a background review; default stdout-only and surfaces as soon as ai-router finishes. `--wait-cr` adds CodeRabbit to the AND-wait, `--wait-reviewers` adds any non-author reviewer. | Yes |
 | `/ai-router shadow-list` | List active shadow runs for this repo | No |
 | `/ai-router shadow-cancel [<pr>]` | Stop a running shadow-review (most-recent if no PR given) | No |
@@ -185,9 +185,9 @@ Omit sections with no content. If a provider failed: "Gemini: unavailable (HTTP 
 
 ---
 
-## `/ai-router review [<pr-number>] [--post-to-pr <pr>] [--inline]`
+## `/ai-router review [<pr-number>] [--post-to-pr <pr>] [--summary-only]`
 
-Ensemble PR review. Gathers diff context, sends to all configured models, synthesizes, **verifies each finding against the reviewed diff**, then optionally posts — as a single summary comment, or (with `--inline`) as inline comments at the real lines with committable suggestions.
+Ensemble PR review. Gathers diff context, sends to all configured models, synthesizes, **verifies each finding against the reviewed diff**, then — when a PR is given — posts grounded findings as **inline comments** at the real lines with committable suggestions. Posting is opt-in (needs `<pr-number>` or `--post-to-pr <#>`); pass `--summary-only` to post one summary comment instead of inline threads.
 
 1. Get the diff to review (priority order). Use expanded context (`-U`) on local diffs so models see the enclosing scope, not just 3 lines — part of the grounding below:
    - PR number given: `gh pr diff <number>` (GitHub serves a fixed-context diff)
@@ -232,18 +232,19 @@ Ensemble PR review. Gathers diff context, sends to all configured models, synthe
    ```
    Each finding gains `verify.status`: **confirmed** (all cited lines were in the diff), **partial** (some), or **unverified** (file/lines not in the reviewed diff — the usual hallucination signature). Treat `unverified` as untrusted: never present it as a confirmed bug; surface it separately as "could not ground."
 9. Synthesize using the PR Review Synthesis format below into `$RUN/synth.md`, ordered by verified status (confirmed first; unverified demoted to its own section).
-10. **Post (opt-in):**
-    - **`--inline`** (a PR must be resolved, via `<pr-number>` or `--post-to-pr <#>`): post grounded findings as inline review comments — one per confirmed/partial finding, with a committable ```suggestion block where `suggestion` is present. Ungrounded findings go in the review body, never inline (GitHub rejects out-of-diff lines):
+10. **Post — opt-in via `<pr-number>` or `--post-to-pr <#>`; inline is the default style.** When a PR is resolved and posting is requested:
+    - **default (inline):** post grounded findings as a PR review — one inline comment per confirmed/partial finding at its real line(s), with a committable ```suggestion block where `suggestion` is present. Ungrounded findings go in the review body, never inline (GitHub rejects out-of-diff lines):
       ```bash
       bash ~/.claude/skills/ai-router/scripts/post-inline.sh <pr-number> "$RUN/verified.json" "$RUN/synth.md"
       ```
-    - **`--post-to-pr <#>`** without `--inline`: post the synthesis as one summary comment (v1.4 behavior):
+    - **`--summary-only`:** opt down to a single summary comment instead of inline threads:
       ```bash
       bash ~/.claude/skills/ai-router/scripts/post-review.sh <pr-number> "$RUN/synth.md"
       ```
+    Running `review` with no PR resolved posts nothing — it just prints to stdout (step 11).
 11. **Always print** the final markdown to stdout — required for headless mode (`claude -p`) where there is no interactive output. Then `rm -rf "$RUN"`.
 
-**Headless contract:** `claude -p "/ai-router review 42 --post-to-pr 42"` exits 0 iff (a) ≥1 provider returned 200 and (b) the PR comment posted (summary comment, or the inline review when `--inline` is set). Providers rendered in stable order: Anthropic → OpenAI → Gemini.
+**Headless contract:** `claude -p "/ai-router review 42 --post-to-pr 42"` exits 0 iff (a) ≥1 provider returned 200 and (b) the PR comment posted (the inline review by default, or a summary comment with `--summary-only`). Providers rendered in stable order: Anthropic → OpenAI → Gemini.
 
 ### PR Review Synthesis Format
 
