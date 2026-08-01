@@ -60,8 +60,11 @@ Invoked manually — it's a felt state, respect the instinct. But **recommend it
 Phase 2's flag-driven pulls; body-dependent detectors (dead-figure,
 numeric-drift, done-in-substance, canon-drift, provenance) run only on values
 visible in titles/metadata and are listed in COVERAGE as `degraded (quick)`.
-Phase 3 runs in full — the session is already in context. Title the report
-`HOUSEKEEPING (QUICK)` so it is never mistaken for a full baseline.
+Phase 3 runs in full — the session is already in context — but any record it
+proposes that carries a figure or commitment is annotated `quick — not
+verified against canon`, and the annotation carries into the Phase 5 list.
+Title the report `HOUSEKEEPING (QUICK)` so it is never mistaken for a full
+baseline.
 
 ## Bound surfaces: every agent has three
 
@@ -85,9 +88,11 @@ COVERAGE finding, never a silent skip and never a reason to abort the pass.
 
 Per-project, at `~/.claude/housekeeping/<project-key>.yml`. Key = the bound
 Linear project's name, lowercased, runs of non-alphanumerics collapsed to `-`,
-plus `-` and the first 8 hex chars of its sha1 (e.g. `Fundraise 2026` →
-`fundraise-2026-a1b2c3d4`) — never derived from git; the repo is one optional
-surface and may be absent. On invocation, list `~/.claude/housekeeping/*.yml`
+plus `-` and the first 8 hex chars of the sha1 of the UTF-8 bytes of the
+project's **stable Linear project ID** (e.g. `Fundraise 2026` →
+`fundraise-2026-a1b2c3d4`; hash the raw name only if no ID is available — the
+ID keeps same-named projects in different workspaces from colliding). Never
+derived from git; the repo is one optional surface and may be absent. On invocation, list `~/.claude/housekeeping/*.yml`
 and match this project by the `project:` field: exactly one match → use it;
 ambiguous → ask; none → run the first-run interview (ask for the bound Linear
 project *first* so the key can be derived), then write the config and read its
@@ -121,7 +126,8 @@ approved-but-unapplied mutations it records. End each report with a `findings:`
 list of stable ids, one per finding, formed `<class>/<surface>:<record-id>`
 (e.g. `dead-figure/linear:ABC-42`); a finding is a **repeat** iff its id appears
 in the previous report's list — repeats signal a systemic problem, not a
-tidiness problem.
+tidiness problem. (Lookback is one run by design; a finding resolved and
+recurring later reads as new.)
 
 ## The phases — strict sequence, each gates the next
 
@@ -148,13 +154,19 @@ Then sweep every surface in the `surfaces:` list. Per surface capture: id,
 title, state, priority, owner, dates, last-updated. Evidence streams (calls,
 transcripts, notes, mail) are swept from the previous run's timestamp; on a
 first run, sweep the last `sweep_window_days`. Go deeper into history only when
-a Phase 2 finding requires it. Prefer metadata sweeps; pull full bodies only
-for items Phase 2 flags. Delegate bulk reading to subagents, but **require
+a Phase 2 finding requires it. Prefer metadata sweeps — but the body-dependent
+detectors (dead-figure, numeric-drift, done-in-substance, provenance) pull
+full bodies up front for open or since-last-run-changed records in the bound
+project and for canon sources, since a stale figure living only in a body is
+otherwise invisible; everything else pulls bodies only when a Phase 2 finding
+requires it. Delegate bulk reading to subagents, but **require
 verbatim quotes with attribution in return** — a subagent's paraphrase is not
 evidence.
 
 **Report coverage explicitly.** M = the 3 bound surfaces + every `surfaces:`
-entry. A surface that errors or returns partial data after one retry is
+entry + each configured `continuity:` input; a missing or unreadable
+continuity input is named in COVERAGE like any other miss. A surface that
+errors or returns partial data after one retry is
 unreachable — say which part was missing. "Swept 9 of 10 surfaces; X
 unreachable" is a valid and required output; an unreachable surface is a
 *finding*, never a silent omission.
@@ -238,17 +250,22 @@ figure corrections, new tickets, decision records, **and the continuity-surface
 drafts** (`.latest-status.md`, journal entry, any always-current page; flag the
 local ones low-risk so the operator can batch-approve) — as a reviewable list,
 and **wait**. Default is no writes. Offer "apply all" and selective approval —
-but "apply all" covers only the non-destructive, non-externally-visible items;
-each destructive or externally-visible action (cancelling work, editing a
-shared page, anything an outsider could see) itemises individually and needs
-its own explicit yes; say this scope when offering the option. After applying,
-verify and report what actually landed, including partial failures. No mutation
-class is safe to auto-apply; start fully gated.
+but "apply all" covers only the non-destructive, non-externally-visible items.
+These always itemise individually, each needing its own explicit yes — the
+list is exhaustive, not judgment-based: closing or cancelling a ticket,
+editing any shared or published page, correcting a figure anywhere an outsider
+could see it, sending any message, and anything else that leaves the
+operator's own local surfaces. Say this scope when offering "apply all."
+Continuity drafts are **approved** here but **written only in Phase 6** —
+exactly once. After applying the rest of the approved set, verify and report
+what actually landed, including partial failures. No mutation class is safe to
+auto-apply; start fully gated.
 
 ### Phase 6 — THE WAY OUT
 The payload everything above earns: **the next 3–5 steps, in order, the first
-one unambiguous.** Short. No hedging. Then apply the continuity updates
-approved in Phase 5 — nothing else. The only ungated write here is finalising
+one unambiguous.** Short. No hedging. Then write the continuity updates
+approved in Phase 5 — this is the sole phase that writes them, and nothing
+else. The only ungated write here is finalising
 this run's report at `~/.claude/housekeeping/<project-key>-last-run.md` (see
 Config); narrate the save.
 
