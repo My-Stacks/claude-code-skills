@@ -128,7 +128,7 @@ After setup, bare `/linear` or `/linear help` shows the command menu:
 > `/linear push` — push buffered changes to Linear
 > `/linear handoff` — end session + write summary
 > `/linear update` — post a project status update
-> `/linear sync-project` — refresh project description + dependencies
+> `/linear sync-project` — write project description + dependencies to Linear
 > `/linear search <query>` — find existing issues
 > `/linear buffer` — view/edit buffered items
 > `/linear context` — show loaded state
@@ -181,6 +181,7 @@ active_project:
   id: "proj-789"
   name: "Auth Service"
   matched_by: "user_selected"
+  synced: 2026-02-21        # last /linear sync-project write; absent until first sync
 teams: [...]
 users: [...]           # id, name, email
 projects: [...]        # id, name
@@ -494,6 +495,10 @@ directly via `save_project` — no copy-paste step.
 `/linear update` reports what happened this session. `sync-project` corrects what the
 project *is*. Different jobs, different cadence.
 
+Don't confuse it with the two similarly-named commands: `/linear refresh` pulls Linear
+data *into* the local cache and writes nothing; `/linear project <n>` switches which
+project is bound. `sync-project` is the only one of the three that writes to Linear.
+
 **When to run:**
 
 | Trigger | Run? |
@@ -507,16 +512,24 @@ project *is*. Different jobs, different cadence.
 
 **Step 1: Resolve the binding.**
 
-Read `active_project` from cache. If absent, run First Run binding first. Then
-`get_project(query=<active_project.id>, includeMilestones=true, includeMembers=true)`.
+Read `active_project` from cache. Three cases, in this order — they are mutually
+exclusive, so resolve which one applies before doing anything else:
 
-Stop and report — do not write against a broken binding — if either:
-- Project not found (stale ID; the project was deleted or the binding is wrong).
-- Its team doesn't match cached `default_team`.
+| Cache state | `get_project` result | Do |
+|---|---|---|
+| **No `active_project`** | — | Run First Run binding (Setup Step 2). If that ends with a newly created project, continue at Step 2 below; its fields are empty and this command fills them. |
+| **Bound** | resolves | Normal path — continue to Step 2. |
+| **Bound** | not found, or its team ≠ cached `default_team` | **Stop. Report. Write nothing.** |
 
-If no project exists to bind, offer to create one. Creation is a single `save_project`
-call with `name`, `summary`, `description`, and `addTeams` — same composed content as
-below, no `id`.
+The third row is a *broken binding*, not a missing project: the cache names a specific
+project ID and Linear disagrees. Creating a new project here would silently orphan the
+real one and split its history. Say which of the two it is — stale ID or team mismatch —
+and let the user re-bind with `/linear project <n>`.
+
+Creating a project is therefore only ever reached through First Run binding, never
+invented here. When that path does create one, it is a single `save_project` call with
+`name`, `summary`, `description`, and `addTeams` and no `id` — composed by Steps 2–3
+below, so run those first and issue the create in place of the Step 5 update.
 
 **Step 2: Detect source mode.**
 
@@ -646,7 +659,8 @@ If a state name isn't in cache, refresh before failing.
 
 **Team/project names are case-sensitive.** Must match exactly. On error, re-fetch and match.
 
-**Priority values:** 0=None, 1=Urgent, 2=High, 3=Normal, 4=Low.
+**Priority values:** 0=None, 1=Urgent, 2=High, 3=Medium, 4=Low. (Linear's own label for
+3 is "Medium"; don't surface it as "Normal".)
 
 **Required fields on state transitions:** Some teams require PR links, time estimates, or
 custom fields before allowing status changes. If push gets a validation error on a state
