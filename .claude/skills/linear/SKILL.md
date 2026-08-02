@@ -562,8 +562,11 @@ a leaked secret, and the Step 4 preview would expose it too. Both remote forms:
 
 | Form | Example | Reduce by |
 |---|---|---|
-| URL | `https://TOKEN@github.com/org/repo.git` | drop scheme, drop everything up to and including `@`, drop the host segment, strip `.git` |
-| SCP-style | `git@github.com:org/repo.git` | take the substring after the **first `:`**, strip `.git` |
+| URL | `https://TOKEN@github.com/org/repo.git` | strip `.git`; take the **last two `/`-separated segments** (`org/repo`). Never assemble the result from the host or userinfo — discard everything before those two segments. |
+| SCP-style | `git@github.com:org/repo.git` | strip `.git`; take the substring after the **first `:`** (`org/repo`) |
+
+Both rules land on the same two segments, so a token in the userinfo can't survive either
+path.
 
 SCP-style is the common case and is *not* a URL — `git@github.com` is user+host and the
 `:` is the separator, not a port. Don't apply URL parsing to it. If the result isn't a
@@ -643,6 +646,8 @@ so it's unmistakable that approving makes a new project rather than editing one.
   and Step 4 got approved** — `summary`, `description`, and any of `lead`,
   `addInitiatives`, `state`, `priority`, `startDate`, `targetDate` that were previewed.
   Dropping an approved field here would silently discard something the user signed off on.
+  If Step 4 ended with nothing approved, abort — "Nothing approved; project not created."
+  Never create a bare project from `name` + `addTeams` alone.
 
 Report the project URL.
 
@@ -661,9 +666,10 @@ active_project:
 Skip this and the next run sees no `active_project`, takes the create path again, and
 makes a **duplicate project** — the exact failure the binding rules exist to prevent.
 
-**Step 6: Update cache.** Refresh `active_project` in `.linear/cache.yaml`; stamp
-`synced:` as an unquoted ISO 8601 date (`YYYY-MM-DD`) — not a quoted string, not a
-full timestamp.
+**Step 6: Update cache — update mode only.** Stamp `synced:` on the existing
+`active_project` entry as an unquoted ISO 8601 date (`YYYY-MM-DD`) — not a quoted string,
+not a full timestamp. **Create mode skips this step entirely:** Step 5 already wrote the
+complete entry, `synced:` included. There is exactly one cache write per run.
 
 **Follow-ups this command does not do:** it never creates or closes tickets, never
 moves the project between teams, and never writes milestones. If the repo has a roadmap
