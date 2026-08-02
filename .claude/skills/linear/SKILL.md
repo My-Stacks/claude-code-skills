@@ -522,8 +522,13 @@ exclusive, so resolve which one applies before doing anything else:
 | **Bound** | not found, **or** cached `default_team` is absent from the project's team list | — | **Stop. Report. Write nothing.** |
 
 Carry **update** or **create** through to Step 5 — it selects which single `save_project`
-call is made there, and nothing before Step 5 writes. There is exactly one write per run
-in either mode, so a create can't duplicate or double-fire.
+call is made there, and nothing before Step 5 writes. There is **at most one** write per
+run in either mode, so a create can't duplicate or double-fire. Zero writes is also a
+valid outcome: if Step 4's diff comes back empty in update mode, report "already in
+sync" and stop — never call `save_project` with an `id` and no changed fields.
+
+`synced:` is informational only. Nothing in this step reads it, and a recent value never
+skips a run.
 
 The third row is a *broken binding*, not a missing project: the cache names a specific
 project ID and Linear disagrees. Creating a new project here would silently orphan the
@@ -551,10 +556,18 @@ modified file. Don't take the alphabetically-last name as newest — for undated
 that silently feeds stale context into the description.
 
 **Sanitize the remote before it reaches a field.** `git remote get-url origin` can carry
-embedded credentials (`https://TOKEN@github.com/org/repo.git`, `git@…` userinfo). Reduce
-it to `org/repo` and drop any userinfo, scheme, and `.git` suffix *before* composing or
-previewing. A Linear project description is visible to the whole workspace — a token
-written there is a leaked secret, and the preview in Step 4 would expose it too.
+embedded credentials. Reduce it to bare `org/repo` *before* composing or previewing — a
+Linear project description is visible to the whole workspace, so a token written there is
+a leaked secret, and the Step 4 preview would expose it too. Both remote forms:
+
+| Form | Example | Reduce by |
+|---|---|---|
+| URL | `https://TOKEN@github.com/org/repo.git` | drop scheme, drop everything up to and including `@`, drop the host segment, strip `.git` |
+| SCP-style | `git@github.com:org/repo.git` | take the substring after the **first `:`**, strip `.git` |
+
+SCP-style is the common case and is *not* a URL — `git@github.com` is user+host and the
+`:` is the separator, not a port. Don't apply URL parsing to it. If the result isn't a
+clean `org/repo`, omit the repo field rather than emit something you couldn't reduce.
 
 **Step 3: Compose fields.**
 
@@ -607,8 +620,8 @@ what's being left alone.
 
 summary      "Auth service"  →  "Token issuance and session validation for..."
 description  2 sections changed: Dependencies (+3 services), Status (in-dev → active)
-lead         unset  →  Kyle Hudson
-initiatives  + Platform
+lead            unset  →  Kyle Hudson
+addInitiatives  + Platform
 
 Unchanged: teams, priority, dates, labels
 
@@ -624,12 +637,29 @@ so it's unmistakable that approving makes a new project rather than editing one.
 
 **Step 5: Write.** One `save_project` call, per the mode carried from Step 1:
 
-- **update** — pass `id: active_project.id` and only the changed fields.
-- **create** — pass no `id`; pass `name`, `summary`, `description`, and `addTeams`.
-  Then write the returned project ID into `active_project` so the next run updates it
-  rather than creating a second one.
+- **update** — pass `id: active_project.id` and only the changed fields. If there are
+  none, make no call at all (see Step 1).
+- **create** — pass no `id`. Pass `name`, `addTeams`, and **every field Step 3 sourced
+  and Step 4 got approved** — `summary`, `description`, and any of `lead`,
+  `addInitiatives`, `state`, `priority`, `startDate`, `targetDate` that were previewed.
+  Dropping an approved field here would silently discard something the user signed off on.
 
 Report the project URL.
+
+**Create mode must then seed the cache before anything else.** `active_project` does not
+exist yet — its absence is what selected create mode — so there is no entry to update.
+Write a complete one into `.linear/cache.yaml`:
+
+```yaml
+active_project:
+  id: "<id returned by save_project>"
+  name: "<project name>"
+  matched_by: "created"
+  synced: <today>
+```
+
+Skip this and the next run sees no `active_project`, takes the create path again, and
+makes a **duplicate project** — the exact failure the binding rules exist to prevent.
 
 **Step 6: Update cache.** Refresh `active_project` in `.linear/cache.yaml`; stamp
 `synced:` as an unquoted ISO 8601 date (`YYYY-MM-DD`) — not a quoted string, not a
