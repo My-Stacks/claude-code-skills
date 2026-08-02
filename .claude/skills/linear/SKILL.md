@@ -515,21 +515,25 @@ project is bound. `sync-project` is the only one of the three that writes to Lin
 Read `active_project` from cache. Three cases, in this order — they are mutually
 exclusive, so resolve which one applies before doing anything else:
 
-| Cache state | `get_project` result | Do |
-|---|---|---|
-| **No `active_project`** | — | Run First Run binding (Setup Step 2). If that ends with a newly created project, continue at Step 2 below; its fields are empty and this command fills them. |
-| **Bound** | resolves | Normal path — continue to Step 2. |
-| **Bound** | not found, or its team ≠ cached `default_team` | **Stop. Report. Write nothing.** |
+| Cache state | `get_project` result | Mode | Do |
+|---|---|---|---|
+| **No `active_project`** | — | — | Run First Run binding (Setup Step 2). It resolves to either an existing project (→ **update**) or a decision to create a new one (→ **create**). It does **not** call `save_project` itself. Continue to Step 2 carrying that mode. |
+| **Bound** | resolves | **update** | Normal path — continue to Step 2. |
+| **Bound** | not found, **or** cached `default_team` is absent from the project's team list | — | **Stop. Report. Write nothing.** |
+
+Carry **update** or **create** through to Step 5 — it selects which single `save_project`
+call is made there, and nothing before Step 5 writes. There is exactly one write per run
+in either mode, so a create can't duplicate or double-fire.
 
 The third row is a *broken binding*, not a missing project: the cache names a specific
 project ID and Linear disagrees. Creating a new project here would silently orphan the
 real one and split its history. Say which of the two it is — stale ID or team mismatch —
 and let the user re-bind with `/linear project <n>`.
 
-Creating a project is therefore only ever reached through First Run binding, never
-invented here. When that path does create one, it is a single `save_project` call with
-`name`, `summary`, `description`, and `addTeams` and no `id` — composed by Steps 2–3
-below, so run those first and issue the create in place of the Step 5 update.
+**The team check is membership, not equality.** A Linear project can belong to several
+teams — that is why Step 3 uses append-only `addTeams`. It is a mismatch only when the
+cached `default_team` is *absent* from the project's teams; a project carrying
+`default_team` plus others is valid, and halting on it would refuse a legitimate sync.
 
 **Step 2: Detect source mode.**
 
@@ -541,7 +545,16 @@ below, so run those first and issue the create in place of the Step 5 update.
 Agent mode: if the `linear` block in `agent.yaml` holds unresolved `{{placeholder}}`
 values, stop. "Linear binding incomplete in agent.yaml. Fix that first, then re-run."
 
-Read only the newest journal entry, not the whole directory.
+Read only the newest journal entry, not the whole directory. "Newest" = the highest
+`YYYY-MM-DD` filename prefix; if the filenames aren't date-prefixed, the most recently
+modified file. Don't take the alphabetically-last name as newest — for undated filenames
+that silently feeds stale context into the description.
+
+**Sanitize the remote before it reaches a field.** `git remote get-url origin` can carry
+embedded credentials (`https://TOKEN@github.com/org/repo.git`, `git@…` userinfo). Reduce
+it to `org/repo` and drop any userinfo, scheme, and `.git` suffix *before* composing or
+previewing. A Linear project description is visible to the whole workspace — a token
+written there is a leaked secret, and the preview in Step 4 would expose it too.
 
 **Step 3: Compose fields.**
 
@@ -550,9 +563,9 @@ is left untouched, an invented one is drift you just wrote.
 
 | Field | Source | Notes |
 |---|---|---|
-| `summary` | one-line what-it-is | **≤255 chars, hard limit** |
+| `summary` | one-line what-it-is | **≤255 chars** — trim here, before the preview; don't let the API reject it |
 | `description` | body template below | Markdown, literal newlines |
-| `lead` | `agent.yaml` owner, CODEOWNERS, or dominant committer | omit if ambiguous; don't guess from git alone |
+| `lead` | `agent.yaml` owner or CODEOWNERS | explicit owner signals only — never infer from commit history |
 | `addTeams` | cached `default_team` | append-only; never `setTeams` here |
 | `addInitiatives` | parent program, if explicit | omit if unknown |
 | `state`, `priority`, `startDate`, `targetDate` | explicit source only | omit rather than infer |
@@ -605,11 +618,22 @@ Apply?
 Wait for explicit approval. After any requested change, re-show the full preview
 before writing (Non-Negotiable #1).
 
-**Step 5: Write.** `save_project` with `id: active_project.id` and only the changed
-fields. Report the project URL.
+**This gate applies to create mode too** — a create is a write. Preview it the same way,
+with every field reading `unset → <value>`, and head the block `## Create project: <name>`
+so it's unmistakable that approving makes a new project rather than editing one.
+
+**Step 5: Write.** One `save_project` call, per the mode carried from Step 1:
+
+- **update** — pass `id: active_project.id` and only the changed fields.
+- **create** — pass no `id`; pass `name`, `summary`, `description`, and `addTeams`.
+  Then write the returned project ID into `active_project` so the next run updates it
+  rather than creating a second one.
+
+Report the project URL.
 
 **Step 6: Update cache.** Refresh `active_project` in `.linear/cache.yaml`; stamp
-`synced: <today>`.
+`synced:` as an unquoted ISO 8601 date (`YYYY-MM-DD`) — not a quoted string, not a
+full timestamp.
 
 **Follow-ups this command does not do:** it never creates or closes tickets, never
 moves the project between teams, and never writes milestones. If the repo has a roadmap
