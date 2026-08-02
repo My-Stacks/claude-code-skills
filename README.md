@@ -6,7 +6,7 @@ Reusable components for [Claude Code](https://docs.anthropic.com/en/docs/claude-
 
 | Component | Type | Version | What it does |
 |-----------|------|---------|-------------|
-| [linear](./.claude/skills/linear/) | Skill | 0.5.1 | Linear project management with session continuity. Buffered writes, board management, ticket creation, structured handoffs persisted to Linear. Auto-maintains `.latest-status.md`. |
+| [linear](./.claude/skills/linear/) | Skill | 0.6.0 | Linear project management with session continuity. Buffered writes, board management, ticket creation, structured handoffs persisted to Linear. Syncs project description, dependencies, and metadata from repo state via `/linear sync-project`. Auto-maintains `.latest-status.md`. |
 | [vault-backup](./.claude/skills/vault-backup/) | Skill | 1.0 | Save research, project outputs, and knowledge artifacts from any Claude Code workspace into a shared Obsidian knowledge vault. |
 | [ai-router](./.claude/skills/ai-router/) | Skill | 1.9 | Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Grounded PR review: line-numbered diff + anti-hallucination rules, findings **verified against the diff** (hallucinated ones dropped), posted as **inline comments** with committable suggestions by default, **resolves exactly the threads it verified-fixed** (by per-finding key), and a **persona-gated auto-fixer** — interactive (`--fix=propose\|auto`) and **always-on** via the shadow flow (`shadow-review --fix`), which fixes in an isolated `git worktree` so it never touches your checkout. Headless-safe with `--post-to-pr` and `/ai-router shadow-review`. Requires `curl`, `jq`, `python3`, and (for PR posting) `gh`. |
 | [create-client-pdf](./.claude/skills/create-client-pdf/) | Skill | 1.2.1 | Convert a Markdown file with YAML frontmatter into a client-presentable PDF, branded for Stacklab or Stacklist. Requires Python + Playwright (see `INSTALL.md`). |
@@ -235,6 +235,23 @@ cp -r .claude/skills/ai-router/ ~/.claude/skills/ai-router/
 ```
 
 Then add the five script allow-rules to `~/.claude/settings.json` `permissions.allow` (see REFERENCE.md → "Pre-authorizing the scripts").
+
+### Linear v0.6.0
+
+Adds `/linear sync-project` — syncs a Linear project's description, dependencies, and metadata from actual repo state. Refreshes a drifted project; fills out a new or empty one. Writes directly via `save_project`, no copy-paste step.
+
+- **Two source modes:** detects `agent.yaml` and reads the agent contract (runtime, MCPs, pipeline, status); otherwise falls back to README, manifest, and git state. Works in agent repos and ordinary projects alike.
+- **Dependencies as a first-class section:** upstream/downstream, services/MCPs, and canon sources, sourced from `agent.yaml` or the package manifest.
+- **Diff-then-approve:** shows old → new per changed field and names what it's leaving alone. Only changed fields are written.
+- **Supersedes** the agent-factory `/refresh-linear` command, whose paste-only flow predated `save_project` existing in the Linear MCP.
+
+Also corrects a documented-API bug: the skill previously said projects take `description` (255 chars) and `content` (unlimited). The real parameters are `summary` (255 chars) and `description` (unlimited Markdown) — there is no `content`. Writes following the old note would have failed. Adds warnings that `setTeams`, `setInitiatives`, and `labels` replace their full sets.
+
+To upgrade:
+
+```bash
+cp -r .claude/skills/linear/ ~/.claude/skills/linear/
+```
 
 ### Linear v0.5.1
 

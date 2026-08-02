@@ -4,9 +4,10 @@ description: |
   Linear project management with integrated session continuity.
   Session tracking, board management, ticket creation, project updates,
   and structured handoffs persisted to Linear.
+  Syncs project description, dependencies, and metadata from repo state.
   Auto-maintains .latest-status.md for cross-session resume.
 trigger: /linear
-version: "0.5.1"
+version: "0.6.0"
 ---
 
 ## Version Check
@@ -108,6 +109,7 @@ status: in_progress | paused | blocked | complete
 | `/linear handoff` | End-of-session: push + write session summary | Yes |
 | `/linear resume` | Start-of-session: pull context, initialize buffer | No |
 | `/linear update` | Post a project status update | Yes |
+| `/linear sync-project` | Sync project description, dependencies, metadata from repo state | Yes |
 | `/linear create` | Create a single ticket now (not buffered) | Yes |
 | `/linear buffer` | View/edit/remove buffered items | No |
 | `/linear context` | Show current loaded state (no API calls) | No |
@@ -126,6 +128,7 @@ After setup, bare `/linear` or `/linear help` shows the command menu:
 > `/linear push` — push buffered changes to Linear
 > `/linear handoff` — end session + write summary
 > `/linear update` — post a project status update
+> `/linear sync-project` — write project description + dependencies to Linear
 > `/linear search <query>` — find existing issues
 > `/linear buffer` — view/edit buffered items
 > `/linear context` — show loaded state
@@ -178,6 +181,7 @@ active_project:
   id: "proj-789"
   name: "Auth Service"
   matched_by: "user_selected"
+  synced: 2026-02-21        # last /linear sync-project write; absent until first sync
 teams: [...]
 users: [...]           # id, name, email
 projects: [...]        # id, name
@@ -482,6 +486,205 @@ If session buffer has content, offer:
 
 Omit sections with no content. Preview, approve, post via `save_status_update` on `active_project`.
 
+### `/linear sync-project`
+
+Bring the bound project's description, dependencies, and metadata in line with what the
+repo actually is. Refreshes a drifted project; fills out a new or empty one. Writes
+directly via `save_project` — no copy-paste step.
+
+`/linear update` reports what happened this session. `sync-project` corrects what the
+project *is*. Different jobs, different cadence.
+
+Don't confuse it with the two similarly-named commands: `/linear refresh` pulls Linear
+data *into* the local cache and writes nothing; `/linear project <n>` switches which
+project is bound. `sync-project` is the only one of the three that writes to Linear.
+
+**When to run:**
+
+| Trigger | Run? |
+|---|---|
+| Project newly created, or description empty/stub | Yes |
+| Status transition (e.g. scaffolded → in-development → active) | Yes |
+| Major capability, runtime, or dependency change | Yes |
+| Repo move, ownership change, initiative or team change | Yes |
+| User asks | Yes |
+| Routine session work, ticket updates, journal entries | No — that's `/linear handoff` |
+
+**Step 1: Resolve the binding.**
+
+Read `active_project` from cache. Three cases, in this order — they are mutually
+exclusive, so resolve which one applies before doing anything else:
+
+| Cache state | `get_project` result | Mode | Do |
+|---|---|---|---|
+| **No `active_project`** | — | — | Run First Run binding (Setup Step 2). It resolves to either an existing project (→ **update**) or a decision to create a new one (→ **create**). It does **not** call `save_project` itself. Continue to Step 2 carrying that mode. |
+| **Bound** | resolves | **update** | Normal path — continue to Step 2. |
+| **Bound** | not found, **or** cached `default_team` is absent from the project's team list | — | **Stop. Report. Write nothing.** |
+
+Carry **update** or **create** through to Step 5 — it selects which single `save_project`
+call is made there, and nothing before Step 5 writes. There is **at most one** write per
+run in either mode, so a create can't duplicate or double-fire. Zero writes is also a
+valid outcome: if Step 4's diff comes back empty in update mode, report "already in
+sync" and stop — never call `save_project` with an `id` and no changed fields.
+
+`synced:` is informational only. Nothing in this step reads it, and a recent value never
+skips a run.
+
+The third row is a *broken binding*, not a missing project: the cache names a specific
+project ID and Linear disagrees. Creating a new project here would silently orphan the
+real one and split its history. Say which of the two it is — stale ID or team mismatch —
+and let the user re-bind with `/linear project <n>`.
+
+**The team check is membership, not equality.** A Linear project can belong to several
+teams — that is why Step 3 uses append-only `addTeams`. It is a mismatch only when the
+cached `default_team` is *absent* from the project's teams; a project carrying
+`default_team` plus others is valid, and halting on it would refuse a legitimate sync.
+
+**Step 2: Detect source mode.**
+
+| Detect | Mode | Sources, in order |
+|---|---|---|
+| `agent.yaml` at repo root | **agent** | `agent.yaml` (codename, status, runtime, repo, mcps, pipeline, linear block) → `CLAUDE.md` (identity, what it does) → `.latest-status.md` → newest `journal/*.md` |
+| otherwise | **generic** | `README.md` → `CLAUDE.md` → manifest (`package.json` / `pyproject.toml` / `Cargo.toml` / `go.mod`) → `git remote get-url origin` → `git log -20 --oneline` → `.latest-status.md` |
+
+Agent mode: if the `linear` block in `agent.yaml` holds unresolved `{{placeholder}}`
+values, stop. "Linear binding incomplete in agent.yaml. Fix that first, then re-run."
+
+Read only the newest journal entry, not the whole directory. "Newest" = the highest
+`YYYY-MM-DD` filename prefix; if the filenames aren't date-prefixed, the most recently
+modified file. Don't take the alphabetically-last name as newest — for undated filenames
+that silently feeds stale context into the description.
+
+**Sanitize the remote before it reaches a field.** `git remote get-url origin` can carry
+embedded credentials. Reduce it to bare `org/repo` *before* composing or previewing — a
+Linear project description is visible to the whole workspace, so a token written there is
+a leaked secret, and the Step 4 preview would expose it too. Both remote forms:
+
+| Form | Example | Reduce by |
+|---|---|---|
+| URL | `https://TOKEN@github.com/org/repo.git` | strip `.git`; take the **last two `/`-separated segments** (`org/repo`). Never assemble the result from the host or userinfo — discard everything before those two segments. |
+| SCP-style | `git@github.com:org/repo.git` | strip `.git`; take the substring after the **first `:`** (`org/repo`) |
+
+Both rules land on the same two segments, so a token in the userinfo can't survive either
+path.
+
+SCP-style is the common case and is *not* a URL — `git@github.com` is user+host and the
+`:` is the separator, not a port. Don't apply URL parsing to it. If the result isn't a
+clean `org/repo`, omit the repo field rather than emit something you couldn't reduce.
+
+**Step 3: Compose fields.**
+
+Set only what you can source from the repo. Omit rather than guess — an omitted field
+is left untouched, an invented one is drift you just wrote.
+
+| Field | Source | Notes |
+|---|---|---|
+| `summary` | one-line what-it-is | **≤255 chars** — trim here, before the preview; don't let the API reject it |
+| `description` | body template below | Markdown, literal newlines |
+| `lead` | `agent.yaml` owner or CODEOWNERS | explicit owner signals only — never infer from commit history |
+| `addTeams` | cached `default_team` | append-only; never `setTeams` here |
+| `addInitiatives` | parent program, if explicit | omit if unknown |
+| `state`, `priority`, `startDate`, `targetDate` | explicit source only | omit rather than infer |
+| `labels` | — | skip; it replaces the full set |
+
+**Description body.** Include only sections with real content — omit the rest entirely
+(Non-Negotiable #6). Never emit a heading with placeholder text under it.
+
+```markdown
+{One paragraph: what this is, what surface it runs on, how it's used.
+Operational, not aspirational.}
+
+## Where it lives
+- **Repo:** `{org}/{name}`
+- **Runtime:** {one sentence — service, CLI, workflow-only, static site}
+- **Output:** {path or surface, if any}
+
+## Dependencies
+- **Upstream:** {what feeds this}
+- **Downstream:** {what consumes it}
+- **Services/MCPs:** {name — one-line role}
+- **Canon:** {source of truth it reads, with link}
+
+## Status
+{current state + one-sentence interpretation, dated}
+```
+
+Dependencies sourcing — agent mode: `agent.yaml` `mcps` (required + optional) and
+`pipeline` (upstream/downstream). Generic mode: manifest dependencies (direct only,
+not transitive), CI config, and any services named in README.
+
+**Step 4: Diff, preview, approve.**
+
+Show old → new for changed fields only. List unchanged fields by name so it's clear
+what's being left alone.
+
+```
+## Project sync: Auth Service
+
+summary      "Auth service"  →  "Token issuance and session validation for..."
+description  2 sections changed: Dependencies (+3 services), Status (in-dev → active)
+lead            unset  →  Kyle Hudson
+addInitiatives  + Platform
+
+Unchanged: teams, priority, dates, labels
+
+Apply?
+```
+
+Wait for explicit approval. After any requested change, re-show the full preview
+before writing (Non-Negotiable #1).
+
+**This gate applies to create mode too** — a create is a write. Preview it the same way,
+with every field reading `unset → <value>`, and head the block `## Create project: <name>`
+so it's unmistakable that approving makes a new project rather than editing one.
+
+**Step 5: Write.** One `save_project` call, per the mode carried from Step 1:
+
+- **update** — pass `id: active_project.id` and only the changed fields. If there are
+  none, make no call at all (see Step 1).
+- **create** — pass no `id`. Pass `name`, `addTeams`, and **every field Step 3 sourced
+  and Step 4 got approved** — `summary`, `description`, and any of `lead`,
+  `addInitiatives`, `state`, `priority`, `startDate`, `targetDate` that were previewed.
+  Dropping an approved field here would silently discard something the user signed off on.
+  If Step 4 ended with nothing approved, abort — "Nothing approved; project not created."
+  Never create a bare project from `name` + `addTeams` alone.
+
+Report the project URL.
+
+**Create mode must then seed the cache before anything else.** `active_project` does not
+exist yet — its absence is what selected create mode — so there is no entry to update.
+Write a complete one into `.linear/cache.yaml`:
+
+```yaml
+active_project:
+  id: "<id returned by save_project>"
+  name: "<project name>"
+  matched_by: "created"
+  synced: <today>
+```
+
+Skip this and the next run sees no `active_project`, takes the create path again, and
+makes a **duplicate project** — the exact failure the binding rules exist to prevent.
+
+**Step 6: Update cache — update mode only.** Stamp `synced:` on the existing
+`active_project` entry as an unquoted ISO 8601 date (`YYYY-MM-DD`) — not a quoted string,
+not a full timestamp. **Create mode skips this step entirely:** Step 5 already wrote the
+complete entry, `synced:` included. There is exactly one cache write per run.
+
+**Follow-ups this command does not do:** it never creates or closes tickets, never
+moves the project between teams, and never writes milestones. If the repo has a roadmap
+and the project has no milestones, offer `save_milestone` as a separate opt-in pass.
+
+**Failure modes:**
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| "Linear binding incomplete" | `{{placeholder}}` in `agent.yaml` linear block | Fill the binding, then re-run |
+| "Project not found" | Stale `active_project.id` | Re-bind via `/linear project <n>`, or create a new project |
+| Team mismatch | Project moved teams, or binding points elsewhere | Confirm which is right before writing |
+| Summary rejected | Over 255 chars | Trim to the one-line form; detail belongs in `description` |
+| Description renders escaped `\n` | Escape sequences passed instead of literal newlines | Re-send with real newlines |
+
 ### `/linear create`
 
 Create a single ticket immediately (not buffered).
@@ -516,7 +719,8 @@ If a state name isn't in cache, refresh before failing.
 
 **Team/project names are case-sensitive.** Must match exactly. On error, re-fetch and match.
 
-**Priority values:** 0=None, 1=Urgent, 2=High, 3=Normal, 4=Low.
+**Priority values:** 0=None, 1=Urgent, 2=High, 3=Medium, 4=Low. (Linear's own label for
+3 is "Medium"; don't surface it as "Normal".)
 
 **Required fields on state transitions:** Some teams require PR links, time estimates, or
 custom fields before allowing status changes. If push gets a validation error on a state
@@ -531,9 +735,18 @@ stays well under this. If somehow exceeded, trim notes first.
 **MCP connection required.** If `Linear:*` tools aren't available, tell user to check
 their MCP/connector configuration.
 
-**Content vs Description (projects):** Linear projects have two text fields.
-`description` (255 chars, shows in list views) and `content` (unlimited, shows in detail panel).
-Always set BOTH when creating projects. Summary in description, details in content.
+**Summary vs Description (projects):** `save_project` takes `summary` (max 255 chars,
+shows in list views) and `description` (unlimited Markdown, shows in the detail panel).
+There is no `content` parameter. Set BOTH when creating a project. Pass `description`
+with literal newlines, not escaped `\n`.
+
+**Destructive project params:** `setTeams`, `setInitiatives`, and `labels` REPLACE the
+full set — anything omitted is removed. Use `addTeams`/`addInitiatives` to append.
+Never pass the `set*` forms against an existing project without explicit approval.
+
+**Milestones and project relations:** `save_project` writes neither. Milestones need
+`save_milestone` per milestone. Project-to-project dependency relations have no MCP
+write path — record them in the description body instead.
 
 ---
 
