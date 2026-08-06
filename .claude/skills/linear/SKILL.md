@@ -7,7 +7,7 @@ description: |
   Syncs project description, dependencies, and metadata from repo state.
   Auto-maintains .latest-status.md for cross-session resume.
 trigger: /linear
-version: "0.6.0"
+version: "0.7.0"
 ---
 
 ## Version Check
@@ -31,6 +31,7 @@ These rules override everything else. Check before every write.
 5. **Labels are arrays.** `["Bug"]` not `"Bug"`. Always.
 6. **No empty sections.** Never include template sections with placeholder text. Omit entirely.
 7. **Buffer is append-only until push.** `/linear track` never calls the Linear API.
+8. **Destination is resolved, never assumed.** `/linear handoff` and `/linear update` post to the project the session's work belongs to — inferred from referenced tickets — not blindly to `active_project`. See Destination Resolution.
 
 ## Verbosity Control
 
@@ -106,9 +107,9 @@ status: in_progress | paused | blocked | complete
 | `/linear search <query>` | Find existing issues before creating duplicates | No |
 | `/linear track` | Log work this session (buffered locally) | No |
 | `/linear push` | Batch-push buffered changes to Linear | Yes |
-| `/linear handoff` | End-of-session: push + write session summary | Yes |
+| `/linear handoff` | End-of-session: push + write session summary. `--to <project>` overrides destination. | Yes |
 | `/linear resume` | Start-of-session: pull context, initialize buffer | No |
-| `/linear update` | Post a project status update | Yes |
+| `/linear update` | Post a project status update. `--to <project>` overrides destination. | Yes |
 | `/linear sync-project` | Sync project description, dependencies, metadata from repo state | Yes |
 | `/linear create` | Create a single ticket now (not buffered) | Yes |
 | `/linear buffer` | View/edit/remove buffered items | No |
@@ -338,6 +339,50 @@ Batch-push all buffered ticket changes to Linear.
 **Push does NOT clear `goal`, `notes`, or `failed_approaches`.** Those persist
 until `/linear handoff`.
 
+### Destination Resolution (handoff + update)
+
+Both `/linear handoff` and `/linear update` post a project update. **The destination is
+resolved from what the session actually touched — never assumed to be `active_project`.**
+`active_project` is the repo's binding, not proof the work belonged to it. An agent bound
+to its own project (a ledger, a core service) routinely does work that feeds a *different*
+project — a client delivery, an internal initiative. The update belongs where the work
+lives, so the bound project is just one candidate, not the default.
+
+**Explicit override.** `--to <project>` on either command skips inference and targets the
+named project (resolve name → id from cache; `list_projects` if not cached). Use for
+headless runs. Still previews before writing.
+
+**Inference procedure (no override):**
+
+1. **Collect referenced projects.** Take every distinct issue key in the session buffer
+   (status_changes, comments, and created issues once they have IDs). Resolve each to its
+   project — reuse project data already fetched this session; `get_issue` for any unknown.
+   Tally referenced tickets per project.
+2. **Decide if there's an off-project signal.**
+   - Buffer references no issues, **or** every referenced issue belongs to `active_project`
+     → **unambiguous.** Post to `active_project`, no selector. Continue to the command's
+     preview step.
+   - ≥1 referenced issue belongs to a project other than `active_project` → **ambiguous.**
+     Show the selector.
+3. **Selector.** Recommend the non-`active_project` project carrying the most referenced
+   tickets (ties → most recent ticket activity). List `active_project` as the alternative,
+   then an "Other project…" entry that opens a full picker (`list_projects`, **across
+   teams** — client work usually lives on another team). Show a preview panel per option:
+
+   ```
+   Project: Financial Modeling (North Star)
+   Team: Operations (OPE2)
+   Referenced this session:
+     OPE2-182 assumptions grid (In Progress)
+     OPE2-183 projection grid (Backlog)
+   → status update posts here
+   ```
+4. **Resolve the chosen project's id.** The update attaches to the project; its team comes
+   along, so cross-team needs no separate team arg.
+
+**The destination is a one-off routing choice. It never changes `active_project`** — that's
+`/linear project <n>`'s job. Do not write the chosen project back to cache.
+
 ### `/linear handoff`
 
 End-of-session. Push remaining changes, write lean session summary to Linear.
@@ -347,11 +392,12 @@ End-of-session. Push remaining changes, write lean session summary to Linear.
 2. Write full session details to `.linear/last-handoff.md` (see Full Handoff format below).
 3. Update `.latest-status.md` using Status File template (status `paused` or `complete`). Populate `## Linear` from session buffer.
 4. Draft the **lean update** for Linear (see Lean Update format below).
-5. Show preview. Wait for approval.
-6. Post as a **project update** on `active_project` via `save_status_update`.
-7. Clear entire session buffer.
-8. Commit `.latest-status.md` and `.linear/last-handoff.md` to git.
-9. Confirm with link to the update in Linear.
+5. **Resolve the destination project** (see Destination Resolution). If ambiguous, show the selector and get the pick.
+6. Show preview — headed with **Destination: [project] ([team])**. Wait for approval.
+7. Post as a **project update** on the resolved destination via `save_status_update`.
+8. Clear entire session buffer.
+9. Commit `.latest-status.md` and `.linear/last-handoff.md` to git.
+10. Confirm with link to the update in Linear.
 
 **Lean Update format (posted to Linear, 150-300 words max):**
 
@@ -484,7 +530,10 @@ If session buffer has content, offer:
 - [issue key]: [what's blocking]
 ```
 
-Omit sections with no content. Preview, approve, post via `save_status_update` on `active_project`.
+Omit sections with no content. **Resolve the destination project** (see Destination
+Resolution) before previewing — same inference and selector as handoff, with `--to <project>`
+as the explicit override. Preview headed with **Destination: [project] ([team])**, approve,
+post via `save_status_update` on the resolved destination.
 
 ### `/linear sync-project`
 

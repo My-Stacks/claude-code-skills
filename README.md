@@ -6,7 +6,7 @@ Reusable components for [Claude Code](https://docs.anthropic.com/en/docs/claude-
 
 | Component | Type | Version | What it does |
 |-----------|------|---------|-------------|
-| [linear](./.claude/skills/linear/) | Skill | 0.6.0 | Linear project management with session continuity. Buffered writes, board management, ticket creation, structured handoffs persisted to Linear. Syncs project description, dependencies, and metadata from repo state via `/linear sync-project`. Auto-maintains `.latest-status.md`. |
+| [linear](./.claude/skills/linear/) | Skill | 0.7.0 | Linear project management with session continuity. Buffered writes, board management, ticket creation, structured handoffs persisted to Linear. Handoffs/updates route to the project the work touched, not blindly the bound one. Syncs project description, dependencies, and metadata from repo state via `/linear sync-project`. Auto-maintains `.latest-status.md`. |
 | [vault-backup](./.claude/skills/vault-backup/) | Skill | 1.0 | Save research, project outputs, and knowledge artifacts from any Claude Code workspace into a shared Obsidian knowledge vault. |
 | [ai-router](./.claude/skills/ai-router/) | Skill | 1.9 | Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Grounded PR review: line-numbered diff + anti-hallucination rules, findings **verified against the diff** (hallucinated ones dropped), posted as **inline comments** with committable suggestions by default, **resolves exactly the threads it verified-fixed** (by per-finding key), and a **persona-gated auto-fixer** — interactive (`--fix=propose\|auto`) and **always-on** via the shadow flow (`shadow-review --fix`), which fixes in an isolated `git worktree` so it never touches your checkout. Headless-safe with `--post-to-pr` and `/ai-router shadow-review`. Requires `curl`, `jq`, `python3`, and (for PR posting) `gh`. |
 | [create-client-pdf](./.claude/skills/create-client-pdf/) | Skill | 1.2.1 | Convert a Markdown file with YAML frontmatter into a client-presentable PDF, branded for Stacklab or Stacklist. Requires Python + Playwright (see `INSTALL.md`). |
@@ -235,6 +235,21 @@ cp -r .claude/skills/ai-router/ ~/.claude/skills/ai-router/
 ```
 
 Then add the five script allow-rules to `~/.claude/settings.json` `permissions.allow` (see REFERENCE.md → "Pre-authorizing the scripts").
+
+### Linear v0.7.0
+
+`/linear handoff` and `/linear update` no longer post blindly to the bound project. They resolve the destination from the tickets the session actually touched — so an agent bound to its own project (a ledger, a core service) that spent the session feeding a client delivery or internal initiative writes the handoff *there*, not on its own project.
+
+- **Inferred, not assumed:** distinct issue keys in the session buffer resolve to their projects. If they all belong to the bound project (or none were touched), it posts there silently — zero friction on on-project sessions.
+- **Selector only when off-project:** if any referenced ticket lives in a different project, a picker appears. The most-referenced off-project project is recommended; the bound project is the fallback; an "Other project…" entry opens a full cross-team picker (client work usually lives on another team).
+- **Preview panel per option:** project, team, the referenced tickets, and "→ status update posts here", so the target is verifiable before writing.
+- **`--to <project>` override** on both commands skips inference for headless runs. The chosen destination is a one-off route — it never rebinds `active_project`.
+
+To upgrade:
+
+```bash
+cp -r .claude/skills/linear/ ~/.claude/skills/linear/
+```
 
 ### Linear v0.6.0
 
