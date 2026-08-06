@@ -7,7 +7,7 @@ description: |
   Syncs project description, dependencies, and metadata from repo state.
   Auto-maintains .latest-status.md for cross-session resume.
 trigger: /linear
-version: "0.6.0"
+version: "0.7.0"
 ---
 
 ## Version Check
@@ -31,6 +31,7 @@ These rules override everything else. Check before every write.
 5. **Labels are arrays.** `["Bug"]` not `"Bug"`. Always.
 6. **No empty sections.** Never include template sections with placeholder text. Omit entirely.
 7. **Buffer is append-only until push.** `/linear track` never calls the Linear API.
+8. **Destination is resolved from the work, not fixed to the binding.** `/linear handoff` and `/linear update` post to the project the session's tickets belong to. The bound `active_project` is the *fallback* when the session touched nothing off-project — never the automatic target when it did. See Destination Resolution.
 
 ## Verbosity Control
 
@@ -106,9 +107,9 @@ status: in_progress | paused | blocked | complete
 | `/linear search <query>` | Find existing issues before creating duplicates | No |
 | `/linear track` | Log work this session (buffered locally) | No |
 | `/linear push` | Batch-push buffered changes to Linear | Yes |
-| `/linear handoff` | End-of-session: push + write session summary | Yes |
+| `/linear handoff` | End-of-session: push + write session summary. `--to <project>` overrides destination. | Yes |
 | `/linear resume` | Start-of-session: pull context, initialize buffer | No |
-| `/linear update` | Post a project status update | Yes |
+| `/linear update` | Post a project status update. `--to <project>` overrides destination. | Yes |
 | `/linear sync-project` | Sync project description, dependencies, metadata from repo state | Yes |
 | `/linear create` | Create a single ticket now (not buffered) | Yes |
 | `/linear buffer` | View/edit/remove buffered items | No |
@@ -338,20 +339,82 @@ Batch-push all buffered ticket changes to Linear.
 **Push does NOT clear `goal`, `notes`, or `failed_approaches`.** Those persist
 until `/linear handoff`.
 
+### Destination Resolution (handoff + update)
+
+Both `/linear handoff` and `/linear update` post a project update. **The destination is
+resolved from what the session actually touched. `active_project` is the fallback, not the
+automatic target.** The binding is not proof the work belonged to it: an agent bound to its
+own project (a ledger, a core service) routinely does work that feeds a *different* project
+— a client delivery, an internal initiative. The update belongs where the work lives, so
+the bound project only wins when it's where the tickets are, or when nothing off-project
+was touched.
+
+**Explicit override.** `--to <project>` pins the destination up front and skips
+inference and the selector — but **not** the write preview; Non-Negotiable #1 still
+applies. Resolve `<project>` to **exactly one** project: an exact **project ID** resolves
+directly; any **name** is matched **across teams** via `list_projects` (not just cache —
+names are not unique across teams), and if more than one matches, do not guess: list the
+matches and ask, or accept an ID / `Team/Project` form.
+
+**Inference procedure (no override):**
+
+1. **Build the referenced-project tally.** From the buffer — for handoff, its **pre-push
+   snapshot** (the live buffer is cleared by push); for update, the live buffer (update runs
+   no push) — take every distinct issue key across status_changes and comments, plus the
+   target project of every `new_issue`. Resolve each to its project — reuse project data
+   already fetched this session; `get_issue` for any unknown. The tally is referenced-count
+   per project. Keep each lookup's `updatedAt` for the tie-break (these values are
+   authoritative — no separate refresh). A `new_issue`'s target project is a **weaker**
+   signal than a touched ticket, but it still counts: a session that only files a ticket
+   into another project surfaces the selector (with `active_project` one keystroke away) —
+   never a silent misroute. A `new_issue` contributes no `updatedAt` (the ticket doesn't
+   exist yet).
+2. **Decide from the tally.**
+   - The tally contains **any** project other than `active_project` → **off-project signal.**
+     Show the selector.
+   - The tally is empty, **or** every entry is `active_project` → **no off-project signal.**
+     Fall back to `active_project`, no selector. Continue to the command's preview step.
+     (A deliberate fallback, not an assumption — nothing in the tally points elsewhere.)
+3. **Selector.** List **every** off-project project in the tally — highest count first, and
+   the top one is the default. Below them, `active_project` as the on-project alternative,
+   then an "Other project…" entry that opens a full picker (`list_projects`, **across teams**
+   — client work usually lives on another team). **Ordering among off-project entries with
+   equal counts:** latest referenced-ticket `updatedAt` (from step 1's lookups — no refresh);
+   a project present only via a `new_issue` has no `updatedAt`, so it drops straight to the
+   final key — project name A–Z. Deterministic throughout. Show a preview panel for each
+   **concrete** project option (the "Other project…" picker previews a project only once one
+   is picked):
+
+   ```
+   Project: Financial Modeling (North Star)
+   Team: Operations (OPE2)
+   Referenced this session:
+     OPE2-182 assumptions grid (In Progress)
+     OPE2-183 projection grid (Backlog)
+   → status update posts here
+   ```
+4. **Resolve the chosen project's id.** The update attaches to the project; its team comes
+   along, so cross-team needs no separate team arg.
+
+**The destination is a one-off routing choice. It never changes `active_project`** — that's
+`/linear project <n>`'s job. Do not write the chosen project back to cache.
+
 ### `/linear handoff`
 
 End-of-session. Push remaining changes, write lean session summary to Linear.
 
 **Procedure:**
-1. If buffer has pending ticket changes, run push flow first.
-2. Write full session details to `.linear/last-handoff.md` (see Full Handoff format below).
-3. Update `.latest-status.md` using Status File template (status `paused` or `complete`). Populate `## Linear` from session buffer.
-4. Draft the **lean update** for Linear (see Lean Update format below).
-5. Show preview. Wait for approval.
-6. Post as a **project update** on `active_project` via `save_status_update`.
-7. Clear entire session buffer.
-8. Commit `.latest-status.md` and `.linear/last-handoff.md` to git.
-9. Confirm with link to the update in Linear.
+1. **Snapshot the session buffer first — before any push.** Capture the full set of changes (status_changes, comments, new_issues), notes, and failed_approaches. Every step below reads this snapshot, not the live buffer, because push (step 3) clears applied items — reading the live buffer afterward would omit the very activity being handed off.
+2. **Resolve the destination project** from the snapshot (see Destination Resolution). If off-project, show the selector and get the pick. Hold the destination through the rest of the flow.
+3. If the buffer has pending ticket changes, run the push flow. (Push writes ticket changes only — it has no destination logic and never re-resolves the destination.)
+4. Write full session details to `.linear/last-handoff.md` from the snapshot (see Full Handoff format below).
+5. Update `.latest-status.md` using Status File template (status `paused` or `complete`). Populate `## Linear` from the snapshot.
+6. Draft the **lean update** for Linear from the snapshot (see Lean Update format below).
+7. Show preview — headed with **Destination: [project] ([team])**. Wait for approval.
+8. Post as a **project update** on the resolved destination via `save_status_update`.
+9. Clear entire session buffer.
+10. Commit `.latest-status.md` and `.linear/last-handoff.md` to git.
+11. Confirm with link to the update in Linear.
 
 **Lean Update format (posted to Linear, 150-300 words max):**
 
@@ -484,7 +547,15 @@ If session buffer has content, offer:
 - [issue key]: [what's blocking]
 ```
 
-Omit sections with no content. Preview, approve, post via `save_status_update` on `active_project`.
+Omit sections with no content.
+
+**Procedure:**
+1. Read the live buffer for the referenced-project tally (update runs **no** push, so there's nothing to snapshot around — the live buffer is stable).
+2. **Resolve the destination project** (see Destination Resolution) — same inference and selector as handoff; `--to <project>` overrides.
+3. Draft the update (from buffer or from scratch).
+4. Show preview — headed with **Destination: [project] ([team])**. Wait for approval.
+5. Post via `save_status_update` on the resolved destination.
+6. Confirm with link. `/linear update` writes **no** local files and commits nothing — that's handoff's job.
 
 ### `/linear sync-project`
 
