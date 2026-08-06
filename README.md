@@ -243,7 +243,7 @@ Then add the five script allow-rules to `~/.claude/settings.json` `permissions.a
 - **Inferred, not assumed:** distinct issue keys in the session buffer resolve to their projects. If they all belong to the bound project (or none were touched), it posts there silently — zero friction on on-project sessions.
 - **Selector only when off-project:** if any referenced ticket lives in a different project, a picker appears. The most-referenced off-project project is recommended; the bound project is the fallback; an "Other project…" entry opens a full cross-team picker (client work usually lives on another team).
 - **Preview panel per option:** project, team, the referenced tickets, and "→ status update posts here", so the target is verifiable before writing.
-- **`--to <project>` override** on both commands skips inference for headless runs. The chosen destination is a one-off route — it never rebinds `active_project`.
+- **`--to <project>` override** on both commands skips inference and the selector (the write preview still fires — Non-Negotiable #1). The chosen destination is a one-off route — it never rebinds `active_project`.
 
 To upgrade:
 

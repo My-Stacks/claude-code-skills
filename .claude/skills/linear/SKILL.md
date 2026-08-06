@@ -364,20 +364,26 @@ matches and ask, or accept an ID / `Team/Project` form.
    target project of every `new_issue`. Resolve each to its project — reuse project data
    already fetched this session; `get_issue` for any unknown. The tally is referenced-count
    per project. Keep each lookup's `updatedAt` for the tie-break (these values are
-   authoritative — no separate refresh).
+   authoritative — no separate refresh). A `new_issue`'s target project is a **weaker**
+   signal than a touched ticket, but it still counts: a session that only files a ticket
+   into another project surfaces the selector (with `active_project` one keystroke away) —
+   never a silent misroute. A `new_issue` contributes no `updatedAt` (the ticket doesn't
+   exist yet).
 2. **Decide from the tally.**
    - The tally contains **any** project other than `active_project` → **off-project signal.**
      Show the selector.
    - The tally is empty, **or** every entry is `active_project` → **no off-project signal.**
      Fall back to `active_project`, no selector. Continue to the command's preview step.
      (A deliberate fallback, not an assumption — nothing in the tally points elsewhere.)
-3. **Selector.** Recommend the non-`active_project` project with the highest count in the
-   tally. **Ties:** the project whose newest referenced ticket has the latest `updatedAt`
-   (from step 1's lookups — no refresh); if still tied, project name A–Z — so the
-   recommendation is deterministic. List `active_project` as the alternative, then an
-   "Other project…" entry that opens a full picker (`list_projects`, **across teams** —
-   client work usually lives on another team). Show a preview panel for each **concrete**
-   project option (the "Other project…" picker previews a project only once one is picked):
+3. **Selector.** List **every** off-project project in the tally — highest count first, and
+   the top one is the default. Below them, `active_project` as the on-project alternative,
+   then an "Other project…" entry that opens a full picker (`list_projects`, **across teams**
+   — client work usually lives on another team). **Ordering among off-project entries with
+   equal counts:** latest referenced-ticket `updatedAt` (from step 1's lookups — no refresh);
+   a project present only via a `new_issue` has no `updatedAt`, so it drops straight to the
+   final key — project name A–Z. Deterministic throughout. Show a preview panel for each
+   **concrete** project option (the "Other project…" picker previews a project only once one
+   is picked):
 
    ```
    Project: Financial Modeling (North Star)
@@ -541,10 +547,15 @@ If session buffer has content, offer:
 - [issue key]: [what's blocking]
 ```
 
-Omit sections with no content. **Resolve the destination project** (see Destination
-Resolution) before previewing — same inference and selector as handoff, with `--to <project>`
-as the explicit override. Preview headed with **Destination: [project] ([team])**, approve,
-post via `save_status_update` on the resolved destination.
+Omit sections with no content.
+
+**Procedure:**
+1. Read the live buffer for the referenced-project tally (update runs **no** push, so there's nothing to snapshot around — the live buffer is stable).
+2. **Resolve the destination project** (see Destination Resolution) — same inference and selector as handoff; `--to <project>` overrides.
+3. Draft the update (from buffer or from scratch).
+4. Show preview — headed with **Destination: [project] ([team])**. Wait for approval.
+5. Post via `save_status_update` on the resolved destination.
+6. Confirm with link. `/linear update` writes **no** local files and commits nothing — that's handoff's job.
 
 ### `/linear sync-project`
 
