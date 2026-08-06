@@ -349,32 +349,35 @@ own project (a ledger, a core service) routinely does work that feeds a *differe
 the bound project only wins when it's where the tickets are, or when nothing off-project
 was touched.
 
-**Explicit override.** `--to <project>` on either command skips inference and targets the
-named project. Resolve it to **exactly one** project (cache first; `list_projects` if not
-cached). Project names are **not** unique across teams — if `<project>` matches more than
-one, do not guess: list the matches and ask, or accept a project ID / `Team/Project` form.
-Use for headless runs. Still previews before writing.
+**Explicit override.** `--to <project>` pins the destination up front and skips
+inference and the selector — but **not** the write preview; Non-Negotiable #1 still
+applies. Resolve `<project>` to **exactly one** project: an exact **project ID** resolves
+directly; any **name** is matched **across teams** via `list_projects` (not just cache —
+names are not unique across teams), and if more than one matches, do not guess: list the
+matches and ask, or accept an ID / `Team/Project` form.
 
 **Inference procedure (no override):**
 
-1. **Collect referenced projects.** Take every distinct issue key in the session buffer
-   (status_changes and comments), plus any project explicitly set on a buffered `new_issue`.
-   Resolve each to its project — reuse project data already fetched this session; `get_issue`
-   for any unknown. Tally referenced tickets per project. Do this **before** any push clears
-   the buffer (handoff resolves the destination first — see its procedure).
-2. **Decide if there's an off-project signal.**
-   - ≥1 referenced issue belongs to a project other than `active_project` → **off-project
-     signal.** Show the selector.
-   - Every referenced issue belongs to `active_project`, **or** the session referenced no
-     tickets at all → **no off-project signal.** Fall back to `active_project`, no selector.
-     Continue to the command's preview step. (This is a deliberate fallback, not an
-     assumption — with no ticket pointing elsewhere, the repo you're in is the default.)
-3. **Selector.** Recommend the non-`active_project` project carrying the most referenced
-   tickets. **Ties:** the project whose most-recently-touched ticket is newest (Linear
-   `updatedAt`); if still tied, project name A–Z — so the recommendation is deterministic.
-   List `active_project` as the alternative, then an "Other project…" entry that opens a
-   full picker (`list_projects`, **across teams** — client work usually lives on another
-   team). Show a preview panel per option:
+1. **Build the referenced-project tally.** From the buffer — for handoff, its **pre-push
+   snapshot** (the live buffer is cleared by push); for update, the live buffer (update runs
+   no push) — take every distinct issue key across status_changes and comments, plus the
+   target project of every `new_issue`. Resolve each to its project — reuse project data
+   already fetched this session; `get_issue` for any unknown. The tally is referenced-count
+   per project. Keep each lookup's `updatedAt` for the tie-break (these values are
+   authoritative — no separate refresh).
+2. **Decide from the tally.**
+   - The tally contains **any** project other than `active_project` → **off-project signal.**
+     Show the selector.
+   - The tally is empty, **or** every entry is `active_project` → **no off-project signal.**
+     Fall back to `active_project`, no selector. Continue to the command's preview step.
+     (A deliberate fallback, not an assumption — nothing in the tally points elsewhere.)
+3. **Selector.** Recommend the non-`active_project` project with the highest count in the
+   tally. **Ties:** the project whose newest referenced ticket has the latest `updatedAt`
+   (from step 1's lookups — no refresh); if still tied, project name A–Z — so the
+   recommendation is deterministic. List `active_project` as the alternative, then an
+   "Other project…" entry that opens a full picker (`list_projects`, **across teams** —
+   client work usually lives on another team). Show a preview panel for each **concrete**
+   project option (the "Other project…" picker previews a project only once one is picked):
 
    ```
    Project: Financial Modeling (North Star)
@@ -395,16 +398,17 @@ Use for headless runs. Still previews before writing.
 End-of-session. Push remaining changes, write lean session summary to Linear.
 
 **Procedure:**
-1. **Resolve the destination project first** (see Destination Resolution), *before* push — push clears applied items from the buffer, and the destination is inferred from exactly those referenced tickets. If off-project, show the selector and get the pick. Hold the resolved destination through the rest of the flow.
-2. If buffer has pending ticket changes, run push flow.
-3. Write full session details to `.linear/last-handoff.md` (see Full Handoff format below).
-4. Update `.latest-status.md` using Status File template (status `paused` or `complete`). Populate `## Linear` from session buffer.
-5. Draft the **lean update** for Linear (see Lean Update format below).
-6. Show preview — headed with **Destination: [project] ([team])**. Wait for approval.
-7. Post as a **project update** on the resolved destination via `save_status_update`.
-8. Clear entire session buffer.
-9. Commit `.latest-status.md` and `.linear/last-handoff.md` to git.
-10. Confirm with link to the update in Linear.
+1. **Snapshot the session buffer first — before any push.** Capture the full set of changes (status_changes, comments, new_issues), notes, and failed_approaches. Every step below reads this snapshot, not the live buffer, because push (step 3) clears applied items — reading the live buffer afterward would omit the very activity being handed off.
+2. **Resolve the destination project** from the snapshot (see Destination Resolution). If off-project, show the selector and get the pick. Hold the destination through the rest of the flow.
+3. If the buffer has pending ticket changes, run the push flow. (Push writes ticket changes only — it has no destination logic and never re-resolves the destination.)
+4. Write full session details to `.linear/last-handoff.md` from the snapshot (see Full Handoff format below).
+5. Update `.latest-status.md` using Status File template (status `paused` or `complete`). Populate `## Linear` from the snapshot.
+6. Draft the **lean update** for Linear from the snapshot (see Lean Update format below).
+7. Show preview — headed with **Destination: [project] ([team])**. Wait for approval.
+8. Post as a **project update** on the resolved destination via `save_status_update`.
+9. Clear entire session buffer.
+10. Commit `.latest-status.md` and `.linear/last-handoff.md` to git.
+11. Confirm with link to the update in Linear.
 
 **Lean Update format (posted to Linear, 150-300 words max):**
 
