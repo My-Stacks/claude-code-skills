@@ -176,28 +176,35 @@ Write `$HOME/.claude/preflight/${key}.session-start.json` — the snapshot `/mis
 ```bash
 base="$HOME/.claude/preflight/${key}.session-start.json"
 now=$(date +%s)
-prev=$(sed -n 's/.*"started_at"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$base" 2>/dev/null | head -1)
-if [ -n "$prev" ] && [ $(( now - prev )) -lt 57600 ]; then
+prev=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("started_at",0))' "$base" 2>/dev/null || echo 0)
+if [ "${prev:-0}" -gt 0 ] 2>/dev/null && [ $(( now - prev )) -lt 57600 ]; then
   echo "baseline from $(( (now - prev) / 3600 ))h ago kept — session start is already recorded"
 else
-{
-  printf '{\n'
-  printf '  "started_at": %s,\n' "$(date +%s)"
-  printf '  "head_sha": "%s",\n' "$(git rev-parse HEAD 2>/dev/null || echo '')"
-  printf '  "porcelain": ['
-  git status --porcelain -z 2>/dev/null | tr '\0' '\n' | sed '/^$/d' \
-    | sed 's/\\/\\\\/g; s/"/\\"/g; s/^/"/; s/$/"/' | paste -sd, -
-  printf '],\n'
-  printf '  "stashes": %s,\n' "$(git stash list 2>/dev/null | wc -l | tr -d ' ')"
-  printf '  "worktrees": ['
-  git worktree list --porcelain 2>/dev/null | awk '/^worktree /{printf "%s\"%s\"", (n++?",":""), $2}'
-  printf '],\n'
-  printf '  "listening_ports": ['
-  lsof -nP -iTCP -sTCP:LISTEN -t 2>/dev/null | sort -u | paste -sd, -
-  printf ']\n}\n'
-} > "$base"
+  git status --porcelain -z            2>/dev/null > "$base.porcelain.tmp"
+  git worktree list --porcelain        2>/dev/null > "$base.wt.tmp"
+  lsof -nP -iTCP -sTCP:LISTEN          2>/dev/null > "$base.lsof.tmp"
+  python3 - "$base" "$now" \
+    "$(git rev-parse --verify HEAD 2>/dev/null || echo '')" \
+    "$(git stash list 2>/dev/null | wc -l | tr -d ' ')" <<'PY'
+import json, sys, re
+base, now, head, stashes = sys.argv[1], int(sys.argv[2]), sys.argv[3], int(sys.argv[4])
+def rd(p):
+    try: return open(p, encoding='utf-8', errors='replace').read()
+    except OSError: return ''
+# NUL-split, never newline-split: a filename may legally contain a newline.
+porcelain = [e for e in rd(base + '.porcelain.tmp').split('\0') if e]
+worktrees = [l.split(' ', 1)[1] for l in rd(base + '.wt.tmp').splitlines() if l.startswith('worktree ')]
+# real listening PORTS, not the PIDs that `lsof -t` would give
+ports = sorted({int(m.group(1)) for m in re.finditer(r':(\d+)\s*\(LISTEN\)', rd(base + '.lsof.tmp'))})
+json.dump({'started_at': now, 'head_sha': head, 'porcelain': porcelain,
+           'stashes': stashes, 'worktrees': worktrees, 'listening_ports': ports},
+          open(base, 'w'), indent=2)
+PY
+  rm -f "$base".*.tmp
 fi
 ```
+
+Python builds the JSON rather than a `sed`/`paste` pipeline, for three reasons that all bit earlier drafts: a filename may legally contain a newline (so the porcelain list must be split on NUL, never on newline); quotes and backslashes in paths need real JSON escaping; and `lsof -t` returns **PIDs**, not ports, so the port list has to be parsed from the `(LISTEN)` column or the field lies about what it holds.
 
 Narrate it in one line ("noting the tree's starting state so tonight's closedown can tell your work from what was already here"), the same as any other write. It contains no repo content — only paths, counts and PIDs — and lives outside every repo, so it is never staged and never committed.
 

@@ -11,12 +11,18 @@ Every command below is **conditional**. Guard on `git rev-parse --git-dir`, a co
 Scope is the repo you were invoked from. Dirty state elsewhere is reported, never written to.
 
 ```bash
-# resolve the default branch — never hardcode main
-DEFAULT=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || echo origin/main)
+# resolve the default branch — never assume main.
+# origin/HEAD is often unset (shallow/older clones), so fall back to the remote's
+# own answer before guessing; if neither resolves, report it and skip the check.
+DEFAULT=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null) \
+  || DEFAULT="origin/$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null)" \
+  || DEFAULT=""
+[ "$DEFAULT" = "origin/" ] && DEFAULT=""
 
 git branch --show-current                   # empty => detached HEAD; stop and report
 git status --porcelain                      # empty = clean
-git log --oneline "$DEFAULT"..HEAD          # not on the default branch yet
+[ -n "$DEFAULT" ] && git log --oneline "$DEFAULT"..HEAD   # not on the default branch yet
+                                            # empty DEFAULT => coverage finding, not a guess
 
 # unpushed — @{u} exits 128 with no upstream, so guard it
 if git rev-parse --abbrev-ref --symbolic-full-name @{u} >/dev/null 2>&1; then
@@ -25,7 +31,7 @@ else
   echo "NO UPSTREAM — branch has never been pushed; all local commits are unlanded"
 fi
 
-git branch -vv | grep ': gone]'             # tracking a deleted remote
+LC_ALL=C git branch -vv | grep ': gone]'    # tracking a deleted remote (LC_ALL: git localises this)
 git worktree list --porcelain               # stray worktrees
 ```
 

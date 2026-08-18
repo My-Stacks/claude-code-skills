@@ -52,7 +52,7 @@ The load-bearing contract. Three postures; nothing lives outside them.
 
 State the operation and its target in one line, run it, confirm the result with its id (SHA, PR number, ticket id).
 
-- `git commit` of paths this session created, on a non-protected branch, staged by explicit pathspec.
+- `git commit` of paths this session **created or modified**, on a non-protected branch, staged by explicit pathspec.
 - `git push` of that branch to its own `origin/<same-name>` upstream.
 - `gh pr create` for that branch against the resolved default base.
 - `git fetch --no-tags origin`, `git remote prune origin`.
@@ -81,7 +81,7 @@ No announcement and no approval makes these allowed. They are outside the skill.
 
 - **Merging.** No `gh pr merge`, no `--auto-merge`, no enabling auto-merge, no local merge. Merging is a decision, never housekeeping. Do not ask — the answer is not yours to seek during a shutdown.
 - **Force-push, history rewrite, `reset --hard`, `branch -D`, `rebase`, `cherry-pick`, `--no-verify`.** Never retry a rejected push by any means.
-- **Committing a file this session did not create**, or staging with `git add -A` / `git add .` / `git add -u` / `git commit -a` / any glob.
+- **Committing a file this session did not touch** — i.e. any path already dirty in the baseline, or one you cannot tie to an edit you made. Editing a pre-existing tracked file is normal work and *is* committable; inheriting someone else's uncommitted change is not. Never stage with `git add -A` / `git add .` / `git add -u` / `git commit -a` / any glob.
 - **Committing to or pushing the default or a protected branch.**
 - **Creating, switching, or renaming a branch or tag.**
 - **Pushing work the operator called experimental, a spike, throwaway, or said not to push.** One such statement is a permanent veto for the run.
@@ -112,7 +112,7 @@ cat "$HOME/.claude/preflight/<repo-key>.session-start.json"
 
 It carries `started_at`, `head_sha`, `porcelain`, `stashes`, `worktrees` and `listening_ports`. preflight writes this file once per session and does not clobber a same-day one, so the file on disk *is* the session's start — **the only validity test is age: less than 16 hours old** (`started_at` is a Unix timestamp). Older, missing, or unparseable → treat it as absent.
 
-**A path is yours only if both hold:** it appears in this session's own Write/Edit/Bash write calls, **and** it is absent from the baseline `porcelain`. One signal is not enough. **If the session was compacted**, the first signal is unreliable — attribution is UNKNOWN regardless of the second.
+**A path is yours only if both hold:** it appears in this session's own Write/Edit/Bash write calls, **and** it is absent from the baseline `porcelain`. Creating a file and editing an existing tracked one both qualify — what disqualifies a path is having been dirty *before* the session started. One signal is not enough. **If the session was compacted**, the first signal is unreliable — attribution is UNKNOWN regardless of the second.
 
 **If the baseline is absent, stale, or attribution is UNKNOWN → REPORT-ONLY ATTRIBUTION.** The run commits nothing, kills nothing, deletes nothing. It may still push and PR commits it made earlier this session and can name by SHA. Say so on its own line: `ATTRIBUTION: baseline absent — commits and kills suppressed.` Never silently degrade.
 
@@ -136,7 +136,7 @@ git rev-parse --abbrev-ref --symbolic-full-name @{u} >/dev/null 2>&1 \
 
 `@{u}` on a branch with no upstream exits 128. Never run it unguarded — a never-pushed branch is exactly the case this phase exists to catch, and an unguarded failure reads as "nothing unpushed."
 
-- **Yours and uncommitted** → stage by explicit pathspec (`git add -- <path>`), then commit with a real message. Print the path list first. Run `git diff --cached` and refuse if it contains a credential shape; stop and report rather than redacting.
+- **Yours and uncommitted** (created or modified this session) → stage by explicit pathspec (`git add -- <path>`), then commit with a real message. Print the path list first. Run `git diff --cached` and refuse if it contains a credential shape; stop and report rather than redacting.
 - **Not yours** → never stage it. Report it in Still dirty as pre-existing. Someone else's WIP is not yours to land.
 - **Committed but unpushed** → check preconditions, then push. If there is a stated reason not to, the reason goes in the handoff, not in your head.
 - **Pushed without a PR** → open one, or record why it is parked.
@@ -214,6 +214,8 @@ If the chosen destination is ignored, fall through to the next rung. If **every*
 
 If the file already exists, **append** under `## Second pass — <time>`. Never overwrite a harvest.
 
+**Then land it.** The harvest is a file this run created, so committing and pushing it is Posture A — but nothing else will do it: Phase 1 already ran, and leaving it uncommitted means the final check reports a dirty tree and the "durable record" exists only on this machine. Commit it by explicit pathspec and push, subject to the same push preconditions as Phase 1. If the branch has an open PR, it lands there; say which commit carried it. If the destination turned out to be gitignored, there is nothing to commit — report it as local-only instead.
+
 Harvest engineering knowledge only. Commitments, figures and rulings stated in conversation are `/housekeeping`'s harvest and need its provenance classes.
 
 **Done when:** the harvest is written and its path reported — or the run states explicitly that the session produced nothing worth keeping.
@@ -223,8 +225,8 @@ Harvest engineering knowledge only. Commitments, figures and rulings stated in c
 Order matters: `/linear handoff` itself writes `.latest-status.md` and `.linear/last-handoff.md` and **commits them**. Running it before the final check is what keeps the report true.
 
 1. Run `/linear handoff` (skip if the repo has no Linear binding; say so and rely on the harvest).
-2. Push the commit it made — **if it made one.** `.latest-status.md` and `.linear/last-handoff.md` are gitignored in some repos, in which case handoff's commit step is a no-op and there is nothing to push. Check `git log --oneline @{u}..HEAD` rather than assuming; pushing nothing is fine, reporting a push that did not happen is not.
-3. Re-run `git status --porcelain` and the guarded `@{u}..HEAD` check.
+2. Push the commit it made — **if it made one.** `.latest-status.md` and `.linear/last-handoff.md` are gitignored in some repos, in which case handoff's commit step is a no-op and there is nothing to push. Check with the **guarded** upstream form from Phase 1 — never bare `@{u}`, which exits 128 with no upstream; a branch with no upstream means everything is unpushed and the Phase 1 push preconditions apply. Pushing nothing is fine; reporting a push that did not happen is not.
+3. Re-run `git status --porcelain` and the guarded upstream check from Phase 1.
 4. Write `~/.claude/mise-en-place/<repo-key>-last-run.md`.
 5. Give the report below. Lead with what is unresolved.
 
