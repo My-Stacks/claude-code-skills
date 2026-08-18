@@ -226,7 +226,7 @@ skill simply can't tell what the ball is — do **not** re-rank unilaterally.
 Enter a structured Q&A with the operator to rebaseline. Ask in order, one at a
 time, each grounded in evidence from the sweep:
 
-1. **The ball** — "Is <X> still the one thing this project is trying to do?" (state your best inference from the sweep; let the operator correct it)
+1. **The ball** — "Is `<X>` still the one thing this project is trying to do?" (state your best inference from the sweep; let the operator correct it)
 2. **Dead or alive** — one batched question listing every suspect ticket: "Evidence says these are done/superseded — close which?"
 3. **Real deadlines** — one batched question listing every overdue item: "Which of these dates are externally imposed?"
 4. **The cut** — "Of the N items at top priority, which ≤3 actually matter this week?"

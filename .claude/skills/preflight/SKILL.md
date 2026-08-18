@@ -116,7 +116,7 @@ Report modified / staged / untracked / stashes, one line each. **Define cleanlin
 
 Also: flag untracked files matching "shouldn't be here" patterns (`.env`, zero-byte odd names, accidental redirects) — load `reference.md → "Files that look out of place"`. Stashes older than 8 weeks: mention as a future cleanup pass, not a blocker.
 
-### Step 3: Config (per-user, outside the repo)
+### Step 3: Per-user state — config + session baseline (outside the repo)
 
 Config lives at `~/.claude/preflight/<repo-key>.yml` — **never in the repo**. Because nothing is written into the working tree, there is no `.gitignore` rule to add, nothing to stage, and nothing to commit. The skill makes **zero** commits. This is what stops the recurring "your config is committed / should be gitignored" message: there is no in-repo file to track.
 
@@ -142,7 +142,7 @@ cfg="$HOME/.claude/preflight/${key}.yml"
 
 Origin `git@github.com:My-Stacks/claude-code-skills.git` → key `github.com-my-stacks-claude-code-skills-<hash12>`. No origin → keyed on the repo's absolute path (`$root`). The readable `stem` is **lossy** (slashes, colons, and other characters all collapse to `-`, so `org/repo` and `org-repo` would otherwise share a file) — the 12-char (48-bit) hash of the *canonical* identity is the real key, so two genuinely different remotes effectively never collide. Because the hash is computed from `canon`, the ssh and https URLs of the same repo (and a trailing-slash variant) all resolve to the **same** config; worktrees and clones of one origin share it too — all intended. (The key never contains `/` — `tr` maps every separator to `-` — so it always names a single file directly under `~/.claude/preflight/`, never a path that could escape it.)
 
-**2. If `$cfg` exists → read it and you're done.** Steady-state runs do exactly this: read the per-user config and move on. **Never inspect the in-repo `.claude/preflight.yml`** once `$cfg` exists — that's what guarantees the legacy nag fires at most once, ever. **Migration is one-way:** once `$cfg` exists it is the *only* source of truth, so edits made to a leftover in-repo file afterward are silently ignored. To change settings, edit `$cfg` directly (tell Kyle its path).
+**2. If `$cfg` exists → read it, skip sub-step 3, and continue to sub-step 4.** Steady-state runs do exactly this: read the per-user config, leave the session-start baseline, and move on. **Do not stop here** — sub-step 4 runs on every preflight, and skipping it is what silently disables tonight's closedown. **Never inspect the in-repo `.claude/preflight.yml`** once `$cfg` exists — that's what guarantees the legacy nag fires at most once, ever. **Migration is one-way:** once `$cfg` exists it is the *only* source of truth, so edits made to a leftover in-repo file afterward are silently ignored. To change settings, edit `$cfg` directly (tell Kyle its path).
 
 **3. If `$cfg` does NOT exist, migrate or create:**
 
@@ -167,7 +167,7 @@ Origin `git@github.com:My-Stacks/claude-code-skills.git` → key `github.com-my-
 
 Load `reference.md → "Per-user config & migration"` for the reasoning and edge cases.
 
-**4. Leave the session-start baseline** (per-user, outside the repo — same key as `$cfg`):
+**4. Leave the session-start baseline** *(still Step 3 — not "Step 4: Sync" below; runs on every preflight, first-run and steady-state alike, including when there is no `origin`)* (per-user, outside the repo — same key as `$cfg`):
 
 Write `$HOME/.claude/preflight/${key}.session-start.json` — the snapshot `/mise-en-place` diffs against at closedown to tell work *this session created* from work that was already there. Without it, closedown cannot attribute safely and suppresses its commits, so this write is what makes the day's bookends work.
 
@@ -203,6 +203,8 @@ PY
   rm -f "$base".*.tmp
 fi
 ```
+
+`head_sha` is recorded here, *before* Step 4's fast-forward, so on a behind branch it is the pre-sync tip. That is the correct anchor for "what this session started from" and is what closedown reports as `oldSHA`.
 
 Python builds the JSON rather than a `sed`/`paste` pipeline, for three reasons that all bit earlier drafts: a filename may legally contain a newline (so the porcelain list must be split on NUL, never on newline); quotes and backslashes in paths need real JSON escaping; and `lsof -t` returns **PIDs**, not ports, so the port list has to be parsed from the `(LISTEN)` column or the field lies about what it holds.
 

@@ -132,10 +132,12 @@ The <M> below need a judgment call I should not make alone.
 ## 4. Process and filesystem sweep
 
 ```bash
-# listeners, with start times to compare against the Phase 0 session anchor
-lsof -nP -iTCP -sTCP:LISTEN -t | while read -r pid; do
-  ps -o pid=,lstart=,command= -p "$pid"
-done
+# ports AND owning PIDs. `lsof -t` returns PIDs only, so it cannot answer
+# "was this port already listening at session start" — which is the whole test.
+lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | awk 'NR>1 {print $2"\t"$9}' | sort -u \
+| while IFS=$'\t' read -r pid addr; do
+    printf '%s  ' "$addr"; ps -o pid=,lstart=,command= -p "$pid"
+  done
 
 # untracked, non-ignored additions — the only real leftovers
 git ls-files --others --exclude-standard
@@ -145,8 +147,8 @@ git ls-files --others --exclude-standard
 
 **Rules:**
 
-- **You may only kill a PID this run's ledger recorded launching.** No ledger entry → no kill. Re-verify with `ps -o pid=,lstart=,command= -p <pid>` before signalling; a recycled PID is a different process.
-- A port already listening at session start is the operator's, whatever is on it now.
+- **You may only kill a PID this session's own transcript shows this session launching** — a `run_in_background` call you can point to. No such call → no kill, whatever the scan shows. The run ledger records a run's *output*, never process launches; do not treat it as kill authority. Re-verify with `ps -o pid=,lstart=,command= -p <pid>` before signalling; a recycled PID is a different process.
+- Compare the port in `addr` (after the last `:`) against the baseline's `listening_ports`. A port in that list was the operator's before you started, whatever is on it now.
 - `kill <pid>` (TERM) only. **Never** `kill -9`, `pkill`, or `killall`.
 - **This skill deletes nothing outside the session scratchpad** — no attribution test, no exceptions. Files written outside it are reported in Still dirty with their paths, marked yours or pre-existing. Deletion is shown as a command for the operator to run.
 - **Never delete a gitignored file.** `--ignored` output is local config — `.env`, `settings.local.json`, caches, local databases. It is inventory, not a hit list.
