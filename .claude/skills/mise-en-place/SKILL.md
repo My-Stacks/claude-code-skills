@@ -110,7 +110,7 @@ Attribution is a diff against a snapshot, never a judgment call. Read the baseli
 cat "$HOME/.claude/preflight/<repo-key>.session-start.json"
 ```
 
-**The baseline is valid only if** it is the most recent preflight run for this repo **and** less than 16 hours old. Otherwise treat it as absent.
+It carries `started_at`, `head_sha`, `porcelain`, `stashes`, `worktrees` and `listening_ports`. preflight writes this file once per session and does not clobber a same-day one, so the file on disk *is* the session's start — **the only validity test is age: less than 16 hours old** (`started_at` is a Unix timestamp). Older, missing, or unparseable → treat it as absent.
 
 **A path is yours only if both hold:** it appears in this session's own Write/Edit/Bash write calls, **and** it is absent from the baseline `porcelain`. One signal is not enough. **If the session was compacted**, the first signal is unreliable — attribution is UNKNOWN regardless of the second.
 
@@ -208,6 +208,10 @@ The transcript is about to disappear. Harvest what would cost the next session r
 2. Otherwise an existing `.linear/` → `.linear/journal/YYYY-MM-DD-<slug>.md`.
 3. Otherwise create `journal/` and say that you did.
 
+**Test the destination before writing** — `git check-ignore -q <path>`. A harvest written to a gitignored path is local-only: it never commits, never reaches the next clone, and looks like success. `.linear/` in particular **is gitignored in some repos and tracked in others**, so this is repo-dependent and must be checked every run, not assumed.
+
+If the chosen destination is ignored, fall through to the next rung. If **every** rung is ignored, write to `journal/` anyway and report on its own line: `HARVEST: written to <path>, which is gitignored — local-only, not durable. Track it or move it to keep it.` Never report a harvest as durable when git will not carry it.
+
 If the file already exists, **append** under `## Second pass — <time>`. Never overwrite a harvest.
 
 Harvest engineering knowledge only. Commitments, figures and rulings stated in conversation are `/housekeeping`'s harvest and need its provenance classes.
@@ -219,7 +223,7 @@ Harvest engineering knowledge only. Commitments, figures and rulings stated in c
 Order matters: `/linear handoff` itself writes `.latest-status.md` and `.linear/last-handoff.md` and **commits them**. Running it before the final check is what keeps the report true.
 
 1. Run `/linear handoff` (skip if the repo has no Linear binding; say so and rely on the harvest).
-2. Push the commit it just made.
+2. Push the commit it made — **if it made one.** `.latest-status.md` and `.linear/last-handoff.md` are gitignored in some repos, in which case handoff's commit step is a no-op and there is nothing to push. Check `git log --oneline @{u}..HEAD` rather than assuming; pushing nothing is fine, reporting a push that did not happen is not.
 3. Re-run `git status --porcelain` and the guarded `@{u}..HEAD` check.
 4. Write `~/.claude/mise-en-place/<repo-key>-last-run.md`.
 5. Give the report below. Lead with what is unresolved.

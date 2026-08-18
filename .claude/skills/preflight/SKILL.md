@@ -169,10 +169,17 @@ Load `reference.md → "Per-user config & migration"` for the reasoning and edge
 
 **4. Leave the session-start baseline** (per-user, outside the repo — same key as `$cfg`):
 
-Write `$HOME/.claude/preflight/${key}.session-start.json`, overwriting any previous run's file. This is the snapshot `/mise-en-place` diffs against at closedown to tell work *this session created* from work that was already there. Without it, closedown cannot attribute safely and suppresses its commits — so this write is what makes the day's bookends work.
+Write `$HOME/.claude/preflight/${key}.session-start.json` — the snapshot `/mise-en-place` diffs against at closedown to tell work *this session created* from work that was already there. Without it, closedown cannot attribute safely and suppresses its commits, so this write is what makes the day's bookends work.
+
+**Do not clobber a fresh one.** If a baseline exists and is less than 16 hours old, leave it alone and say so. Running preflight again at 2pm must not overwrite the 9am snapshot — that would re-label the morning's work as "already there", and closedown would then refuse to commit the very work the session produced. The oldest baseline of the session is the correct one.
 
 ```bash
 base="$HOME/.claude/preflight/${key}.session-start.json"
+now=$(date +%s)
+prev=$(sed -n 's/.*"started_at"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$base" 2>/dev/null | head -1)
+if [ -n "$prev" ] && [ $(( now - prev )) -lt 57600 ]; then
+  echo "baseline from $(( (now - prev) / 3600 ))h ago kept — session start is already recorded"
+else
 {
   printf '{\n'
   printf '  "started_at": %s,\n' "$(date +%s)"
@@ -189,9 +196,10 @@ base="$HOME/.claude/preflight/${key}.session-start.json"
   lsof -nP -iTCP -sTCP:LISTEN -t 2>/dev/null | sort -u | paste -sd, -
   printf ']\n}\n'
 } > "$base"
+fi
 ```
 
-Narrate it in one line ("noting the tree's starting state so tonight's closedown can tell your work from what was already here"), the same as any other write. It is overwritten on every run, contains no repo content — only paths, counts and PIDs — and lives outside every repo, so it is never staged and never committed.
+Narrate it in one line ("noting the tree's starting state so tonight's closedown can tell your work from what was already here"), the same as any other write. It contains no repo content — only paths, counts and PIDs — and lives outside every repo, so it is never staged and never committed.
 
 `/mise-en-place` treats the baseline as **absent** if it is older than 16 hours, and degrades to report-only attribution rather than guessing. That is the intended failure mode: a stale baseline must never license a commit.
 
