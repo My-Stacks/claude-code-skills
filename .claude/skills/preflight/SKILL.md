@@ -1,6 +1,6 @@
 ---
 name: preflight
-version: "5.0"
+version: "5.1"
 description: >-
   Pre-session safe-sync briefing for git repos. Brings the repo up to date
   before work begins — fast-forwards active branches to origin, flags stale
@@ -38,6 +38,7 @@ This is the load-bearing contract. Everything below obeys it.
 - `git fetch --prune --no-tags origin` to update remote-tracking refs (`--no-tags` so local tags are never moved).
 - **Fast-forward-only** sync of *active* branches to origin (never a merge commit, never a rewrite).
 - Create / update the per-user config under `~/.claude/preflight/` (outside the repo — never touches the working tree, never staged, never committed). See Step 3.
+- Write the session-start baseline `~/.claude/preflight/<repo-key>.session-start.json` (same location and the same guarantees; read by `/mise-en-place` at closedown). See Step 3.
 
 **NEVER**:
 - Non-fast-forward merge, rebase, force-push, reset, cherry-pick.
@@ -165,6 +166,34 @@ Origin `git@github.com:My-Stacks/claude-code-skills.git` → key `github.com-my-
    - **No legacy file** (genuine first run): ask the config questions (explain each; for `branch_naming` save Kyle's plain-language answer verbatim), then write `$cfg`. No repo writes, nothing to commit.
 
 Load `reference.md → "Per-user config & migration"` for the reasoning and edge cases.
+
+**4. Leave the session-start baseline** (per-user, outside the repo — same key as `$cfg`):
+
+Write `$HOME/.claude/preflight/${key}.session-start.json`, overwriting any previous run's file. This is the snapshot `/mise-en-place` diffs against at closedown to tell work *this session created* from work that was already there. Without it, closedown cannot attribute safely and suppresses its commits — so this write is what makes the day's bookends work.
+
+```bash
+base="$HOME/.claude/preflight/${key}.session-start.json"
+{
+  printf '{\n'
+  printf '  "started_at": %s,\n' "$(date +%s)"
+  printf '  "head_sha": "%s",\n' "$(git rev-parse HEAD 2>/dev/null || echo '')"
+  printf '  "porcelain": ['
+  git status --porcelain -z 2>/dev/null | tr '\0' '\n' | sed '/^$/d' \
+    | sed 's/\\/\\\\/g; s/"/\\"/g; s/^/"/; s/$/"/' | paste -sd, -
+  printf '],\n'
+  printf '  "stashes": %s,\n' "$(git stash list 2>/dev/null | wc -l | tr -d ' ')"
+  printf '  "worktrees": ['
+  git worktree list --porcelain 2>/dev/null | awk '/^worktree /{printf "%s\"%s\"", (n++?",":""), $2}'
+  printf '],\n'
+  printf '  "listening_ports": ['
+  lsof -nP -iTCP -sTCP:LISTEN -t 2>/dev/null | sort -u | paste -sd, -
+  printf ']\n}\n'
+} > "$base"
+```
+
+Narrate it in one line ("noting the tree's starting state so tonight's closedown can tell your work from what was already here"), the same as any other write. It is overwritten on every run, contains no repo content — only paths, counts and PIDs — and lives outside every repo, so it is never staged and never committed.
+
+`/mise-en-place` treats the baseline as **absent** if it is older than 16 hours, and degrades to report-only attribution rather than guessing. That is the intended failure mode: a stale baseline must never license a commit.
 
 ### Step 4: Sync — classify, fast-forward active, flag the rest
 

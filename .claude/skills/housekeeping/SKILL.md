@@ -1,6 +1,6 @@
 ---
 name: housekeeping
-version: "1.1"
+version: "1.2"
 description: >-
   Recovery command for when a project is in the weeds. Stops all forward work,
   sweeps every surface the project lives on (tickets, pages, CRM, transcripts,
@@ -8,7 +8,9 @@ description: >-
   contradict each other, harvests everything the current session learned but
   never wrote down, then hands back a short ranked list of the next 3–5 moves.
   All write-backs are gated behind explicit approval. Not a status report —
-  it reconciles and repairs.
+  it reconciles and repairs. Invoked on a felt state mid-task, never on a
+  schedule: for the end-of-day closedown that lands work and hands off, use
+  /mise-en-place instead.
 trigger: /housekeeping
 ---
 
@@ -43,6 +45,7 @@ The job: answer **"is the house clean?"** with evidence — and if not, clean it
 - **Not the work.** Never advance a deliverable during the pass. If the deck is wrong, say so and stop. Doing the work is what put you in the weeds.
 - **Not a silent mutator.** Nothing is written to any project surface without the explicit approval gate (Phase 5). The single exception: local bookkeeping under `~/.claude/housekeeping/` (config, last-run report), which lives outside every repo and shared surface — narrate those writes, don't ask.
 - **Not a completeness ritual.** An unreachable surface is announced loudly, never papered over with a clean-looking report.
+- **Not the end-of-day closedown.** This is triggered by a felt state mid-task, not by the clock, and it lands nothing — forward work stops. If you are simply stopping for the day and want the session's work committed, pushed, PR'd, settled tickets closed, processes killed and a handoff written, that is `/mise-en-place`. It acts where this one asks.
 
 ## Triggers
 
