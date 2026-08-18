@@ -2,15 +2,12 @@
 name: mise-en-place
 version: "1.0"
 description: >-
-  End-of-day shutdown ritual for a working repo. Run when you are finished for
-  the night, not when you are lost. Lands the session's work up the ladder
-  (commit, push, open a PR — never merge), sweeps git, GitHub, Linear, and the
-  processes and scratch files the session started, closes tickets that a merge
-  or a green build has already settled, harvests the session's traps and dead
-  ends into the durable record, then calls /linear handoff. Announces each write
-  before it runs and stops to ask before anything risky. Always states what is
-  still dirty. For a mid-task re-baseline when you have lost track of where the
-  project is, use /housekeeping instead.
+  End-of-day shutdown for a working repo — run when you are finished for the
+  night, not when you are lost. Lands the session's work (commit, push, open a
+  PR — never merge), sweeps git, GitHub, Linear, running processes and scratch
+  files, reconciles what they disagree on, and harvests the session's traps into
+  the durable record. For a mid-task re-baseline when you have lost track of
+  where the project is, use /housekeeping instead.
 trigger: /mise-en-place
 ---
 
