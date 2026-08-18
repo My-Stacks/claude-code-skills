@@ -55,7 +55,7 @@ State the operation and its target in one line, run it, confirm the result with 
 - `git fetch --no-tags origin`, `git remote prune origin`.
 - Setting a Linear project's **status enum**; correcting an auto-stamped start date.
 - Writing an **empty** Linear project description — always via `/linear sync-project`, never `save_project` directly (REFERENCE §3).
-- Closing or retitling a ticket that is unassigned or assigned to the operator, that shipped reality settles, within the 5-mutation cap. These go through `/linear track` + `/linear push`, which previews and waits (linear's Non-Negotiable #1). **That approval outranks this posture:** a Posture A close still pauses once, for one batched preview covering every mutation in the run.
+- Closing or retitling a ticket that is unassigned, or assigned to the operator **and not created by anyone else**, that shipped reality settles, within the 5-mutation cap. A ticket someone else filed is theirs even when it sits in the operator's queue. These go through `/linear track` + `/linear push`, which previews and waits (linear's Non-Negotiable #1). **That approval outranks this posture:** a Posture A close still pauses once, for one batched preview covering every mutation in the run.
 - Filing **one** escalation ticket (or updating today's existing one).
 - Writing the harvest and the run ledger.
 - Killing a process **this session's own transcript shows this session launching** (see Phase 0).
@@ -69,7 +69,7 @@ Present the proposal and **wait**. Default is no write.
 - Overwriting a **non-empty** Linear project description (show the diff).
 - Posting a **project status update** — always, including health. It is an outward notification.
 - Closing a ticket that turns on commercial, client, or strategic context.
-- More than **5** ticket-state mutations in one run (present the set; apply none).
+- More than **5** ticket-state mutations in a day (present the set; apply none). The cap is cumulative across re-runs — see Phase 3 for what counts.
 - Deleting a local branch.
 
 ### Posture C — NEVER
@@ -83,7 +83,7 @@ No announcement and no approval makes these allowed. They are outside the skill.
 - **Creating, switching, or renaming a branch or tag.**
 - **Pushing work the operator called experimental, a spike, throwaway, or said not to push.** One such statement is a permanent veto for the run.
 - **Deleting any file outside the session scratchpad**, whoever created it. Deletion *inside* the scratchpad is the only deletion this skill performs; with no scratchpad resolved, it deletes nothing at all. Never delete a gitignored file — those are local config (`.env`, `settings.local.json`, caches).
-- **Killing any process not in this run's ledger**; never `kill -9`, `pkill`, or `killall`.
+- **Killing any process this session's own transcript does not show this session launching**; never `kill -9`, `pkill`, or `killall`. The run ledger is not kill authority — it records a run's output, never process launches.
 - **Touching a ticket assigned to or created by anyone other than the operator.**
 - **Doing the work you find.** "While cleaning up I noticed X and fixed it" is a new task with no review. Note it; do not do it.
 - **Reporting clean** when a surface was unreachable, a mutation failed, a phase was suppressed, or attribution was degraded.
@@ -129,7 +129,7 @@ It carries `started_at`, `head_sha`, `porcelain`, `stashes`, `worktrees` and `li
 
 **Build output is never yours,** however the test scores it — a build run by the Phase 1 PR gate writes files absent from the baseline through this session's own Bash call, satisfying both limbs. Name untracked, non-ignored build paths in Still dirty.
 
-Use the other fields, don't just read them. **`head_sha`** is the session's starting commit: `git log --oneline <head_sha>..HEAD` enumerates this session's commits, is the report's `oldSHA`, and is the only attribution signal that survives a compaction. **`stashes`** is a count — more now than at baseline means this session stashed work, which exists in exactly one place, so Phase 1's ladder applies. **`worktrees`** defines "stray" in Phase 2: present now, absent there. **If the session was compacted**, the first signal is unreliable — attribution is UNKNOWN regardless of the second.
+Use the other fields, don't just read them. **`head_sha`** is the session's starting commit — recorded *before* preflight's fast-forward, so bound it as `git log --oneline <head_sha>..HEAD --since=@<started_at>`. Without `--since`, commits preflight *pulled* fall inside the range and read as this session's work. It is the report's `oldSHA` and the only attribution signal that survives a compaction. **`stashes`** is a count — more now than at baseline means this session stashed work, which exists in exactly one place, so Phase 1's ladder applies. **`worktrees`** defines "stray" in Phase 2: present now, absent there. **If the session was compacted**, the first signal is unreliable — attribution is UNKNOWN regardless of the second.
 
 **If the baseline is absent, stale, or attribution is UNKNOWN → REPORT-ONLY ATTRIBUTION.** The run commits nothing — **including the Phase 4 harvest, which is written but left uncommitted and reported local-only** — kills nothing, deletes nothing, mutates no tickets, and suppresses `/linear handoff` (which also commits). It may push and PR only commits it can bound with `git log <baseline head_sha>..HEAD`; **if the baseline is absent or the session was compacted that bound does not exist, so push and PR are suppressed too.**
 
@@ -181,7 +181,7 @@ git rev-parse --abbrev-ref --symbolic-full-name @{u} >/dev/null 2>&1 \
 | **Git** | Uncommitted, unpushed, branches tracking a deleted remote, stray worktrees |
 | **GitHub** | Open PRs (yours this session vs pre-existing), draft PRs that are done, unresolved review threads, failing or **absent** CI |
 | **Linear** | Ticket state vs reality, project status, empty description — **only if bound** (below) |
-| **Processes** | Dev servers, watchers, tunnels this run's ledger recorded starting |
+| **Processes** | Dev servers, watchers, tunnels this session's transcript shows this session starting |
 | **Filesystem** | Untracked non-ignored leftovers, files written outside the scratchpad |
 | **Artifacts** | Anything published this session that is now stale |
 
@@ -260,7 +260,7 @@ Harvest engineering knowledge only. Commitments, figures and rulings stated in c
 Order matters: `/linear handoff` itself writes `.latest-status.md` and `.linear/last-handoff.md` and **commits them**. Running it before the final check is what keeps the report true.
 
 1. Resolve the destination (below), then run `/linear handoff --to <project>`. Handoff previews the update and waits for approval before posting — **that preview is this skill's Posture B gate** for the outward status update. Surface it; never approve it on the operator's behalf. Skip entirely if the repo has no Linear binding (Phase 2's test); say so and rely on the harvest.
-2. Push the commit it made — **if it made one.** `.latest-status.md` and `.linear/last-handoff.md` are gitignored in some repos, in which case handoff's commit step is a no-op and there is nothing to push. Check with the **guarded** upstream form from Phase 1 — never bare `@{u}`, which exits 128 with no upstream; a branch with no upstream means everything is unpushed and the Phase 1 push preconditions apply. Pushing nothing is fine; reporting a push that did not happen is not.
+2. Push the commit it made — **if it made one.** Record `HEAD` *before* calling handoff and compare against it (`git log <saved>..HEAD`); `@{u}..HEAD` shows every unpushed commit, not just handoff's, and would silently re-push Phase 1 work on a branch Phase 1 could not push. `.latest-status.md` and `.linear/last-handoff.md` are gitignored in some repos, in which case handoff's commit step is a no-op and there is nothing to push. Check with the **guarded** upstream form from Phase 1 — never bare `@{u}`, which exits 128 with no upstream; a branch with no upstream means everything is unpushed and the Phase 1 push preconditions apply. Pushing nothing is fine; reporting a push that did not happen is not.
 3. Re-run `git status --porcelain` and the guarded upstream check from Phase 1.
 4. Write `~/.claude/mise-en-place/<repo-key>-last-run.md`.
 5. Give the report below. Lead with what is unresolved.

@@ -177,7 +177,7 @@ Write `$HOME/.claude/preflight/${key}.session-start.json` — the snapshot `/mis
 base="$HOME/.claude/preflight/${key}.session-start.json"
 now=$(date +%s)
 prev=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("started_at",0))' "$base" 2>/dev/null || echo 0)
-if [ "${prev:-0}" -gt 0 ] 2>/dev/null && [ $(( now - prev )) -lt 57600 ]; then
+if [ "${prev:-0}" -gt 0 ] && [ $(( now - ${prev:-0} )) -lt 57600 ]; then
   echo "baseline from $(( (now - prev) / 3600 ))h ago kept — session start is already recorded"
 else
   git status --porcelain -z            2>/dev/null > "$base.porcelain.tmp"
@@ -196,11 +196,14 @@ porcelain = [e for e in rd(base + '.porcelain.tmp').split('\0') if e]
 worktrees = [l.split(' ', 1)[1] for l in rd(base + '.wt.tmp').splitlines() if l.startswith('worktree ')]
 # real listening PORTS, not the PIDs that `lsof -t` would give
 ports = sorted({int(m.group(1)) for m in re.finditer(r':(\d+)\s*\(LISTEN\)', rd(base + '.lsof.tmp'))})
+# atomic: a truncated baseline is indistinguishable from a stale one, and would
+# silently force closedown into report-only for the rest of the repo's life.
 json.dump({'started_at': now, 'head_sha': head, 'porcelain': porcelain,
            'stashes': stashes, 'worktrees': worktrees, 'listening_ports': ports},
-          open(base, 'w'), indent=2)
+          open(base + '.new', 'w'), indent=2)
 PY
-  rm -f "$base".*.tmp
+  [ -s "$base.new" ] && mv -f "$base.new" "$base"
+  rm -f "$base".*.tmp "$base.new"
 fi
 ```
 

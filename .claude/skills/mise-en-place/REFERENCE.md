@@ -59,10 +59,11 @@ gh pr view <n> --json mergeable,mergeStateStatus,reviewDecision
 ```bash
 gh api graphql -f query='
   query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){
-    pullRequest(number:$n){reviewThreads(first:100){nodes{isResolved}}}}}' \
+    pullRequest(number:$n){reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}}}}}' \
   -F o="$(gh repo view --json owner -q .owner.login)" \
   -F r="$(gh repo view --json name -q .name)" -F n=<n> \
-  -q '[.data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false)]|length'
+  -q '{n:[.data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false)]|length, more:.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage}'
+# `more:true` means >100 threads — report a coverage finding, never the truncated count.
 ```
 
 **Findings worth reporting:**
