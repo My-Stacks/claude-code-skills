@@ -1,6 +1,6 @@
 # Mise en Place — Reference
 
-Per-surface detail. `SKILL.md` is the operable document; load this before mutating Linear, before filing the escalation ticket, or before the process and filesystem sweep.
+Per-surface detail. `SKILL.md` is the operable document; load this **before the Phase 1 push/PR preconditions** (§1 holds the default-branch resolution they depend on), before mutating Linear, before filing the escalation ticket, and before the process and filesystem sweep.
 
 Every command below is **conditional**. Guard on `git rev-parse --git-dir`, a configured `origin`, and `gh auth status`. A missing precondition is a **coverage finding** — name it in the report. Never a silent skip, never an error dump.
 
@@ -93,17 +93,17 @@ list_issues     project: <id>  includeArchived: false  limit: 100
 |---|---|
 | Ticket describes work that shipped | Close, citing the merge SHA or check |
 | Title carries stale state ("not pushed", "WIP") | Retitle, preserving the original in a comment |
-| Body describes an intention overtaken by events | Update the body, don't just close |
-| Work happened with no ticket | File one retroactively — search by branch or PR first |
+| Body describes an intention overtaken by events | **Escalate.** Rewriting a body overwrites what a person wrote they intended to do. This skill does not write ticket bodies. |
+| Work happened with no ticket | **Escalate.** Name the work and its branch/PR in the escalation table. Filing a ticket is a claim about what was planned and it notifies the team — outside this skill's charter. |
 | Not touched in >30 days, not progressing | Disposition rule; usually escalate |
 
-**Never touch a ticket assigned to or created by anyone but the operator**, whatever shipped. Those go in the escalation table with the assignee named. Cap ticket-state mutations at **5 per run**; above that, apply none and escalate the whole set — a closedown that wants to change eight tickets has found a board problem.
+**Close only tickets assigned to the resolved current user** (Phase 0). Unassigned is not yours — on a shared board it is the default state of everything nobody has picked up. Anything assigned to or created by someone else, and anything unassigned, goes in the escalation table with its assignee named. Those go in the escalation table with the assignee named. Cap ticket-state mutations at **5 per day, cumulative across runs** (SKILL.md Phase 3 is normative); above that, apply none and escalate the whole set — a closedown that wants to change eight tickets has found a board problem.
 
 Retitling preserves the record: comment `Retitled by /mise-en-place <date>. Was: "<original>". Reason: <reason>.`
 
 ### Project-level — delegate, don't write directly
 
-- **Description or metadata drift** → run `/linear sync-project`. Never call `save_project` directly; the fields are `summary` (255 char) and `description`, not `content`.
+- **Description or metadata drift** → `/linear sync-project`, but note it overwrites description, summary, dependencies **and** metadata from repo state. Posture A covers it only when all of those are empty; a single non-empty field among them makes the whole call Posture B — show what would be replaced, and wait. Never call `save_project` directly; the fields are `summary` (255 char) and `description`, not `content`.
 - **Session status update** → `/linear handoff` in Phase 5 posts it, resolving the destination from the tickets the session touched. Never call `save_status_update` directly — that reintroduces the misrouting bug linear v0.7.0 fixed.
 - **Project status enum** (e.g. Backlog → Active) is Posture A, but check the workspace's real status names first — they are workspace-specific (`In Progress` may not exist). Setting a started status may auto-stamp *today* as the start date; correct it to when work actually began.
 
@@ -175,6 +175,8 @@ Only republish an artifact **this session published, from the source file this s
 ---
 
 ## 7. Redaction
+
+A **credential shape** is: a `sk-`, `ghp_`, `gho_`, `AKIA`, or `xox[baprs]-` prefix; a `-----BEGIN … PRIVATE KEY-----` block; `Bearer <20+ chars>`; or a long random string following `key`, `token`, `secret`, `password` or `passwd`. Refuse the commit and report — never redact and commit.
 
 Before writing to any shared or persistent surface — Linear, GitHub, journals, handoffs, artifacts — redact: credentials and tokens in any form, dollar figures from client work, client names and identifiers, and anything the operator marked confidential. Write the shape ("a five-figure retainer"), not the value.
 

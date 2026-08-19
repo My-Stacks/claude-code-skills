@@ -43,54 +43,71 @@ If you know what you did today and just need it put away, this. If you can't say
 
 ## The charter — what this skill MAY and MAY NEVER do
 
-The load-bearing contract. Three postures; nothing lives outside them.
+The load-bearing contract. **The line is the network boundary, not danger.** A commit is local and reversible and nobody else sees it. A push, a PR, a ticket change and a status update all cross the wire: they notify humans, fire CI, ping CODEOWNERS, and cannot be retracted without someone noticing the retraction. Split there and the postures stop needing judgement.
 
-### Posture A — ANNOUNCE THEN ACT
+**Every interpolated value is quoted, always.** Branch names, paths, PIDs, project names, and every field read from the baseline go into commands as `"$var"` — never bare, never inside a string a `$(` or backtick could reopen. Paths may legally contain spaces, newlines, `$` and backticks; project names are written by anyone in the Linear workspace; the baseline is a file on disk. Validate shapes before use: `head_sha` must match `^[0-9a-f]{7,40}$` and `started_at` `^[0-9]{9,11}$`, or the baseline is absent.
 
-State the operation and its target in one line, run it, confirm the result with its id (SHA, PR number, ticket id).
+### Posture A — ANNOUNCE THEN ACT (stays on this machine)
 
-- `git commit` of paths this session **created or modified**, on a non-protected branch, staged by explicit pathspec.
-- `git push` of that branch to its own `origin/<same-name>` upstream.
-- `gh pr create` for that branch against the resolved default base.
-- `git fetch --no-tags origin`, `git remote prune origin`.
-- Setting a Linear project's **status enum**; correcting an auto-stamped start date.
-- Writing an **empty** Linear project description — always via `/linear sync-project`, never `save_project` directly (REFERENCE §3).
-- Closing or retitling a ticket that is unassigned, or assigned to the operator **and not created by anyone else**, that shipped reality settles, within the 5-mutation cap. A ticket someone else filed is theirs even when it sits in the operator's queue. These go through `/linear track` + `/linear push`, which previews and waits (linear's Non-Negotiable #1). **That approval outranks this posture:** a Posture A close still pauses once, for one batched preview covering every mutation in the run.
-- Filing **one** escalation ticket (or updating today's existing one).
-- Writing the harvest and the run ledger.
-- Killing a process **this session's own transcript shows this session launching** (see Phase 0).
+State the operation and its target in one line, run it, confirm the result.
 
-### Posture B — STOP AND ASK
+- `git commit` of paths this session created or modified, on a non-protected branch, staged by **individually named** pathspecs.
+- `git fetch --no-tags origin`, `git remote prune origin` — read-only against the remote.
+- Writing the harvest, the run ledger, and the per-repo state file under `~/.claude/mise-en-place/`.
+- Killing a process whose PID this session captured at launch (Phase 2).
 
-Present the proposal and **wait**. Default is no write.
+Nothing else. If an action puts bytes on a server someone else can see, it is Posture B.
 
-- Anything requiring force-push, history rewrite, `--no-verify`, or a protected/default branch.
+### Posture B — STOP AND ASK (crosses the wire)
+
+Present the exact operation and **wait**. Default is no write.
+
+- **`git push`** — including the first push that creates `origin/<same-name>` via `git push -u`. Full preconditions are in Phase 1; this bullet is the posture, not the checklist. Creating a remote tracking branch of the same name is landing, not branch creation; it is not what Posture C forbids.
+- **`gh pr create`** — a PR requests review from named humans, starts a billed CI run, and often spins a preview deploy. Announce the resolved base repo and branch before asking.
+- **Closing or retitling a Linear ticket**, setting a project's status enum, or writing an empty project description.
+- **Posting a project status update** — always, including health.
+- Deleting a local branch; removing a worktree; anything needing force-push, history rewrite, `--no-verify`, or a protected/default branch.
 - Committing when Phase 0 attribution is UNKNOWN.
-- Overwriting a **non-empty** Linear project description (show the diff).
-- Posting a **project status update** — always, including health. It is an outward notification.
-- Closing a ticket that turns on commercial, client, or strategic context.
-- More than **5** ticket-state mutations in a day (present the set; apply none). The cap is cumulative across re-runs — see Phase 3 for what counts.
-- Deleting a local branch.
+
+**Consent is remembered per repo, not per night.** On the first yes for a given repo, record it in `~/.claude/mise-en-place/<key>-consent.yml` as `push: yes`, `pr: yes`, `linear: yes` with the date. A remembered yes downgrades that operation to announce-then-act **for that repo only**, and is void if the repo's `origin` changes, if the run is in REPORT-ONLY attribution, or after 30 days. Re-ask rather than assume. Say which consents are in force at the top of the run.
 
 ### Posture C — NEVER
 
-No announcement and no approval makes these allowed. They are outside the skill.
+No announcement and no approval makes these allowed.
 
 - **Merging.** No `gh pr merge`, no `--auto-merge`, no enabling auto-merge, no local merge. Merging is a decision, never housekeeping. Do not ask — the answer is not yours to seek during a shutdown.
 - **Force-push, history rewrite, `reset --hard`, `branch -D`, `rebase`, `cherry-pick`, `--no-verify`.** Never retry a rejected push by any means.
-- **Committing a file this session did not touch** — i.e. any path already dirty in the baseline, or one you cannot tie to an edit you made. Editing a pre-existing tracked file is normal work and *is* committable; inheriting someone else's uncommitted change is not. Never stage with `git add -A` / `git add .` / `git add -u` / `git commit -a` / any glob.
+- **Committing a file this session did not touch** — any path already dirty in the baseline, or one you cannot tie to an edit you made. Editing a pre-existing tracked file is normal work and *is* committable; inheriting someone else's uncommitted change is not.
+- **Staging a directory or a glob.** `git add -- src/` stages every dirty file beneath it — that is `git add -A` with extra steps. Never a directory, `.`, `:/`, `*`, `-A`, `-u`, or `git commit -a`.
+- **Staging a deletion.** A porcelain entry whose status contains `D` is never yours, whatever the attribution test says.
 - **Committing to or pushing the default or a protected branch.**
 - **Creating, switching, or renaming a branch or tag.**
 - **Pushing work the operator called experimental, a spike, throwaway, or said not to push.** One such statement is a permanent veto for the run.
-- **Deleting any file outside the session scratchpad**, whoever created it. Deletion *inside* the scratchpad is the only deletion this skill performs; with no scratchpad resolved, it deletes nothing at all. Never delete a gitignored file — those are local config (`.env`, `settings.local.json`, caches).
-- **Killing any process this session's own transcript does not show this session launching**; never `kill -9`, `pkill`, or `killall`. The run ledger is not kill authority — it records a run's output, never process launches.
-- **Touching a ticket assigned to or created by anyone other than the operator.**
+- **Filing any Linear ticket other than the single escalation ticket**, and **rewriting any ticket body**. Both are claims about what was planned, and both notify the team.
+- **Touching a ticket assigned to, or created by, anyone but the resolved current user** (Phase 0). Unassigned is *not* the same as yours.
+- **Deleting any file outside the session scratchpad**, whoever created it. Never delete a gitignored file — those are local config (`.env`, `settings.local.json`, caches).
+- **Killing any process whose PID this session did not capture at launch**; never `kill -9`, `pkill`, or `killall`.
+- **Acting on another person's open PR.** Report it as pre-existing; never push to it, close it, or re-target it.
 - **Doing the work you find.** "While cleaning up I noticed X and fixed it" is a new task with no review. Note it; do not do it.
 - **Reporting clean** when a surface was unreachable, a mutation failed, a phase was suppressed, or attribution was degraded.
 
-> **If a situation isn't clearly inside Posture A, it's a recommendation, not an action.**
+> **If a situation isn't clearly inside Posture A, it's a recommendation or a question, not an action.**
 
 Reporting something that was yours costs one line. Acting on something that was not is unrecoverable.
+
+## Invocation
+
+```
+/mise-en-place              # full closedown
+/mise-en-place --dry-run    # no writes anywhere; report what it would do
+/mise-en-place --land-only  # skip Phase 3 reconcile; everything else runs
+```
+
+**Run `--dry-run` first on any repo you have not closed down before.** It performs **no external writes**: no commits, pushes, PRs, kills, ticket mutations, harvest, or `/linear handoff`. Each action is emitted as `WOULD: <action>`, each gated action as `WOULD ASK: <action>`. Report titled `MISE EN PLACE (DRY RUN)`.
+
+`--land-only` skips Phase 3 only. Report titled `MISE EN PLACE (LAND ONLY)`, with `Reconciled` reading `not run`. **Phase 4 always runs** — a session that shipped nothing is exactly the session whose only value is the harvest. `--dry-run` wins over `--land-only` on write posture.
+
+**This skill requires `/preflight` to have run at the start of the same session.** Without its baseline it cannot tell your work from what was already in the tree, and it will suppress every commit rather than guess.
 
 ## Procedure
 
@@ -119,27 +136,39 @@ cat "$HOME/.claude/preflight/${key}.session-start.json"
 grep -l -F -- "$root" "$HOME"/.claude/preflight/*.session-start.json 2>/dev/null
 ```
 
-Reuse `$key` for the run ledger; deriving it twice by two routes is how the ledger lands in a different file each run.
+Reuse `$key` for the run ledger and the consent file; deriving it twice by two routes is how they land in different files each run. If the derived key names no file but one exists whose `root` matches this repo, use that file and report `ATTRIBUTION: key mismatch — used <filename>`. Never use a baseline whose `root` is not this repo.
 
-It carries `started_at`, `head_sha`, `porcelain`, `stashes`, `worktrees` and `listening_ports`. preflight writes this file once per session and does not clobber a same-day one, so the file on disk *is* the session's start — **the only validity test is age: less than 16 hours old** (`started_at` is a Unix timestamp). Older, missing, or unparseable → treat it as absent.
+It carries `root`, `started_at`, `head_sha`, `porcelain`, `stashes`, `worktrees` and `listening_ports`.
+
+**Two validity tests, both required:** `started_at` under 16 hours old, **and** `root` equal byte-for-byte to this run's `git rev-parse --show-toplevel`. The key is derived from `origin`, so **every worktree and every clone of one remote shares a single baseline file** — a baseline written from a sibling worktree describes a *different tree* and is as unusable as a missing one. Do not use `grep -F -- "$root"` over the baselines as the identity test: `worktrees` lists every sibling path, so it matches a sibling's file and confirms the wrong one.
+
+A baseline that is older, missing, unparseable, written from another `root`, or whose `head_sha` is empty or fails `git rev-parse --verify "<head_sha>^{commit}"` → treat it as **absent**. (An empty `head_sha` matters: `git log ..HEAD` with an empty left side silently means `HEAD..HEAD` and returns nothing with exit 0, which reads identically to "no unlanded commits" — and would close the run ✅ with the day's work unpushed.)
 
 **A path is yours only if both hold:** it appears in this session's own Write/Edit/Bash write calls, **and** it is absent from the baseline `porcelain`. Creating a file and editing an existing tracked one both qualify — what disqualifies a path is having been dirty *before* the session started. One signal is not enough.
 
-`porcelain` entries are raw `git status --porcelain -z` records — `XY <path>`, two status characters then a space then the path — **not** bare paths, and a rename contributes a second entry holding the source path. Strip the leading three characters and compare **whole paths, never substrings**: `src/app.ts` must not read as pre-existing because the baseline holds `src/app.test.ts`. A parse you are unsure of is UNKNOWN, not a pass.
+`porcelain` entries are raw `git status --porcelain -z` records, **separated by NUL bytes, not newlines** (split on `\0`; there is no trailing newline). Each is `XY <path>` — two status characters then a space then the path — **not** a bare path, and a rename contributes a second entry holding the source path. Strip the leading three characters and compare **whole paths, never substrings**: `src/app.ts` must not read as pre-existing because the baseline holds `src/app.test.ts`. A parse you are unsure of is UNKNOWN, not a pass.
+
+**A deleted path is never yours.** A porcelain entry whose status contains `D` is reported in Still dirty as `deleted by a session command — restore or commit deliberately`, never staged. A session script (`rm -rf generated/`, a codegen or migration step) satisfies both attribution limbs, and landing a deletion removes content from every future clone.
 
 **Build output is never yours,** however the test scores it — a build run by the Phase 1 PR gate writes files absent from the baseline through this session's own Bash call, satisfying both limbs. Name untracked, non-ignored build paths in Still dirty.
 
-Use the other fields, don't just read them. **`head_sha`** is the session's starting commit — recorded *before* preflight's fast-forward, so bound it as `git log --oneline <head_sha>..HEAD --since=@<started_at>`. Without `--since`, commits preflight *pulled* fall inside the range and read as this session's work. It is the report's `oldSHA` and the only attribution signal that survives a compaction. **`stashes`** is a count — more now than at baseline means this session stashed work, which exists in exactly one place, so Phase 1's ladder applies. **`worktrees`** defines "stray" in Phase 2: present now, absent there. **If the session was compacted**, the first signal is unreliable — attribution is UNKNOWN regardless of the second.
+Use the other fields, don't just read them. **`head_sha`** is the session's starting commit — recorded *before* preflight's fast-forward, so bound it as `git log --oneline "<head_sha>"..HEAD --since=@<started_at>` (the `@` before the number tells git it is a Unix timestamp, not a date string). Without `--since`, commits preflight *pulled* fall inside the range and read as this session's work. It is the report's `oldSHA` and the only attribution signal that survives a compaction. **`stashes`** is a count — more now than at baseline means this session stashed work, which exists in exactly one place, so Phase 1's ladder applies. **`worktrees`** defines "stray" in Phase 2: present now, absent there. **If the session was compacted**, the first signal is unreliable — attribution is UNKNOWN regardless of the second.
 
 **If the baseline is absent, stale, or attribution is UNKNOWN → REPORT-ONLY ATTRIBUTION.** The run commits nothing — **including the Phase 4 harvest, which is written but left uncommitted and reported local-only** — kills nothing, deletes nothing, mutates no tickets, and suppresses `/linear handoff` (which also commits). It may push and PR only commits it can bound with `git log <baseline head_sha>..HEAD`; **if the baseline is absent or the session was compacted that bound does not exist, so push and PR are suppressed too.**
 
-Say so on its own line, naming the cause that actually fired: `ATTRIBUTION: <baseline absent | baseline stale (Nh) | session compacted> — <actions suppressed>.` Never print a cause that isn't the real one.
+Say so on its own line, naming the cause that actually fired **and the remedy**:
+
+`ATTRIBUTION: <baseline absent | baseline stale (Nh) | wrong worktree | session compacted> — <actions suppressed>. Run /preflight at the start of your next session and this will land normally.`
+
+Never print a cause that isn't the real one, and never print the cause without the remedy — a first run with no baseline lands nothing, and without that sentence it reads as a broken skill rather than a missing prerequisite.
 
 **Scope is this repo only.** Dirty state detected elsewhere is reported, never written to.
 
-Also read `~/.claude/mise-en-place/<repo-key>-last-run.md`. If it is from today, read what was already landed, harvested and escalated, and do not redo it.
+Also read `~/.claude/mise-en-place/<key>-last-run.md`. If it is from today, read what was already landed, harvested and escalated, and do not redo it.
 
 **Two records, never conflated.** The **run ledger** (`~/.claude/mise-en-place/<key>-last-run.md`, `mkdir -p` its directory first) is written at the end of a run and read at the start of the next; it records what a run landed, harvested and escalated, and never records process launches. **Kill authority is separate and comes only from this session's transcript** — a `run_in_background` Bash call you can point to. No such call → no kill, whatever the port scan shows.
+
+**Resolve who "the operator" is** — every ownership rule depends on it and it is never safe to infer. `gh api user --jq .login` for GitHub, the Linear viewer for tickets. State both. If either cannot be resolved, that surface becomes report-only: ownership rules built on a guessed identity are decoration.
 
 **The session scratchpad** is the scratchpad directory this session's harness context names. Resolve it here and state the path. If the session has no scratchpad, this run deletes nothing at all — say so.
 
@@ -157,18 +186,20 @@ git rev-parse --abbrev-ref --symbolic-full-name @{u} >/dev/null 2>&1 \
   || echo "NO UPSTREAM — every local commit is unlanded"
 ```
 
-**Detached HEAD ends Phase 1 and disables every commit and push for the whole run** — Phase 4's and `/linear handoff`'s included. Phases 2–4 still run in report-only form; the harvest is written and reported uncommitted. Report `RUN STATUS partial` and name the detached SHA.
+**Detached HEAD** means you are on a specific commit rather than on a branch, so anything committed here would belong to nothing and be easy to lose. It **ends Phase 1 and disables every commit and push for the whole run** — Phase 4's and `/linear handoff`'s included. Phases 2–4 still run in report-only form; the harvest is written and reported uncommitted. Report `RUN STATUS partial` and name the detached SHA.
 
 **No `origin`** → the ladder terminates at `committed`. That is a coverage finding, not a parked branch, and `git fetch origin` is skipped rather than errored.
 
 `@{u}` on a branch with no upstream exits 128. Never run it unguarded — a never-pushed branch is exactly the case this phase exists to catch, and an unguarded failure reads as "nothing unpushed."
 
-- **Yours and uncommitted** (created or modified this session) → stage by explicit pathspec (`git add -- <path>`), then commit with a real message. Print the path list first. Run `git diff --cached` and refuse if it contains a credential shape; stop and report rather than redacting.
+- **Yours and uncommitted** (created or modified this session) → stage each path **individually and literally**: `git add -- "<path1>" "<path2>" …`, one quoted argument per file. A directory is never a pathspec here — `git add -- src/` stages every dirty file beneath it, including paths the baseline classed not-yours. After staging, run `git diff --cached --name-only` and compare it set-for-set against the list you printed; **any staged path not on that list aborts the commit** — `git reset` and report it. Then commit with a real message. Print the path list first. Run `git diff --cached` and refuse if it contains a credential shape; stop and report rather than redacting.
 - **Not yours** → never stage it. Report it in Still dirty as pre-existing. Someone else's WIP is not yours to land.
 - **Committed but unpushed** → check preconditions, then push. If there is a stated reason not to, the reason goes in the handoff, not in your head.
 - **Pushed without a PR** → open one, or record why it is parked.
 
-**Push preconditions** — all must hold: `git fetch --no-tags origin` first; branch is not default or protected; branch is **ahead-only**, or has no upstream at all (then `git push -u` creates it — Posture A); no other worktree has this branch checked out (`git worktree list --porcelain`); no experimental/do-not-push veto was spoken this session. Behind or diverged → stop and report who else pushed. A rejected push is a finding, never a retry.
+**`ahead-only`** means your branch has commits origin doesn't, and origin has none you don't. Test it: `git rev-list --left-right --count @{u}...HEAD` prints `behind<TAB>ahead` — ahead-only is a left number of `0` and a right number above it. **`protected`** is a GitHub server-side setting you cannot see from git: `gh api "repos/:owner/:repo/branches/<branch>/protection" --silent 2>/dev/null && echo PROTECTED`; a 404 means unprotected, and if `gh` cannot answer, treat it as protected and report it.
+
+**Push preconditions** — all must hold: `git fetch --no-tags origin` first (this updates your picture of what is on GitHub without touching your files — "is this branch safe to push" is a question about origin, and a stale answer is how you push over someone's work); branch is not the default and not protected; branch is **ahead-only**, or has no upstream at all (then `git push -u` creates it); no other worktree has this branch checked out (`git worktree list --porcelain`); no experimental/do-not-push veto was spoken this session. Behind or diverged → stop and report who else pushed. A rejected push is a finding, never a retry.
 
 **PR preconditions** — `gh pr list --head <branch> --state all --json number,state` decides the ladder's terminal state, and the three states differ: an **open** PR → report its number and stop; a **closed-unmerged** PR → the branch was rejected before, so do not reopen and do not file a second — report it in Still dirty as `branch pushed, PR #<n> closed unmerged — needs a decision`; a **merged** PR with commits after its merge SHA → the ladder is incomplete, open a new PR for the remainder. Base is the resolved default, and **the PR must target `origin`** — check `gh repo view --json isFork -q .isFork` first, because on a fork `gh pr create` defaults its base to the **parent** repo and would open a public PR against someone else's project; pass `--repo "$(gh repo view --json nameWithOwner -q .nameWithOwner)"` explicitly, or treat a deliberate cross-fork PR as Posture B. **the build gate is stated, not assumed** — run the project's build (it dirties the tree, and its output is never attributable to the session — see Phase 0), and if it fails, is absent, or won't run, open the PR as `--draft` and say which. Never add reviewers, assignees, labels, or auto-merge.
 
@@ -217,9 +248,11 @@ Apply in order.
 
 Closing someone's tickets changes the record of what was promised and delivered. Escalating wrongly costs the operator two minutes; closing wrongly rewrites history you had no right to.
 
+**Close only tickets assigned to the resolved current user.** Unassigned is *not* yours — on a shared board it is the default state of everything nobody has picked up yet, including work a teammate is halfway through. Unassigned and other-owned tickets go in the escalation table.
+
 **Every ticket mutation goes through `/linear track` then `/linear push`** — never a direct `save_issue` or `save_comment`. Two reasons, both bite: `push` runs the drift check that catches a ticket someone else moved since you read it, and the session buffer is the only thing `/linear handoff` can see. A closure written directly leaves the tally empty, and an empty tally routes the session update to the bound project by default.
 
-**Counting the cap:** a mutation is a state, title or body change to an **existing** ticket. Filing the escalation ticket, filing a retroactive ticket, and setting the project status enum do not count. The cap is per **day**, not per run — a re-run reads the prior ledger's count and continues from it.
+**Counting the cap:** a mutation is a state or title change to an existing ticket. **Only two writes are exempt: the single escalation ticket, and the project status enum. Nothing else** — this skill files no other tickets and rewrites no ticket bodies (Posture C). The cap is per **day**, not per run; a re-run reads the prior ledger's count and continues from it.
 
 Escalate **once**, in a single ticket with a disposition table, filed in the same project as the tickets it escalates. Do not file eight tickets; do not leave it only in chat, where it dies with the session.
 
@@ -236,10 +269,15 @@ The transcript is about to disappear. Harvest what would cost the next session r
 
 **Threshold:** cost more than ten minutes, *or* would have shipped silently. The second class matters more.
 
-**Where it goes** — first that applies:
-1. An existing `journal/` **directory** → `journal/YYYY-MM-DD-<slug>.md`. Test with `[ -d journal ]`, not existence — if `journal` is a regular file, fall to the next rung.
-2. Otherwise an existing `.linear/` → `.linear/journal/YYYY-MM-DD-<slug>.md`.
-3. Otherwise create `journal/` and say that you did.
+**Where it goes.** Resolve `root=$(git rev-parse --show-toplevel)` first and make every rung absolute — the shell's working directory persists between calls and may be a subdirectory. Take the first that applies:
+
+1. An existing `$root/journal` **real directory** → `$root/journal/YYYY-MM-DD-<slug>.md`.
+2. Otherwise an existing `$root/.linear` **real directory** → `$root/.linear/journal/YYYY-MM-DD-<slug>.md`.
+3. Otherwise `~/.claude/mise-en-place/<key>/journal/YYYY-MM-DD-<slug>.md` — **outside the repo, never committed.**
+
+Test each in-repo rung with `[ -d "$path" ] && [ ! -L "$path" ]`. `[ -d ]` alone is true for a symlink, and a `journal` symlinked outside the repo puts transcript-derived material out of the tree, where `git check-ignore` reports "not ignored" and the run would wrongly call it durable.
+
+**This skill never creates `journal/` in a repo that does not have one.** An existing `journal/` or `.linear/` is the repo opting in; creating one is deciding on someone else's behalf that their history is a good place for your engineering notes. On rung 3 say so plainly: `HARVEST: written outside the repo to <path> — this repo has no journal/ or .linear/.`
 
 **Test the destination before writing** — `git check-ignore -q <path>`. A harvest written to a gitignored path is local-only: it never commits, never reaches the next clone, and looks like success. `.linear/` in particular **is gitignored in some repos and tracked in others**, so this is repo-dependent and must be checked every run, not assumed.
 
@@ -247,7 +285,7 @@ If the chosen destination is ignored, fall through to the next rung. If **every*
 
 If the file already exists, **append** under `## Second pass — <time>`. Never overwrite a harvest.
 
-**Then land it.** The harvest is a file this run created, so committing and pushing it is Posture A — but nothing else will do it: Phase 1 already ran, and leaving it uncommitted means the final check reports a dirty tree and the "durable record" exists only on this machine. Commit it by explicit pathspec and push, subject to the same **commit and push** preconditions as Phase 1 — **including the branch rule. If the current branch is the default or protected, do not commit: Posture C outranks this step.** Report `HARVEST: written to <path>, uncommitted — <branch> is the default/protected branch.` Re-run the Phase 1 credential check on the staged diff first: the harvest is transcript-derived and is the likeliest file in the run to carry a token or a client figure.
+**Then land it — only on rungs 1 and 2.** A rung-3 harvest lives outside the repo and is never committed; say where it went and move on. For rungs 1 and 2 the harvest is a file this run created, so committing it is Posture A and pushing it is Posture B — but nothing else will do it: Phase 1 already ran, and leaving it uncommitted means the final check reports a dirty tree and the "durable record" exists only on this machine. Commit it by explicit pathspec and push, subject to the same **commit and push** preconditions as Phase 1 — **including the branch rule. If the current branch is the default or protected, do not commit: Posture C outranks this step.** Report `HARVEST: written to <path>, uncommitted — <branch> is the default/protected branch.` Re-run the Phase 1 credential check on the staged diff first: the harvest is transcript-derived and is the likeliest file in the run to carry a token or a client figure.
 
 **Track it as well as writing it.** Log the traps and dead ends to the session buffer with `/linear track`. Handoff's Traps section reads the buffer, not the journal — skip this and the update ships with that section empty on the day it mattered. If the branch has an open PR, it lands there; say which commit carried it. If the destination turned out to be gitignored, there is nothing to commit — report it as local-only instead.
 
@@ -262,7 +300,7 @@ Order matters: `/linear handoff` itself writes `.latest-status.md` and `.linear/
 1. Resolve the destination (below), then run `/linear handoff --to <project>`. Handoff previews the update and waits for approval before posting — **that preview is this skill's Posture B gate** for the outward status update. Surface it; never approve it on the operator's behalf. Skip entirely if the repo has no Linear binding (Phase 2's test); say so and rely on the harvest.
 2. Push the commit it made — **if it made one.** Record `HEAD` *before* calling handoff and compare against it (`git log <saved>..HEAD`); `@{u}..HEAD` shows every unpushed commit, not just handoff's, and would silently re-push Phase 1 work on a branch Phase 1 could not push. `.latest-status.md` and `.linear/last-handoff.md` are gitignored in some repos, in which case handoff's commit step is a no-op and there is nothing to push. Check with the **guarded** upstream form from Phase 1 — never bare `@{u}`, which exits 128 with no upstream; a branch with no upstream means everything is unpushed and the Phase 1 push preconditions apply. Pushing nothing is fine; reporting a push that did not happen is not.
 3. Re-run `git status --porcelain` and the guarded upstream check from Phase 1.
-4. Write `~/.claude/mise-en-place/<repo-key>-last-run.md`.
+4. Write the run ledger `~/.claude/mise-en-place/<key>-last-run.md` (`mkdir -p` first). It must carry at minimum `date`, `run_status`, `landed` (branch, old→new SHAs, PR numbers), `ticket_mutations` as a **count** so tomorrow's cap continues from it, `escalation_ticket` id if filed, `harvest` path, and `findings:` as `<class>/<surface>:<record-id>` ids. Prose alone silently resets the daily cap to zero.
 5. Give the report below. Lead with what is unresolved.
 
 Do not treat `.latest-status.md` or `.linear/last-handoff.md` as Phase 1 leftovers — handoff owns them.
@@ -278,6 +316,8 @@ Two cases, and they are not the same:
 
 Resolve in order, stop at the first that fires:
 
+**The buffer** is the session's local record of Linear activity, written by `/linear track`. **The tally** is derived from it: the list of projects this session's tickets actually belong to, with a count each. They are not the same object — an empty tally means the session touched no tickets, not that it did no work.
+
 1. **A remembered binding** for this repo in `~/.claude/mise-en-place/project-map.yml` → use it, state it. This is how a repo whose name does not resemble its project (`pvp-website` → *People v. Profit*) stops costing a question every night.
 2. **One project in the tally** (linear's referenced-project tally) → that project. State it, do not ask.
 3. **Two or more in the tally** → **STOP AND ASK.** Name each with its ticket count, propose the highest as primary, ask: primary only, or both. Never pick silently and never fan out silently — each post is a separate outward notification.
@@ -291,7 +331,7 @@ Resolve in order, stop at the first that fires:
 ## Output format
 
 ```markdown
-RUN STATUS  <complete | partial (stopped at phase N) | attribution-degraded>
+RUN STATUS  <complete | partial (stopped at phase N) | attribution-degraded — combine if more than one applies>
 SWEPT       <N of M surfaces; name every one skipped or unreachable and why>
 
 ## Landed
@@ -317,20 +357,6 @@ Close with one of: ✅ **next session is clear to start** · ⚠️ **things wor
 A run with any unreachable surface, failed mutation, or suppressed phase **may not report clean**. If nothing needed doing, say that in one line rather than staging a checklist. A partial run still prints every heading, marking unreached ones `NOT RUN — phase N did not execute`.
 
 **On abort, write the harvest first.** Before surfacing any error that ends the run, dump Phase 4 material and say where it went. It is the only artifact a re-run cannot recover. **Under `--dry-run` this stays a non-write:** print the material inline under `## Harvest (dry run — not written)` so the operator can save it, and emit `WOULD: write <path>`.
-
-## Invocation
-
-```
-/mise-en-place              # full closedown
-/mise-en-place --dry-run    # no writes anywhere; report what it would do
-/mise-en-place --land-only  # skip Phase 3 reconcile; everything else runs
-```
-
-`--dry-run` performs **no external writes**: no commits, pushes, PRs, kills, ticket mutations, harvest, or `/linear handoff`. Each action is emitted as `WOULD: <action>`, each guarded action as `WOULD ASK: <action>`. Report titled `MISE EN PLACE (DRY RUN)`.
-
-`--land-only` skips Phase 3 only. Report titled `MISE EN PLACE (LAND ONLY)`, with `Reconciled` reading `not run`. **Phase 4 always runs** — a session that shipped nothing is exactly the session whose only value is the harvest. `--dry-run` wins over `--land-only` on write posture.
-
-Safe to re-run: the second run reads the first run's ledger and does not re-land, re-file or re-post what the first already did. **The harvest is the deliberate exception** — a second run appends `## Second pass — <time>` if there is new material, and commits that append; if there is none, it says `nothing new since <time>` and commits nothing. A run that aborted before Phase 5 wrote no ledger, so a re-run after an abort must re-check each surface for its own prior writes before acting.
 
 ## Composition
 

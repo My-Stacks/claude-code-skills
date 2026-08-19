@@ -185,9 +185,10 @@ else
   lsof -nP -iTCP -sTCP:LISTEN          2>/dev/null > "$base.lsof.tmp"
   python3 - "$base" "$now" \
     "$(git rev-parse --verify HEAD 2>/dev/null || echo '')" \
-    "$(git stash list 2>/dev/null | wc -l | tr -d ' ')" <<'PY'
+    "$(git stash list 2>/dev/null | wc -l | tr -d ' ')" \
+    "$root" <<'PY'
 import json, sys, re
-base, now, head, stashes = sys.argv[1], int(sys.argv[2]), sys.argv[3], int(sys.argv[4])
+base, now, head, stashes, root = sys.argv[1], int(sys.argv[2]), sys.argv[3], int(sys.argv[4]), sys.argv[5]
 def rd(p):
     try: return open(p, encoding='utf-8', errors='replace').read()
     except OSError: return ''
@@ -198,7 +199,8 @@ worktrees = [l.split(' ', 1)[1] for l in rd(base + '.wt.tmp').splitlines() if l.
 ports = sorted({int(m.group(1)) for m in re.finditer(r':(\d+)\s*\(LISTEN\)', rd(base + '.lsof.tmp'))})
 # atomic: a truncated baseline is indistinguishable from a stale one, and would
 # silently force closedown into report-only for the rest of the repo's life.
-json.dump({'started_at': now, 'head_sha': head, 'porcelain': porcelain,
+json.dump({'schema': 1, 'writer': 'preflight 5.1', 'root': root,
+           'started_at': now, 'head_sha': head, 'porcelain': porcelain,
            'stashes': stashes, 'worktrees': worktrees, 'listening_ports': ports},
           open(base + '.new', 'w'), indent=2)
 PY
@@ -206,6 +208,8 @@ PY
   rm -f "$base".*.tmp "$base.new"
 fi
 ```
+
+`root` is what makes the file identifiable: the key is derived from `origin`, so **all worktrees and clones of one remote share this single file**. A reader must compare `root` against its own toplevel and treat a mismatch as no baseline at all — `worktrees` cannot serve as that test, since it lists every sibling. `schema` lets a reader refuse a payload it does not understand rather than misread a renamed field.
 
 `head_sha` is recorded here, *before* Step 4's fast-forward, so on a behind branch it is the pre-sync tip. That is the correct anchor for "what this session started from" and is what closedown reports as `oldSHA`.
 
