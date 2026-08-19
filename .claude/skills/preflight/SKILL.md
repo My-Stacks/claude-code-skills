@@ -176,10 +176,17 @@ Write `$HOME/.claude/preflight/${key}.session-start.json` — the snapshot `/mis
 ```bash
 base="$HOME/.claude/preflight/${key}.session-start.json"
 now=$(date +%s)
-prev=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("started_at",0))' "$base" 2>/dev/null || echo 0)
+# keep only a baseline that is BOTH fresh AND for this same worktree — the key is
+# derived from origin, so a sibling worktree's fresh baseline would otherwise be kept
+# here and then rejected by closedown, suppressing the whole night's landing.
+prev=$(python3 -c 'import json,sys
+d=json.load(open(sys.argv[1]))
+print(d.get("started_at",0) if d.get("root")==sys.argv[2] else 0)' "$base" "$root" 2>/dev/null || echo 0)
 if [ "${prev:-0}" -gt 0 ] && [ $(( now - ${prev:-0} )) -lt 57600 ]; then
   echo "baseline from $(( (now - prev) / 3600 ))h ago kept — session start is already recorded"
 else
+  # .porcelain.tmp holds every dirty path — never leave it lying around
+  trap 'rm -f "$base".*.tmp "$base.new"' EXIT
   git status --porcelain -z            2>/dev/null > "$base.porcelain.tmp"
   git worktree list --porcelain        2>/dev/null > "$base.wt.tmp"
   lsof -nP -iTCP -sTCP:LISTEN          2>/dev/null > "$base.lsof.tmp"
@@ -204,7 +211,8 @@ json.dump({'schema': 1, 'writer': 'preflight 5.1', 'root': root,
            'stashes': stashes, 'worktrees': worktrees, 'listening_ports': ports},
           open(base + '.new', 'w'), indent=2)
 PY
-  [ -s "$base.new" ] && mv -f "$base.new" "$base"
+  if [ -s "$base.new" ] && mv -f "$base.new" "$base" && [ -s "$base" ]; then :
+  else echo "preflight: baseline write FAILED — tonight's closedown will be report-only"; fi
   rm -f "$base".*.tmp "$base.new"
 fi
 ```

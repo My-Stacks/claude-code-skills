@@ -66,7 +66,7 @@ Present the exact operation and **wait**. Default is no write.
 - **`gh pr create`** — a PR requests review from named humans, starts a billed CI run, and often spins a preview deploy. Announce the resolved base repo and branch before asking.
 - **Closing or retitling a Linear ticket**, setting a project's status enum, or writing an empty project description.
 - **Posting a project status update** — always, including health.
-- Deleting a local branch; removing a worktree; anything needing force-push, history rewrite, `--no-verify`, or a protected/default branch.
+- Deleting a local branch, or removing a worktree.
 - Committing when Phase 0 attribution is UNKNOWN.
 
 **Consent is remembered per repo, not per night.** On the first yes for a given repo, record it in `~/.claude/mise-en-place/<key>-consent.yml` as `push: yes`, `pr: yes`, `linear: yes` with the date. A remembered yes downgrades that operation to announce-then-act **for that repo only**, and is void if the repo's `origin` changes, if the run is in REPORT-ONLY attribution, or after 30 days. Re-ask rather than assume. Say which consents are in force at the top of the run.
@@ -132,8 +132,16 @@ hash=$(printf '%s' "$canon" | { shasum 2>/dev/null || sha1sum 2>/dev/null; } | c
 key="${stem:-repo}-${hash}"
 cat "$HOME/.claude/preflight/${key}.session-start.json"
 
-# Verify rather than trust — a wrong key and a missing baseline look identical:
-grep -l -F -- "$root" "$HOME"/.claude/preflight/*.session-start.json 2>/dev/null
+# Verify by ROOT, never by grep: `worktrees` lists every sibling path, so a text
+# match confirms a sibling's baseline. Compare the top-level "root" field instead.
+python3 - "$root" "$HOME/.claude/preflight" <<'PY'
+import json, glob, os, sys
+root, d = sys.argv[1], sys.argv[2]
+for f in sorted(glob.glob(os.path.join(d, "*.session-start.json"))):
+    try:
+        if json.load(open(f)).get("root") == root: print(f)
+    except Exception: pass
+PY
 ```
 
 Reuse `$key` for the run ledger and the consent file; deriving it twice by two routes is how they land in different files each run. If the derived key names no file but one exists whose `root` matches this repo, use that file and report `ATTRIBUTION: key mismatch — used <filename>`. Never use a baseline whose `root` is not this repo.
@@ -197,7 +205,7 @@ git rev-parse --abbrev-ref --symbolic-full-name @{u} >/dev/null 2>&1 \
 - **Committed but unpushed** → check preconditions, then push. If there is a stated reason not to, the reason goes in the handoff, not in your head.
 - **Pushed without a PR** → open one, or record why it is parked.
 
-**`ahead-only`** means your branch has commits origin doesn't, and origin has none you don't. Test it: `git rev-list --left-right --count @{u}...HEAD` prints `behind<TAB>ahead` — ahead-only is a left number of `0` and a right number above it. **`protected`** is a GitHub server-side setting you cannot see from git: `gh api "repos/:owner/:repo/branches/<branch>/protection" --silent 2>/dev/null && echo PROTECTED`; a 404 means unprotected, and if `gh` cannot answer, treat it as protected and report it.
+**`ahead-only`** means your branch has commits origin doesn't, and origin has none you don't. Test it: `git rev-list --left-right --count @{u}...HEAD` prints `behind<TAB>ahead` — ahead-only is a left number of `0` and a right number above it. **`protected`** is a GitHub server-side setting you cannot see from git: `b=${branch//\//%2F}; gh api "repos/:owner/:repo/branches/$b/protection" --silent 2>/dev/null && echo PROTECTED` — **URL-encode the branch name**, because `feature/x` unencoded becomes extra path segments and returns 404, which this rule reads as "unprotected". A 404 on an encoded name means unprotected; if `gh` cannot answer, treat the branch as protected and report it.
 
 **Push preconditions** — all must hold: `git fetch --no-tags origin` first (this updates your picture of what is on GitHub without touching your files — "is this branch safe to push" is a question about origin, and a stale answer is how you push over someone's work); branch is not the default and not protected; branch is **ahead-only**, or has no upstream at all (then `git push -u` creates it); no other worktree has this branch checked out (`git worktree list --porcelain`); no experimental/do-not-push veto was spoken this session. Behind or diverged → stop and report who else pushed. A rejected push is a finding, never a retry.
 
@@ -366,4 +374,4 @@ A run with any unreachable surface, failed mutation, or suppressed phase **may n
 
 ## Load REFERENCE.md when
 
-Before mutating Linear (workspace status names and start-date behaviour will bite you), before filing the escalation ticket (template), or before the process and filesystem sweep.
+Before the Phase 1 push/PR preconditions (§1 holds the default-branch resolution they depend on), before mutating Linear (workspace status names and start-date behaviour will bite you), before filing the escalation ticket (template), or before the process and filesystem sweep.

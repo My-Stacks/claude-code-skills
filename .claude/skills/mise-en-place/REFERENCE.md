@@ -97,7 +97,7 @@ list_issues     project: <id>  includeArchived: false  limit: 100
 | Work happened with no ticket | **Escalate.** Name the work and its branch/PR in the escalation table. Filing a ticket is a claim about what was planned and it notifies the team — outside this skill's charter. |
 | Not touched in >30 days, not progressing | Disposition rule; usually escalate |
 
-**Close only tickets assigned to the resolved current user** (Phase 0). Unassigned is not yours — on a shared board it is the default state of everything nobody has picked up. Anything assigned to or created by someone else, and anything unassigned, goes in the escalation table with its assignee named. Those go in the escalation table with the assignee named. Cap ticket-state mutations at **5 per day, cumulative across runs** (SKILL.md Phase 3 is normative); above that, apply none and escalate the whole set — a closedown that wants to change eight tickets has found a board problem.
+**Close only tickets assigned to the resolved current user** (Phase 0). Unassigned is not yours — on a shared board it is the default state of everything nobody has picked up. Anything assigned to or created by someone else, and anything unassigned, goes in the escalation table with its assignee named. Cap ticket-state mutations at **5 per day, cumulative across runs** (SKILL.md Phase 3 is normative); above that, apply none and escalate the whole set — a closedown that wants to change eight tickets has found a board problem.
 
 Retitling preserves the record: comment `Retitled by /mise-en-place <date>. Was: "<original>". Reason: <reason>.`
 
@@ -105,7 +105,7 @@ Retitling preserves the record: comment `Retitled by /mise-en-place <date>. Was:
 
 - **Description or metadata drift** → `/linear sync-project`, but note it overwrites description, summary, dependencies **and** metadata from repo state. Posture A covers it only when all of those are empty; a single non-empty field among them makes the whole call Posture B — show what would be replaced, and wait. Never call `save_project` directly; the fields are `summary` (255 char) and `description`, not `content`.
 - **Session status update** → `/linear handoff` in Phase 5 posts it, resolving the destination from the tickets the session touched. Never call `save_status_update` directly — that reintroduces the misrouting bug linear v0.7.0 fixed.
-- **Project status enum** (e.g. Backlog → Active) is Posture A, but check the workspace's real status names first — they are workspace-specific (`In Progress` may not exist). Setting a started status may auto-stamp *today* as the start date; correct it to when work actually began.
+- **Project status enum** (e.g. Backlog → Active) is Posture B — it is a network write — but check the workspace's real status names first — they are workspace-specific (`In Progress` may not exist). Setting a started status may auto-stamp *today* as the start date; correct it to when work actually began.
 
 ### Escalation ticket template
 
