@@ -1,6 +1,6 @@
 ---
 name: mise-en-place
-version: "1.0"
+version: "1.0.1"
 description: >-
   End-of-day shutdown for a working repo — run when you are finished for the
   night, not when you are lost. Lands the session's work (commit, push, open a
@@ -126,7 +126,7 @@ Attribution is a diff against a snapshot, never a judgment call. Read the baseli
 root=$(git rev-parse --show-toplevel) || exit 1
 raw=$(git remote get-url origin 2>/dev/null | head -1); [ -z "$raw" ] && raw=$root
 canon=$(printf '%s' "$raw" | tr 'A-Z' 'a-z' \
-  | sed -E 's#^[a-z]+://##; s#^[^@/]+@##; s#:#/#; s#\.git$##; s#/+$##')
+  | sed -E 's#^[a-z]+://##; s#^[^@/]+@##; s#:#/#; s#/+$##; s#\.git$##; s#/+$##')
 stem=$(printf '%s' "$canon" | tr -c 'a-z0-9._-' '-' | sed -E 's#-+#-#g; s#^[-.]+##; s#[-.]+$##')
 hash=$(printf '%s' "$canon" | { shasum 2>/dev/null || sha1sum 2>/dev/null; } | cut -c1-12)
 key="${stem:-repo}-${hash}"
@@ -148,13 +148,13 @@ Reuse `$key` for the run ledger and the consent file; deriving it twice by two r
 
 It carries `root`, `started_at`, `head_sha`, `porcelain`, `stashes`, `worktrees` and `listening_ports`.
 
-**Two validity tests, both required:** `started_at` under 16 hours old, **and** `root` equal byte-for-byte to this run's `git rev-parse --show-toplevel`. The key is derived from `origin`, so **every worktree and every clone of one remote shares a single baseline file** — a baseline written from a sibling worktree describes a *different tree* and is as unusable as a missing one. Do not use `grep -F -- "$root"` over the baselines as the identity test: `worktrees` lists every sibling path, so it matches a sibling's file and confirms the wrong one.
+**Three validity tests, all required:** `schema` equal to `1`, `started_at` under 16 hours old, **and** `root` equal byte-for-byte to this run's `git rev-parse --show-toplevel`. Preflight documents `schema` as the field that lets a reader refuse a payload it does not understand — that guarantee is only real if you check it, so a baseline carrying any other `schema` is **absent**, not best-effort parsed. The key is derived from `origin`, so **every worktree and every clone of one remote shares a single baseline file** — a baseline written from a sibling worktree describes a *different tree* and is as unusable as a missing one. Do not use `grep -F -- "$root"` over the baselines as the identity test: `worktrees` lists every sibling path, so it matches a sibling's file and confirms the wrong one.
 
-A baseline that is older, missing, unparseable, written from another `root`, or whose `head_sha` is empty or fails `git rev-parse --verify "<head_sha>^{commit}"` → treat it as **absent**. (An empty `head_sha` matters: `git log ..HEAD` with an empty left side silently means `HEAD..HEAD` and returns nothing with exit 0, which reads identically to "no unlanded commits" — and would close the run ✅ with the day's work unpushed.)
+A baseline that is older, missing, unparseable, of an unknown `schema`, written from another `root`, or whose `head_sha` is empty or fails `git rev-parse --verify "<head_sha>^{commit}"` → treat it as **absent**. (An empty `head_sha` matters: `git log ..HEAD` with an empty left side silently means `HEAD..HEAD` and returns nothing with exit 0, which reads identically to "no unlanded commits" — and would close the run ✅ with the day's work unpushed.)
 
 **A path is yours only if both hold:** it appears in this session's own Write/Edit/Bash write calls, **and** it is absent from the baseline `porcelain`. Creating a file and editing an existing tracked one both qualify — what disqualifies a path is having been dirty *before* the session started. One signal is not enough.
 
-`porcelain` entries are raw `git status --porcelain -z` records, **separated by NUL bytes, not newlines** (split on `\0`; there is no trailing newline). Each is `XY <path>` — two status characters then a space then the path — **not** a bare path, and a rename contributes a second entry holding the source path. Strip the leading three characters and compare **whole paths, never substrings**: `src/app.ts` must not read as pre-existing because the baseline holds `src/app.test.ts`. A parse you are unsure of is UNKNOWN, not a pass.
+`porcelain` entries are raw `git --no-optional-locks status --porcelain -z -uall` records — **read the live tree with those exact flags too.** A baseline written with `-uall` lists `newdir/sub/b.txt` while a default live read lists only `?? newdir/`, and the two never compare equal, so every file under a new directory reads as pre-existing or as new depending on which side dropped it. Same flags on both sides or the diff is meaningless. They are **separated by NUL bytes, not newlines** (split on `\0`; there is no trailing newline). Each is `XY <path>` — two status characters then a space then the path — **not** a bare path, and a rename contributes a second entry holding the source path. Strip the leading three characters and compare **whole paths, never substrings**: `src/app.ts` must not read as pre-existing because the baseline holds `src/app.test.ts`. A parse you are unsure of is UNKNOWN, not a pass.
 
 **A deleted path is never yours.** A porcelain entry whose status contains `D` is reported in Still dirty as `deleted by a session command — restore or commit deliberately`, never staged. A session script (`rm -rf generated/`, a codegen or migration step) satisfies both attribution limbs, and landing a deletion removes content from every future clone.
 
@@ -188,7 +188,7 @@ Nothing may exist in only one place: `uncommitted → committed → pushed → P
 
 ```bash
 git branch --show-current                       # empty => detached HEAD; see below
-git status --porcelain                          # candidates
+git --no-optional-locks status --porcelain -z -uall | tr '\0' '\n'   # candidates
 git rev-parse --abbrev-ref --symbolic-full-name @{u} >/dev/null 2>&1 \
   && git log --oneline @{u}..HEAD \
   || echo "NO UPSTREAM — every local commit is unlanded"
@@ -211,7 +211,7 @@ git rev-parse --abbrev-ref --symbolic-full-name @{u} >/dev/null 2>&1 \
 
 **PR preconditions** — `gh pr list --head <branch> --state all --json number,state` decides the ladder's terminal state, and the three states differ: an **open** PR → report its number and stop; a **closed-unmerged** PR → the branch was rejected before, so do not reopen and do not file a second — report it in Still dirty as `branch pushed, PR #<n> closed unmerged — needs a decision`; a **merged** PR with commits after its merge SHA → the ladder is incomplete, open a new PR for the remainder. Base is the resolved default, and **the PR must target `origin`** — check `gh repo view --json isFork -q .isFork` first, because on a fork `gh pr create` defaults its base to the **parent** repo and would open a public PR against someone else's project; pass `--repo "$(gh repo view --json nameWithOwner -q .nameWithOwner)"` explicitly, or treat a deliberate cross-fork PR as Posture B. **the build gate is stated, not assumed** — run the project's build (it dirties the tree, and its output is never attributable to the session — see Phase 0), and if it fails, is absent, or won't run, open the PR as `--draft` and say which. Never add reviewers, assignees, labels, or auto-merge.
 
-**Done when:** every path in `git status --porcelain` is committed, or named as not-yours, or named in Still dirty — and the branch has a terminal state on the ladder.
+**Done when:** every path in `git --no-optional-locks status --porcelain -z -uall` is committed, or named as not-yours, or named in Still dirty — and the branch has a terminal state on the ladder.
 
 ### Phase 2 — Sweep the workstation
 
@@ -307,7 +307,7 @@ Order matters: `/linear handoff` itself writes `.latest-status.md` and `.linear/
 
 1. Resolve the destination (below), then run `/linear handoff --to <project>`. Handoff previews the update and waits for approval before posting — **that preview is this skill's Posture B gate** for the outward status update. Surface it; never approve it on the operator's behalf. Skip entirely if the repo has no Linear binding (Phase 2's test); say so and rely on the harvest.
 2. Push the commit it made — **if it made one.** Record `HEAD` *before* calling handoff and compare against it (`git log <saved>..HEAD`); `@{u}..HEAD` shows every unpushed commit, not just handoff's, and would silently re-push Phase 1 work on a branch Phase 1 could not push. `.latest-status.md` and `.linear/last-handoff.md` are gitignored in some repos, in which case handoff's commit step is a no-op and there is nothing to push. Check with the **guarded** upstream form from Phase 1 — never bare `@{u}`, which exits 128 with no upstream; a branch with no upstream means everything is unpushed and the Phase 1 push preconditions apply. Pushing nothing is fine; reporting a push that did not happen is not.
-3. Re-run `git status --porcelain` and the guarded upstream check from Phase 1.
+3. Re-run `git --no-optional-locks status --porcelain -z -uall` and the guarded upstream check from Phase 1.
 4. Write the run ledger `~/.claude/mise-en-place/<key>-last-run.md` (`mkdir -p` first). It must carry at minimum `date`, `run_status`, `landed` (branch, old→new SHAs, PR numbers), `ticket_mutations` as a **count** so tomorrow's cap continues from it, `escalation_ticket` id if filed, `harvest` path, and `findings:` as `<class>/<surface>:<record-id>` ids. Prose alone silently resets the daily cap to zero.
 5. Give the report below. Lead with what is unresolved.
 

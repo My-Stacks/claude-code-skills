@@ -1,6 +1,6 @@
 ---
 name: preflight
-version: "5.1"
+version: "5.2"
 description: >-
   Pre-session safe-sync briefing for git repos. Brings the repo up to date
   before work begins — fast-forwards active branches to origin, flags stale
@@ -131,7 +131,7 @@ raw=$(git remote get-url origin 2>/dev/null | head -1)   # origin identity (1st 
 # canon: lowercase, strip protocol / user@ / trailing .git / trailing slash; ssh and https
 # forms of one repo converge here, while org/repo vs org-repo stay distinct.
 canon=$(printf '%s' "$raw" | tr 'A-Z' 'a-z' \
-  | sed -E 's#^[a-z]+://##; s#^[^@/]+@##; s#:#/#; s#\.git$##; s#/+$##')
+  | sed -E 's#^[a-z]+://##; s#^[^@/]+@##; s#:#/#; s#/+$##; s#\.git$##; s#/+$##')
 stem=$(printf '%s' "$canon" | tr -c 'a-z0-9._-' '-' | sed -E 's#-+#-#g; s#^[-.]+##; s#[-.]+$##')
 hash=$(printf '%s' "$canon" | { shasum 2>/dev/null || sha1sum 2>/dev/null; } | cut -c1-12)
 case "$hash" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
@@ -187,7 +187,12 @@ if [ "${prev:-0}" -gt 0 ] && [ $(( now - ${prev:-0} )) -lt 57600 ]; then
 else
   # .porcelain.tmp holds every dirty path — never leave it lying around
   trap 'rm -f "$base".*.tmp "$base.new"' EXIT
-  git status --porcelain -z            2>/dev/null > "$base.porcelain.tmp"
+  # -uall: without it a new file inside a new directory collapses to "?? newdir/",
+  # so the baseline cannot tell an empty new directory from one already holding
+  # someone else's files, and closedown attributes everything beneath it to this
+  # session. --no-optional-locks: this runs unattended and must never take
+  # .git/index.lock out from under an in-flight rebase or commit.
+  git --no-optional-locks status --porcelain -z -uall 2>/dev/null > "$base.porcelain.tmp"
   git worktree list --porcelain        2>/dev/null > "$base.wt.tmp"
   lsof -nP -iTCP -sTCP:LISTEN          2>/dev/null > "$base.lsof.tmp"
   python3 - "$base" "$now" \
