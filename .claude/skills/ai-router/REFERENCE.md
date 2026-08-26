@@ -8,22 +8,22 @@ This file is not needed for `route`, `config`, or `setup` commands. Load on dema
 
 | Model | Best for | Context | Speed |
 |-------|----------|---------|-------|
-| Opus 4.6 | Architecture, planning, complex reasoning, long documents | 1M | Slowest |
-| Sonnet 4.6 | Code generation, refactoring, debugging, general tasks | 200K | Fast |
+| Opus 5 | Architecture, planning, complex reasoning, long documents | 1M | Slowest |
+| Sonnet 5 | Code generation, refactoring, debugging, general tasks | 1M | Fast |
 | Haiku 4.5 | Quick lookups, formatting, simple edits, triage | 200K | Fastest |
 
 ### External API Models
 
 | Provider | Default Model | Strengths | Context |
 |----------|--------------|-----------|---------|
-| Anthropic | claude-sonnet-4-6 | Structured output, instruction following, code | 200K |
-| OpenAI | gpt-5.5 | Broad knowledge, creative writing, multimodal, reasoning | 1M |
-| Gemini | gemini-3-flash-preview | Speed, long context, multimodal, cost efficiency | 1M |
+| Anthropic | claude-opus-5 | Deep reasoning, code, instruction following; adaptive thinking on by default | 1M |
+| OpenAI | gpt-5.6-sol (`reasoning_effort` medium) | Broad knowledge, agentic/multi-step coding, reasoning | 1.1M |
+| Gemini | gemini-3.6-flash | Speed, long context, multimodal, cost efficiency; thinking on | 1M |
 
 ### Model Override
 
 To use a non-default model for a single call:
-> `/ai-router ask --model claude-opus-4-6 "deep architecture question"`
+> `/ai-router ask --model claude-sonnet-5 "quick question, cheaper tier"`
 
 Parse `--model <value>` from the prompt. Validate the model name contains only `[a-zA-Z0-9._-]`. Substitute into the API call, overriding the config default for that single call.
 
@@ -323,17 +323,21 @@ The diff is reformatted by `format-diff.py` first, then size-checked: interactiv
 ### Review cites a line that looks off
 Line numbers come from the `__new hunk__` side of `format-diff.py` (real new-file numbers). If a citation seems wrong, confirm you fed `$RUN/diff.txt` (the reformatted output) to the providers, not the raw `git diff`. Feeding the raw diff is the usual cause of hallucinated line numbers.
 
-## Pricing Reference (per 1M tokens, estimates as of 2026-03)
+## Pricing Reference (per 1M tokens, as of 2026-08)
 
 | Provider | Model | Input | Output |
 |----------|-------|------:|-------:|
+| Anthropic | claude-opus-5 | $5.00 | $25.00 |
+| Anthropic | claude-sonnet-5 | $2.00 | $10.00 |
 | Anthropic | claude-sonnet-4-6 | $3.00 | $15.00 |
-| Anthropic | claude-opus-4-6 | $5.00 | $25.00 |
 | Anthropic | claude-haiku-4-5 | $1.00 | $5.00 |
-| OpenAI | gpt-5.5 | ~$2.50* | ~$15.00* |
-| Gemini | gemini-3-flash-preview | $0.50 | $3.00 |
+| OpenAI | gpt-5.6-sol | $4.00* | $20.00* |
+| Gemini | gemini-3.6-flash | $0.75† | $3.75† |
 
-*gpt-5.5 pricing approximated from gpt-5.4 rates, not yet verified against platform.openai.com/pricing — OpenAI cost reports are estimates (shown with ~) until updated.
+*gpt-5.6-sol promotional pricing, published through 2026-11-21.
+†gemini-3.6-flash introductory pricing through 2026-12-31; standard rate from 2027-01-01 is $1.50 / $7.50.
+
+Thinking/reasoning tokens are billed as output on all three providers and are included in the usage line (`output_tokens` for Anthropic, `completion_tokens` for OpenAI, `candidatesTokenCount + thoughtsTokenCount` for Gemini).
 
 Prices may change. These are used for cost estimates only.
 

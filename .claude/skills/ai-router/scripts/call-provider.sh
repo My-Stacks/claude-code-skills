@@ -105,7 +105,9 @@ RESP_FILE=$(mktemp "$TMPDIR_BASE/ai-router-resp.XXXXXX")
 trap 'rm -f "$BODY_FILE" "$RESP_FILE"' EXIT
 
 # Build request body from stdin via python json.dumps (safe escaping).
-python3 "$SCRIPT_DIR/lib/build-body.py" "$PROVIDER" "$MODEL" "$MAX_TOKENS" > "$BODY_FILE"
+# OpenAI gets reasoning_effort from config (default medium); others ignore the arg.
+EFFORT=""; [[ "$PROVIDER" == openai ]] && EFFORT=$(openai_reasoning_effort)
+python3 "$SCRIPT_DIR/lib/build-body.py" "$PROVIDER" "$MODEL" "$MAX_TOKENS" "$EFFORT" > "$BODY_FILE"
 
 rc=0
 case "$PROVIDER" in
@@ -176,7 +178,10 @@ elif provider == "gemini":
         parts = ((cands[0] or {}).get("content") or {}).get("parts") or []
         text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
     u = r.get("usageMetadata") or {}
-    usage = {"input": u.get("promptTokenCount", 0), "output": u.get("candidatesTokenCount", 0)}
+    # thoughtsTokenCount is billed as output (Gemini 2.5+ thinking models) but
+    # reported separately from candidatesTokenCount — fold it in or cost under-reports.
+    usage = {"input": u.get("promptTokenCount", 0),
+             "output": (u.get("candidatesTokenCount") or 0) + (u.get("thoughtsTokenCount") or 0)}
 else:
     print(f"unknown provider in parser: {provider}", file=sys.stderr)
     sys.exit(64)

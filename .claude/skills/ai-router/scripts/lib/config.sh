@@ -44,6 +44,13 @@ default_model() {
   get_field "$field"
 }
 
+# OpenAI reasoning depth: low | medium | high. Default medium (GPT-5.x are reasoning
+# models; this is the cost/depth dial). Anything unrecognised falls back to medium.
+openai_reasoning_effort() {
+  local v; v=$(get_field openai_reasoning_effort)
+  case "$v" in low|medium|high) printf '%s\n' "$v" ;; *) printf 'medium\n' ;; esac
+}
+
 # Redact a key: first 6 + last 4 chars if long enough, else first 3 + "..."
 redact_key() {
   local k=$1

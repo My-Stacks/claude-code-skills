@@ -1,6 +1,6 @@
 ---
 name: ai-router
-version: "1.9"
+version: "1.10"
 description: "Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Grounded PR review (line-numbered diff, anti-hallucination rules, findings verified against the diff, inline comments, auto-resolves stale threads, persona-gated auto-fixer interactive + always-on via worktree-isolated shadow). Headless-safe with --post-to-pr for shadow review."
 trigger: /ai-router
 ---
@@ -24,14 +24,19 @@ File: `~/.orchestrator-config.json`
   "anthropic_api_key": "sk-ant-...",
   "openai_api_key": "sk-...",
   "gemini_api_key": "AIza...",
-  "default_anthropic_model": "claude-sonnet-4-6",
-  "default_openai_model": "gpt-5.5",
-  "default_gemini_model": "gemini-3-flash-preview",
+  "default_anthropic_model": "claude-opus-5",
+  "default_openai_model": "gpt-5.6-sol",
+  "default_gemini_model": "gemini-3.6-flash",
+  "openai_reasoning_effort": "medium",
   "review_persona": "developer"
 }
 ```
 
-All keys optional. At least one API key required for API commands. `review_persona`
+All keys optional. At least one API key required for API commands. `openai_reasoning_effort`
+(`low` | `medium` | `high`; default `medium`) is sent as `reasoning_effort` on every OpenAI
+call — GPT-5.x are reasoning models and this is the cost/depth dial. Anthropic and Gemini
+run their default adaptive thinking; thinking tokens are billed as output and counted in
+the usage line. `review_persona`
 sets the default fix posture for `review` (Phase 3): `developer` (default) →
 `suggest` (committable inline suggestions, no auto-edits); `guided` → `auto`
 (guarded auto-fixer). Override per run with `--fix=<level>`. The `auto` posture
@@ -70,9 +75,10 @@ If missing, run setup:
        "anthropic_api_key": os.environ.get("ANTHROPIC_KEY", "") or None,
        "openai_api_key":    os.environ.get("OPENAI_KEY", "")    or None,
        "gemini_api_key":    os.environ.get("GEMINI_KEY", "")    or None,
-       "default_anthropic_model": "claude-sonnet-4-6",
-       "default_openai_model":    "gpt-5.5",
-       "default_gemini_model":    "gemini-3-flash-preview",
+       "default_anthropic_model": "claude-opus-5",
+       "default_openai_model":    "gpt-5.6-sol",
+       "default_gemini_model":    "gemini-3.6-flash",
+       "openai_reasoning_effort": "medium",
    }
    # Drop providers the user skipped so config_exists / *_key() return ""
    cfg = {k: v for k, v in cfg.items() if v is not None}
@@ -519,9 +525,9 @@ Show config with redacted keys (first 6 + last 4 chars; first 3 + `...` if short
 
 | Provider | Key | Model | Status |
 |----------|-----|-------|--------|
-| Anthropic | sk-ant-...qAAA | claude-sonnet-4-6 | Active |
-| OpenAI    | sk-pro...DcA   | gpt-5.5           | Active |
-| Gemini    | —              | —                 | Not configured |
+| Anthropic | sk-ant-...qAAA | claude-opus-5      | Active |
+| OpenAI    | sk-pro...DcA   | gpt-5.6-sol (medium) | Active |
+| Gemini    | —              | —                  | Not configured |
 
 Config: ~/.orchestrator-config.json
 ```
@@ -549,7 +555,7 @@ SCRIPT="$HOME/.claude/skills/ai-router/scripts/call-provider.sh"
 echo "$PROMPT" | bash "$SCRIPT" anthropic
 
 # With overrides:
-echo "$PROMPT" | bash "$SCRIPT" openai --model gpt-5.5 --max-tokens 8192 --timeout 300
+echo "$PROMPT" | bash "$SCRIPT" openai --model gpt-5.6-sol --max-tokens 8192 --timeout 300
 
 # Ensemble (parallel — issue these as three separate Bash tool calls).
 # Use a per-run temp dir so concurrent invocations never clobber each other.
