@@ -1,6 +1,6 @@
 ---
 name: preflight
-version: "5.0"
+version: "5.3"
 description: >-
   Pre-session safe-sync briefing for git repos. Brings the repo up to date
   before work begins — fast-forwards active branches to origin, flags stale
@@ -38,6 +38,7 @@ This is the load-bearing contract. Everything below obeys it.
 - `git fetch --prune --no-tags origin` to update remote-tracking refs (`--no-tags` so local tags are never moved).
 - **Fast-forward-only** sync of *active* branches to origin (never a merge commit, never a rewrite).
 - Create / update the per-user config under `~/.claude/preflight/` (outside the repo — never touches the working tree, never staged, never committed). See Step 3.
+- Write the session-start baseline `~/.claude/preflight/<repo-key>.<tree-hash>.session-start.json` (same location and the same guarantees; read by `/mise-en-place` at closedown). See Step 3.
 
 **NEVER**:
 - Non-fast-forward merge, rebase, force-push, reset, cherry-pick.
@@ -115,7 +116,7 @@ Report modified / staged / untracked / stashes, one line each. **Define cleanlin
 
 Also: flag untracked files matching "shouldn't be here" patterns (`.env`, zero-byte odd names, accidental redirects) — load `reference.md → "Files that look out of place"`. Stashes older than 8 weeks: mention as a future cleanup pass, not a blocker.
 
-### Step 3: Config (per-user, outside the repo)
+### Step 3: Per-user state — config + session baseline (outside the repo)
 
 Config lives at `~/.claude/preflight/<repo-key>.yml` — **never in the repo**. Because nothing is written into the working tree, there is no `.gitignore` rule to add, nothing to stage, and nothing to commit. The skill makes **zero** commits. This is what stops the recurring "your config is committed / should be gitignored" message: there is no in-repo file to track.
 
@@ -127,10 +128,11 @@ mkdir -p "$HOME/.claude/preflight"
 root=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "preflight: not in a git repo"; exit 1; }
 raw=$(git remote get-url origin 2>/dev/null | head -1)   # origin identity (1st line only)
 [ -z "$raw" ] && raw=$root                               # no origin → repo path
-# canon: lowercase, strip protocol / user@ / trailing .git / trailing slash; ssh and https
-# forms of one repo converge here, while org/repo vs org-repo stay distinct.
+# canon: lowercase, strip an explicit port (URL forms only — scp form has none, and
+# `host:1234/repo` there is a numeric org), protocol, user@, trailing .git and slash.
+# ssh, https and ssh://host:22/ forms of one repo converge; org/repo vs org-repo stay distinct.
 canon=$(printf '%s' "$raw" | tr 'A-Z' 'a-z' \
-  | sed -E 's#^[a-z]+://##; s#^[^@/]+@##; s#:#/#; s#\.git$##; s#/+$##')
+  | sed -E 's#^([a-z]+://([^/@]+@)?[^/:]+):[0-9]+/#\1/#; s#^[a-z]+://##; s#^[^@/]+@##; s#:#/#; s#/+$##; s#\.git$##; s#/+$##')
 stem=$(printf '%s' "$canon" | tr -c 'a-z0-9._-' '-' | sed -E 's#-+#-#g; s#^[-.]+##; s#[-.]+$##')
 hash=$(printf '%s' "$canon" | { shasum 2>/dev/null || sha1sum 2>/dev/null; } | cut -c1-12)
 case "$hash" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
@@ -139,9 +141,9 @@ key="${stem:-repo}-${hash}"          # readable stem + collision-resistant hash;
 cfg="$HOME/.claude/preflight/${key}.yml"
 ```
 
-Origin `git@github.com:My-Stacks/claude-code-skills.git` → key `github.com-my-stacks-claude-code-skills-<hash12>`. No origin → keyed on the repo's absolute path (`$root`). The readable `stem` is **lossy** (slashes, colons, and other characters all collapse to `-`, so `org/repo` and `org-repo` would otherwise share a file) — the 12-char (48-bit) hash of the *canonical* identity is the real key, so two genuinely different remotes effectively never collide. Because the hash is computed from `canon`, the ssh and https URLs of the same repo (and a trailing-slash variant) all resolve to the **same** config; worktrees and clones of one origin share it too — all intended. (The key never contains `/` — `tr` maps every separator to `-` — so it always names a single file directly under `~/.claude/preflight/`, never a path that could escape it.)
+Origin `git@github.com:My-Stacks/claude-code-skills.git` → key `github.com-my-stacks-claude-code-skills-<hash12>`. No origin → keyed on the repo's absolute path (`$root`). The readable `stem` is **lossy** (slashes, colons, and other characters all collapse to `-`, so `org/repo` and `org-repo` would otherwise share a file) — the 12-char (48-bit) hash of the *canonical* identity is the real key, so two genuinely different remotes effectively never collide. Because the hash is computed from `canon`, the ssh and https URLs of the same repo (a trailing-slash or explicit-port variant included) all resolve to the **same** config; worktrees and clones of one origin share it too — all intended. (The key never contains `/` — `tr` maps every separator to `-` — so it always names a single file directly under `~/.claude/preflight/`, never a path that could escape it.)
 
-**2. If `$cfg` exists → read it and you're done.** Steady-state runs do exactly this: read the per-user config and move on. **Never inspect the in-repo `.claude/preflight.yml`** once `$cfg` exists — that's what guarantees the legacy nag fires at most once, ever. **Migration is one-way:** once `$cfg` exists it is the *only* source of truth, so edits made to a leftover in-repo file afterward are silently ignored. To change settings, edit `$cfg` directly (tell Kyle its path).
+**2. If `$cfg` exists → read it, skip sub-step 3, and continue to sub-step 4.** Steady-state runs do exactly this: read the per-user config, leave the session-start baseline, and move on. **Do not stop here** — sub-step 4 runs on every preflight, and skipping it is what silently disables tonight's closedown. **Never inspect the in-repo `.claude/preflight.yml`** once `$cfg` exists — that's what guarantees the legacy nag fires at most once, ever. **Migration is one-way:** once `$cfg` exists it is the *only* source of truth, so edits made to a leftover in-repo file afterward are silently ignored. To change settings, edit `$cfg` directly (tell Kyle its path).
 
 **3. If `$cfg` does NOT exist, migrate or create:**
 
@@ -165,6 +167,82 @@ Origin `git@github.com:My-Stacks/claude-code-skills.git` → key `github.com-my-
    - **No legacy file** (genuine first run): ask the config questions (explain each; for `branch_naming` save Kyle's plain-language answer verbatim), then write `$cfg`. No repo writes, nothing to commit.
 
 Load `reference.md → "Per-user config & migration"` for the reasoning and edge cases.
+
+**4. Leave the session-start baseline** *(still Step 3 — not "Step 4: Sync" below; runs on every preflight, first-run and steady-state alike, including when there is no `origin`)* (per-user, outside the repo — `$key` plus a hash of this worktree):
+
+Write `$HOME/.claude/preflight/${key}.${tree}.session-start.json` — the snapshot `/mise-en-place` diffs against at closedown to tell work *this session created* from work that was already there. Without it, closedown cannot attribute safely and suppresses its commits, so this write is what makes the day's bookends work. The file is **per-tree**: `$key` identifies the origin, `$tree` (a 12-char sha1 of `$root`) identifies the worktree or clone, so two trees of one origin open on the same day each keep their own baseline instead of one overwriting the other's.
+
+**Do not clobber a fresh one.** If a baseline exists and is less than 16 hours old, leave it alone and say so. Running preflight again at 2pm must not overwrite the 9am snapshot — that would re-label the morning's work as "already there", and closedown would then refuse to commit the very work the session produced. The oldest baseline of the session is the correct one. **Unless a closedown has run since:** a `/mise-en-place` ledger for this tree that is newer than the baseline means the morning session ended, so the 2pm run is a *new* session and gets a fresh snapshot — otherwise anything dirtied between closedown and now would read as this session's.
+
+```bash
+tree=$(printf '%s' "$root" | { shasum 2>/dev/null || sha1sum 2>/dev/null; } | cut -c1-12)
+base="$HOME/.claude/preflight/${key}.${tree}.session-start.json"
+now=$(date +%s)
+# the filename already names this tree; the root check is belt-and-braces against a
+# hand-copied or hash-colliding file, never the thing that decides between siblings.
+prev=$(python3 -c 'import json,sys
+with open(sys.argv[1]) as f: d=json.load(f)
+print(d.get("started_at",0) if d.get("root")==sys.argv[2] else 0)' "$base" "$root" 2>/dev/null || echo 0)
+# a closedown ledger for THIS tree newer than the baseline ends the earlier session
+ledger="$HOME/.claude/mise-en-place/${key}-last-run.md"
+closed=0
+if [ -f "$ledger" ] && [ "$ledger" -nt "$base" ] && grep -qxF -- "root: $root" "$ledger"; then closed=1; fi
+if [ "${prev:-0}" -gt 0 ] && [ $(( now - ${prev:-0} )) -lt 57600 ] && [ "$closed" -eq 0 ]; then
+  echo "baseline from $(( (now - prev) / 3600 ))h ago kept — session start is already recorded"
+else
+  [ "$closed" -eq 1 ] && echo "closedown ran since the last baseline — recording a fresh session start"
+  # .porcelain.tmp holds every dirty path — never leave it lying around. An array,
+  # quoted on use: $HOME may contain spaces; and named explicitly rather than globbed,
+  # since under zsh an unmatched glob is an error, not an empty list.
+  tmps=("$base.porcelain.tmp" "$base.wt.tmp" "$base.lsof.tmp" "$base.new")
+  trap 'rm -f "${tmps[@]}"' EXIT
+  # -uall: without it a new file inside a new directory collapses to "?? newdir/",
+  # so the baseline cannot tell an empty new directory from one already holding
+  # someone else's files, and closedown attributes everything beneath it to this
+  # session. --no-optional-locks: this runs unattended and must never take
+  # .git/index.lock out from under an in-flight rebase or commit.
+  git --no-optional-locks status --porcelain -z -uall 2>/dev/null > "$base.porcelain.tmp"
+  git worktree list --porcelain        2>/dev/null > "$base.wt.tmp"
+  lsof -nP -iTCP -sTCP:LISTEN          2>/dev/null > "$base.lsof.tmp"
+  python3 - "$base" "$now" \
+    "$(git rev-parse --verify HEAD 2>/dev/null || echo '')" \
+    "$(git stash list 2>/dev/null | wc -l | tr -d ' ')" \
+    "$root" <<'PY'
+import json, sys, re
+base, now, head, stashes, root = sys.argv[1], int(sys.argv[2]), sys.argv[3], int(sys.argv[4]), sys.argv[5]
+def rd(p):
+    try:
+        with open(p, encoding='utf-8', errors='replace') as f: return f.read()
+    except OSError: return ''
+# NUL-split, never newline-split: a filename may legally contain a newline.
+porcelain = [e for e in rd(base + '.porcelain.tmp').split('\0') if e]
+worktrees = [l.split(' ', 1)[1] for l in rd(base + '.wt.tmp').splitlines() if l.startswith('worktree ')]
+# real listening PORTS, not the PIDs that `lsof -t` would give
+ports = sorted({int(m.group(1)) for m in re.finditer(r':(\d+)\s*\(LISTEN\)', rd(base + '.lsof.tmp'))})
+# atomic: a truncated baseline is indistinguishable from a stale one, and would
+# silently force closedown into report-only for the rest of the repo's life.
+with open(base + '.new', 'w') as f:
+    json.dump({'schema': 1, 'writer': 'preflight 5.3', 'root': root,
+               'started_at': now, 'head_sha': head, 'porcelain': porcelain,
+               'stashes': stashes, 'worktrees': worktrees, 'listening_ports': ports},
+              f, indent=2)
+PY
+  rc=$?   # a python failure mid-dump leaves a non-empty, truncated .new — never promote it
+  if [ "$rc" -eq 0 ] && [ -s "$base.new" ] && mv -f "$base.new" "$base"; then :
+  else echo "preflight: baseline write FAILED — tonight's closedown will be report-only"; fi
+  rm -f "${tmps[@]}"
+fi
+```
+
+`root` is what makes the file identifiable. The filename's `$tree` hash keeps sibling worktrees and clones of one origin in separate files, but a reader must still compare `root` against its own toplevel and treat a mismatch as no baseline at all — `worktrees` cannot serve as that test, since it lists every sibling. `schema` lets a reader refuse a payload it does not understand rather than misread a renamed field.
+
+`head_sha` is recorded here, *before* Step 4's fast-forward, so on a behind branch it is the pre-sync tip. That is the correct anchor for "what this session started from" and is what closedown reports as `oldSHA`.
+
+Python builds the JSON rather than a `sed`/`paste` pipeline, for three reasons that all bit earlier drafts: a filename may legally contain a newline (so the porcelain list must be split on NUL, never on newline); quotes and backslashes in paths need real JSON escaping; and `lsof -t` returns **PIDs**, not ports, so the port list has to be parsed from the `(LISTEN)` column or the field lies about what it holds.
+
+Narrate it in one line ("noting the tree's starting state so tonight's closedown can tell your work from what was already here"), the same as any other write. It contains no repo content — only paths, counts and PIDs — and lives outside every repo, so it is never staged and never committed.
+
+`/mise-en-place` treats the baseline as **absent** if it is older than 16 hours, and degrades to report-only attribution rather than guessing. That is the intended failure mode: a stale baseline must never license a commit.
 
 ### Step 4: Sync — classify, fast-forward active, flag the rest
 
