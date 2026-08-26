@@ -106,12 +106,12 @@ rm -rf ~/.claude/skills/handoff/
 
 ### AI Router v1.10
 
-**Model refresh.** Defaults move to the current tier: `claude-opus-5`, `gpt-5.6-sol`, `gemini-3.6-flash` (each verified live before landing). Three things came with it:
+**Model refresh.** Defaults move to the current tier: `claude-opus-5`, `gpt-5.6-sol`, `gemini-3.7-flash` (each verified live before landing). Three things came with it:
 - **`openai_reasoning_effort`** config key (`low|medium|high`, default `medium`) — sent as `reasoning_effort` on every OpenAI call; GPT-5.x are reasoning models and this is the cost/depth dial. Omitted when unset so older models keep working.
 - **Gemini cost accounting** now folds `thoughtsTokenCount` into output tokens — thinking is billed as output, and the old parser dropped it (a "reply OK" call was 1 candidate token + 122 thinking tokens).
-- **`validate-key.sh` no longer rejects valid keys** on thinking models: a 16-token probe came back as a 2xx with empty text on Opus 5 and Gemini 3.6 Flash, which read as failure. The probe is now 256 tokens and a 2xx-but-empty (`call-provider` exit 6) counts as valid — only the HTTP status matters for a key check.
+- **`validate-key.sh` no longer rejects valid keys** on thinking models: a 16-token probe came back as a 2xx with empty text on Opus 5 and Gemini 3.7 Flash, which read as failure. The probe is now 256 tokens and a 2xx-but-empty (`call-provider` exit 6) counts as valid — only the HTTP status matters for a key check.
 
-Pricing table refreshed (GPT-5.6 Sol promo through 2026-11-21, Gemini 3.6 Flash intro through 2026-12-31). Existing installs: update the three `default_*_model` values in `~/.orchestrator-config.json` (or re-run `/ai-router setup`).
+Pricing table refreshed (GPT-5.6 Sol promo through 2026-11-21, Gemini 3.7 Flash intro through 2026-12-31). Existing installs: update the three `default_*_model` values in `~/.orchestrator-config.json` (or re-run `/ai-router setup`).
 
 To upgrade:
 

@@ -14,7 +14,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROVIDER=$1
 
 # Use call-provider.sh with a small "hi" prompt and a short timeout. Thinking
-# models (Opus 5, Gemini 3.6 Flash) spend the budget on reasoning and may return
+# models (Opus 5, Gemini 3.7 Flash) spend the budget on reasoning and may return
 # a 2xx with empty text — call-provider exits 6 for that, which still proves the
 # key: only the HTTP status matters here. Capture rc immediately so it can't be
 # overwritten by subsequent commands.

@@ -50,7 +50,7 @@ class TestBuildBody(unittest.TestCase):
         self.assertIn("reasoning_effort", err)
 
     def test_gemini_shape(self):
-        rc, b, _ = body("gemini", "gemini-3.6-flash", "50")
+        rc, b, _ = body("gemini", "gemini-3.7-flash", "50")
         self.assertEqual(rc, 0)
         self.assertEqual(b["generationConfig"]["maxOutputTokens"], 50)
         self.assertEqual(b["contents"][0]["parts"][0]["text"], "hi")

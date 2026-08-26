@@ -26,7 +26,7 @@ File: `~/.orchestrator-config.json`
   "gemini_api_key": "AIza...",
   "default_anthropic_model": "claude-opus-5",
   "default_openai_model": "gpt-5.6-sol",
-  "default_gemini_model": "gemini-3.6-flash",
+  "default_gemini_model": "gemini-3.7-flash",
   "openai_reasoning_effort": "medium",
   "review_persona": "developer"
 }
@@ -77,7 +77,7 @@ If missing, run setup:
        "gemini_api_key":    os.environ.get("GEMINI_KEY", "")    or None,
        "default_anthropic_model": "claude-opus-5",
        "default_openai_model":    "gpt-5.6-sol",
-       "default_gemini_model":    "gemini-3.6-flash",
+       "default_gemini_model":    "gemini-3.7-flash",
        "openai_reasoning_effort": "medium",
    }
    # Drop providers the user skipped so config_exists / *_key() return ""

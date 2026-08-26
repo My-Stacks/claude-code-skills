@@ -18,7 +18,7 @@ This file is not needed for `route`, `config`, or `setup` commands. Load on dema
 |----------|--------------|-----------|---------|
 | Anthropic | claude-opus-5 | Deep reasoning, code, instruction following; adaptive thinking on by default | 1M |
 | OpenAI | gpt-5.6-sol (`reasoning_effort` medium) | Broad knowledge, agentic/multi-step coding, reasoning | 1.1M |
-| Gemini | gemini-3.6-flash | Speed, long context, multimodal, cost efficiency; thinking on | 1M |
+| Gemini | gemini-3.7-flash | Speed, long context, multimodal, cost efficiency; thinking on | 1M |
 
 ### Model Override
 
@@ -332,10 +332,10 @@ Line numbers come from the `__new hunk__` side of `format-diff.py` (real new-fil
 | Anthropic | claude-sonnet-4-6 | $3.00 | $15.00 |
 | Anthropic | claude-haiku-4-5 | $1.00 | $5.00 |
 | OpenAI | gpt-5.6-sol | $4.00* | $20.00* |
-| Gemini | gemini-3.6-flash | $0.75† | $3.75† |
+| Gemini | gemini-3.7-flash | $0.75† | $3.75† |
 
 *gpt-5.6-sol promotional pricing, published through 2026-11-21.
-†gemini-3.6-flash introductory pricing through 2026-12-31; standard rate from 2027-01-01 is $1.50 / $7.50.
+†gemini-3.7-flash introductory pricing through 2026-12-31; standard rate from 2027-01-01 is $1.50 / $7.50.
 
 Thinking/reasoning tokens are billed as output on all three providers and are included in the usage line (`output_tokens` for Anthropic, `completion_tokens` for OpenAI, `candidatesTokenCount + thoughtsTokenCount` for Gemini).
 
