@@ -14,8 +14,10 @@ Scope is the repo you were invoked from. Dirty state elsewhere is reported, neve
 # resolve the default branch — never assume main.
 # origin/HEAD is often unset (shallow/older clones), so fall back to the remote's
 # own answer before guessing; if neither resolves, report it and skip the check.
+# $repo is Phase 0's pinned origin (gh repo view "$(git remote get-url origin)") — unpinned
+# gh on a clone with an `upstream` remote answers for the parent, not origin.
 DEFAULT=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null) \
-  || DEFAULT="origin/$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null)" \
+  || DEFAULT="origin/$(gh repo view "$repo" --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null)" \
   || DEFAULT=""
 [ "$DEFAULT" = "origin/" ] && DEFAULT=""
 
@@ -48,10 +50,10 @@ git worktree list --porcelain               # stray worktrees
 ## 2. GitHub sweep
 
 ```bash
-gh pr list --state open --author @me --json number,title,headRefName,isDraft,reviewDecision
-gh pr list --state open --json number,title,author,headRefName    # full set, for the report
-gh pr checks <n>                            # CI status
-gh pr view <n> --json mergeable,mergeStateStatus,reviewDecision
+gh pr list --repo "$repo" --state open --author @me --json number,title,headRefName,isDraft,reviewDecision
+gh pr list --repo "$repo" --state open --json number,title,author,headRefName    # full set, for the report
+gh pr checks --repo "$repo" <n>             # CI status
+gh pr view --repo "$repo" <n> --json mergeable,mergeStateStatus,reviewDecision
 ```
 
 **Unresolved review threads** need GraphQL — `reviewThreads` is **not** a valid `gh pr view --json` field and the command hard-errors:
@@ -60,8 +62,7 @@ gh pr view <n> --json mergeable,mergeStateStatus,reviewDecision
 gh api graphql -f query='
   query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){
     pullRequest(number:$n){reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}}}}}' \
-  -F o="$(gh repo view --json owner -q .owner.login)" \
-  -F r="$(gh repo view --json name -q .name)" -F n=<n> \
+  -F o="${repo%/*}" -F r="${repo#*/}" -F n=<n> \
   -q '{n:[.data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false)]|length, more:.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage}'
 # `more:true` means >100 threads — report a coverage finding, never the truncated count.
 ```

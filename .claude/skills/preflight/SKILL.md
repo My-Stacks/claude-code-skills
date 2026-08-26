@@ -172,7 +172,7 @@ Load `reference.md → "Per-user config & migration"` for the reasoning and edge
 
 Write `$HOME/.claude/preflight/${key}.${tree}.session-start.json` — the snapshot `/mise-en-place` diffs against at closedown to tell work *this session created* from work that was already there. Without it, closedown cannot attribute safely and suppresses its commits, so this write is what makes the day's bookends work. The file is **per-tree**: `$key` identifies the origin, `$tree` (a 12-char sha1 of `$root`) identifies the worktree or clone, so two trees of one origin open on the same day each keep their own baseline instead of one overwriting the other's.
 
-**Do not clobber a fresh one.** If a baseline exists and is less than 16 hours old, leave it alone and say so. Running preflight again at 2pm must not overwrite the 9am snapshot — that would re-label the morning's work as "already there", and closedown would then refuse to commit the very work the session produced. The oldest baseline of the session is the correct one.
+**Do not clobber a fresh one.** If a baseline exists and is less than 16 hours old, leave it alone and say so. Running preflight again at 2pm must not overwrite the 9am snapshot — that would re-label the morning's work as "already there", and closedown would then refuse to commit the very work the session produced. The oldest baseline of the session is the correct one. **Unless a closedown has run since:** a `/mise-en-place` ledger for this tree that is newer than the baseline means the morning session ended, so the 2pm run is a *new* session and gets a fresh snapshot — otherwise anything dirtied between closedown and now would read as this session's.
 
 ```bash
 tree=$(printf '%s' "$root" | { shasum 2>/dev/null || sha1sum 2>/dev/null; } | cut -c1-12)
@@ -181,15 +181,21 @@ now=$(date +%s)
 # the filename already names this tree; the root check is belt-and-braces against a
 # hand-copied or hash-colliding file, never the thing that decides between siblings.
 prev=$(python3 -c 'import json,sys
-d=json.load(open(sys.argv[1]))
+with open(sys.argv[1]) as f: d=json.load(f)
 print(d.get("started_at",0) if d.get("root")==sys.argv[2] else 0)' "$base" "$root" 2>/dev/null || echo 0)
-if [ "${prev:-0}" -gt 0 ] && [ $(( now - ${prev:-0} )) -lt 57600 ]; then
+# a closedown ledger for THIS tree newer than the baseline ends the earlier session
+ledger="$HOME/.claude/mise-en-place/${key}-last-run.md"
+closed=0
+if [ -f "$ledger" ] && [ "$ledger" -nt "$base" ] && grep -qxF -- "root: $root" "$ledger"; then closed=1; fi
+if [ "${prev:-0}" -gt 0 ] && [ $(( now - ${prev:-0} )) -lt 57600 ] && [ "$closed" -eq 0 ]; then
   echo "baseline from $(( (now - prev) / 3600 ))h ago kept — session start is already recorded"
 else
-  # .porcelain.tmp holds every dirty path — never leave it lying around. Named
-  # explicitly, not globbed: under zsh an unmatched glob is an error, not an empty list.
-  tmps="$base.porcelain.tmp $base.wt.tmp $base.lsof.tmp $base.new"
-  trap 'rm -f $tmps' EXIT
+  [ "$closed" -eq 1 ] && echo "closedown ran since the last baseline — recording a fresh session start"
+  # .porcelain.tmp holds every dirty path — never leave it lying around. An array,
+  # quoted on use: $HOME may contain spaces; and named explicitly rather than globbed,
+  # since under zsh an unmatched glob is an error, not an empty list.
+  tmps=("$base.porcelain.tmp" "$base.wt.tmp" "$base.lsof.tmp" "$base.new")
+  trap 'rm -f "${tmps[@]}"' EXIT
   # -uall: without it a new file inside a new directory collapses to "?? newdir/",
   # so the baseline cannot tell an empty new directory from one already holding
   # someone else's files, and closedown attributes everything beneath it to this
@@ -205,7 +211,8 @@ else
 import json, sys, re
 base, now, head, stashes, root = sys.argv[1], int(sys.argv[2]), sys.argv[3], int(sys.argv[4]), sys.argv[5]
 def rd(p):
-    try: return open(p, encoding='utf-8', errors='replace').read()
+    try:
+        with open(p, encoding='utf-8', errors='replace') as f: return f.read()
     except OSError: return ''
 # NUL-split, never newline-split: a filename may legally contain a newline.
 porcelain = [e for e in rd(base + '.porcelain.tmp').split('\0') if e]
@@ -214,14 +221,16 @@ worktrees = [l.split(' ', 1)[1] for l in rd(base + '.wt.tmp').splitlines() if l.
 ports = sorted({int(m.group(1)) for m in re.finditer(r':(\d+)\s*\(LISTEN\)', rd(base + '.lsof.tmp'))})
 # atomic: a truncated baseline is indistinguishable from a stale one, and would
 # silently force closedown into report-only for the rest of the repo's life.
-json.dump({'schema': 1, 'writer': 'preflight 5.3', 'root': root,
-           'started_at': now, 'head_sha': head, 'porcelain': porcelain,
-           'stashes': stashes, 'worktrees': worktrees, 'listening_ports': ports},
-          open(base + '.new', 'w'), indent=2)
+with open(base + '.new', 'w') as f:
+    json.dump({'schema': 1, 'writer': 'preflight 5.3', 'root': root,
+               'started_at': now, 'head_sha': head, 'porcelain': porcelain,
+               'stashes': stashes, 'worktrees': worktrees, 'listening_ports': ports},
+              f, indent=2)
 PY
-  if [ -s "$base.new" ] && mv -f "$base.new" "$base" && [ -s "$base" ]; then :
+  rc=$?   # a python failure mid-dump leaves a non-empty, truncated .new — never promote it
+  if [ "$rc" -eq 0 ] && [ -s "$base.new" ] && mv -f "$base.new" "$base"; then :
   else echo "preflight: baseline write FAILED — tonight's closedown will be report-only"; fi
-  rm -f $tmps
+  rm -f "${tmps[@]}"
 fi
 ```
 
