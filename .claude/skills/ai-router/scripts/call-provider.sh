@@ -180,7 +180,7 @@ elif provider == "gemini":
     u = r.get("usageMetadata") or {}
     # thoughtsTokenCount is billed as output (Gemini 2.5+ thinking models) but
     # reported separately from candidatesTokenCount — fold it in or cost under-reports.
-    usage = {"input": u.get("promptTokenCount", 0),
+    usage = {"input": u.get("promptTokenCount") or 0,
              "output": (u.get("candidatesTokenCount") or 0) + (u.get("thoughtsTokenCount") or 0)}
 else:
     print(f"unknown provider in parser: {provider}", file=sys.stderr)

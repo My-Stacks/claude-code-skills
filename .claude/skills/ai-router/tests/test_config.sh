@@ -3,7 +3,8 @@
 # The escape hatch matters: `off`/`none` must print NOTHING so build-body.py
 # omits `reasoning_effort`, which non-reasoning models (gpt-4o, gpt-4.1) reject
 # with a 400. Also asserts the function never returns non-zero — call-provider.sh
-# runs under `set -euo pipefail` and calls it in an `&&` list.
+# runs under `set -euo pipefail` and calls it in an `&&` list — so the probe shells
+# below enable `set -euo pipefail` too, to actually reproduce that context.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,7 +20,7 @@ CFG="$WORK/config.json"
 # effort <json-value> -> prints resolved effort; sets EFF_RC / EFF_ERR
 effort() {
   printf '{"openai_reasoning_effort": %s}\n' "$1" > "$CFG"
-  EFF_OUT=$(AI_ROUTER_CONFIG="$CFG" bash -c ". $LIB/config.sh; openai_reasoning_effort" 2>"$WORK/err")
+  EFF_OUT=$(AI_ROUTER_CONFIG="$CFG" bash -c 'set -euo pipefail; . "$1"/config.sh; openai_reasoning_effort' _ "$LIB" 2>"$WORK/err")
   EFF_RC=$?
   EFF_ERR=$(cat "$WORK/err")
 }
@@ -53,16 +54,16 @@ expect '"MEDIUM"'    medium 1 "wrong case warns (not silently accepted)"
 
 # Missing key entirely (no field at all) -> medium.
 echo '{}' > "$CFG"
-out=$(AI_ROUTER_CONFIG="$CFG" bash -c ". $LIB/config.sh; openai_reasoning_effort" 2>/dev/null)
+out=$(AI_ROUTER_CONFIG="$CFG" bash -c 'set -euo pipefail; . "$1"/config.sh; openai_reasoning_effort' _ "$LIB" 2>/dev/null)
 if [[ "$out" == "medium" ]]; then ok; else bad "absent key -> medium (got '$out')"; fi
 
 # Unreadable config -> medium, no crash.
-out=$(AI_ROUTER_CONFIG="$WORK/nope.json" bash -c ". $LIB/config.sh; openai_reasoning_effort" 2>/dev/null)
+out=$(AI_ROUTER_CONFIG="$WORK/nope.json" bash -c 'set -euo pipefail; . "$1"/config.sh; openai_reasoning_effort' _ "$LIB" 2>/dev/null)
 if [[ "$out" == "medium" ]]; then ok; else bad "missing config -> medium (got '$out')"; fi
 
 # End-to-end: `off` must produce a body with NO reasoning_effort key.
 printf '{"openai_reasoning_effort": "off"}\n' > "$CFG"
-E=$(AI_ROUTER_CONFIG="$CFG" bash -c ". $LIB/config.sh; openai_reasoning_effort")
+E=$(AI_ROUTER_CONFIG="$CFG" bash -c 'set -euo pipefail; . "$1"/config.sh; openai_reasoning_effort' _ "$LIB")
 BODY=$(echo "prompt" | python3 "$LIB/build-body.py" openai gpt-4o 100 "$E")
 if echo "$BODY" | grep -q reasoning_effort; then
   bad "off: body still carries reasoning_effort: $BODY"
@@ -70,7 +71,7 @@ else ok; fi
 
 # End-to-end: `medium` must produce a body WITH reasoning_effort.
 printf '{"openai_reasoning_effort": "medium"}\n' > "$CFG"
-E=$(AI_ROUTER_CONFIG="$CFG" bash -c ". $LIB/config.sh; openai_reasoning_effort")
+E=$(AI_ROUTER_CONFIG="$CFG" bash -c 'set -euo pipefail; . "$1"/config.sh; openai_reasoning_effort' _ "$LIB")
 BODY=$(echo "prompt" | python3 "$LIB/build-body.py" openai gpt-5.6-sol 100 "$E")
 if echo "$BODY" | grep -q '"reasoning_effort":"medium"'; then ok
 else bad "medium: body missing reasoning_effort: $BODY"; fi
