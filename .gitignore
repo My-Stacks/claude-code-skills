@@ -3,3 +3,5 @@ dev/
 .latest-status.md
 .linear/
 .claude/preflight.yml
+__pycache__/
+*.py[cod]

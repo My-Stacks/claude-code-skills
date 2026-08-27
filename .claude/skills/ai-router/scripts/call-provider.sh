@@ -28,10 +28,18 @@ MAX_TOKENS=""
 TIMEOUT=""
 
 # Defaults — overridden by config + flags.
-DEFAULT_MAX_TOKENS_ANTHROPIC=16384
+# Anthropic gets OpenAI-sized headroom because `--model claude-opus-5` (the
+# documented escalation path) thinks adaptively, and thinking tokens compete with
+# the answer for the same max_tokens ceiling: at 16384 a long review hit the cap,
+# returned empty text, and exited 6 — which the ensemble reports as "provider
+# unavailable" rather than a truncation. 120s was likewise a real timeout on a
+# thinking model, non-streaming. Gemini stays at 120s/16384: its thinking is far
+# lighter (3.3K output tokens on a 34K-char review diff) and it has not been
+# observed to hit either bound.
+DEFAULT_MAX_TOKENS_ANTHROPIC=32768
 DEFAULT_MAX_TOKENS_OPENAI=32768
 DEFAULT_MAX_TOKENS_GEMINI=16384
-DEFAULT_TIMEOUT_ANTHROPIC=120
+DEFAULT_TIMEOUT_ANTHROPIC=300
 DEFAULT_TIMEOUT_OPENAI=300
 DEFAULT_TIMEOUT_GEMINI=120
 
@@ -105,7 +113,9 @@ RESP_FILE=$(mktemp "$TMPDIR_BASE/ai-router-resp.XXXXXX")
 trap 'rm -f "$BODY_FILE" "$RESP_FILE"' EXIT
 
 # Build request body from stdin via python json.dumps (safe escaping).
-python3 "$SCRIPT_DIR/lib/build-body.py" "$PROVIDER" "$MODEL" "$MAX_TOKENS" > "$BODY_FILE"
+# OpenAI gets reasoning_effort from config (default medium); others ignore the arg.
+EFFORT=""; [[ "$PROVIDER" == openai ]] && EFFORT=$(openai_reasoning_effort)
+python3 "$SCRIPT_DIR/lib/build-body.py" "$PROVIDER" "$MODEL" "$MAX_TOKENS" "$EFFORT" > "$BODY_FILE"
 
 rc=0
 case "$PROVIDER" in
@@ -176,7 +186,10 @@ elif provider == "gemini":
         parts = ((cands[0] or {}).get("content") or {}).get("parts") or []
         text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
     u = r.get("usageMetadata") or {}
-    usage = {"input": u.get("promptTokenCount", 0), "output": u.get("candidatesTokenCount", 0)}
+    # thoughtsTokenCount is billed as output (Gemini 2.5+ thinking models) but
+    # reported separately from candidatesTokenCount — fold it in or cost under-reports.
+    usage = {"input": u.get("promptTokenCount") or 0,
+             "output": (u.get("candidatesTokenCount") or 0) + (u.get("thoughtsTokenCount") or 0)}
 else:
     print(f"unknown provider in parser: {provider}", file=sys.stderr)
     sys.exit(64)

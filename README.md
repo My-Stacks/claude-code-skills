@@ -8,7 +8,7 @@ Reusable components for [Claude Code](https://docs.anthropic.com/en/docs/claude-
 |-----------|------|---------|-------------|
 | [linear](./.claude/skills/linear/) | Skill | 0.7.0 | Linear project management with session continuity. Buffered writes, board management, ticket creation, structured handoffs persisted to Linear. Handoffs/updates route to the project the work touched, not blindly the bound one. Syncs project description, dependencies, and metadata from repo state via `/linear sync-project`. Auto-maintains `.latest-status.md`. |
 | [vault-backup](./.claude/skills/vault-backup/) | Skill | 1.0 | Save research, project outputs, and knowledge artifacts from any Claude Code workspace into a shared Obsidian knowledge vault. |
-| [ai-router](./.claude/skills/ai-router/) | Skill | 1.9 | Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Grounded PR review: line-numbered diff + anti-hallucination rules, findings **verified against the diff** (hallucinated ones dropped), posted as **inline comments** with committable suggestions by default, **resolves exactly the threads it verified-fixed** (by per-finding key), and a **persona-gated auto-fixer** — interactive (`--fix=propose\|auto`) and **always-on** via the shadow flow (`shadow-review --fix`), which fixes in an isolated `git worktree` so it never touches your checkout. Headless-safe with `--post-to-pr` and `/ai-router shadow-review`. Requires `curl`, `jq`, `python3`, and (for PR posting) `gh`. |
+| [ai-router](./.claude/skills/ai-router/) | Skill | 1.10 | Route tasks to optimal model tiers and ensemble responses across Claude, GPT, and Gemini APIs. Grounded PR review: line-numbered diff + anti-hallucination rules, findings **verified against the diff** (hallucinated ones dropped), posted as **inline comments** with committable suggestions by default, **resolves exactly the threads it verified-fixed** (by per-finding key), and a **persona-gated auto-fixer** — interactive (`--fix=propose\|auto`) and **always-on** via the shadow flow (`shadow-review --fix`), which fixes in an isolated `git worktree` so it never touches your checkout. Headless-safe with `--post-to-pr` and `/ai-router shadow-review`. Requires `curl`, `jq`, `python3`, and (for PR posting) `gh`. |
 | [create-client-pdf](./.claude/skills/create-client-pdf/) | Skill | 1.2.1 | Convert a Markdown file with YAML frontmatter into a client-presentable PDF, branded for Stacklab or Stacklist. Requires Python + Playwright (see `INSTALL.md`). |
 | [preflight](./.claude/skills/preflight/) | Skill | 5.0 | Pre-session safe-sync briefing for git repos: fast-forwards active branches to origin, flags stale ones, then reports local state, open PRs, and where new work should branch from. Only safe, non-destructive writes (ff-only sync); config is stored per-user outside the repo and the skill makes zero commits. Requires `git`; PR features require authenticated `gh`. |
 | [prod-readiness-audit](./.claude/skills/prod-readiness-audit/) | Skill | 1.1 | Read-only audit of any codebase across four buckets — infra/security/compliance, engineering, design/UX, and product analytics — returning a red/yellow/green scorecard and the single highest-priority fix. Accepts an optional path argument to scope to a subdirectory. |
@@ -102,6 +102,22 @@ The `handoff` skill has been retired. Session continuity is now part of the `lin
 
 ```bash
 rm -rf ~/.claude/skills/handoff/
+```
+
+### AI Router v1.10
+
+**Model refresh.** Defaults move to the current tier: `claude-sonnet-4-6`, `gpt-5.6-sol`, `gemini-3.7-flash` (each verified live before landing). The Anthropic leg stays on Sonnet 4.6 deliberately: `claude-opus-5` is 1.67x the sticker *and* thinks adaptively by default, so thinking tokens bill as output at $25/M on top of the tier bump. Escalate per call with `--model claude-opus-5`. Three things came with it:
+- **`openai_reasoning_effort`** config key (`low|medium|high`, default `medium`) — sent as `reasoning_effort` on every OpenAI call; GPT-5.x are reasoning models and this is the cost/depth dial. Set it to `off`/`none` to omit the field entirely — required for non-reasoning models like `gpt-4o`/`gpt-4.1`, which reject it with a 400. An unrecognised value warns on stderr and falls back to `medium`.
+- **Gemini cost accounting** now folds `thoughtsTokenCount` into output tokens — thinking is billed as output, and the old parser dropped it (a "reply OK" call was 1 candidate token + 122 thinking tokens).
+- **Anthropic request caps raised to match OpenAI** (`max_tokens` 16384 → 32768, timeout 120s → 300s). `--model claude-opus-5` is the documented escalation path and thinks adaptively; thinking tokens compete with the answer for the same ceiling, so a long review could hit the cap, return empty text and exit 6 — surfacing as "provider unavailable" rather than truncation. Gemini stays at 120s/16384 (lighter thinking, not observed to hit either bound).
+- **`validate-key.sh` no longer rejects valid keys** on thinking models: a 16-token probe came back as a 2xx with empty text on Opus 5 and Gemini 3.7 Flash, which read as failure. The probe is now 256 tokens and a 2xx-but-empty (`call-provider` exit 6) counts as valid — only the HTTP status matters for a key check.
+
+Pricing table refreshed (GPT-5.6 Sol promo through 2026-11-21, Gemini 3.7 Flash intro through 2026-12-31). Suite is now 120 cases (66 python + 25 `fix-findings` + 13 `resolve-threads` + 16 `config`), up from 97 in v1.9. Existing installs: update the three `default_*_model` values in `~/.orchestrator-config.json` (or re-run `/ai-router setup`).
+
+To upgrade:
+
+```bash
+cp -r .claude/skills/ai-router/ ~/.claude/skills/ai-router/
 ```
 
 ### AI Router v1.9
