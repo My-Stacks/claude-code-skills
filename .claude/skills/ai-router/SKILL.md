@@ -24,7 +24,7 @@ File: `~/.orchestrator-config.json`
   "anthropic_api_key": "sk-ant-...",
   "openai_api_key": "sk-...",
   "gemini_api_key": "AIza...",
-  "default_anthropic_model": "claude-opus-5",
+  "default_anthropic_model": "claude-sonnet-4-6",
   "default_openai_model": "gpt-5.6-sol",
   "default_gemini_model": "gemini-3.7-flash",
   "openai_reasoning_effort": "medium",
@@ -33,10 +33,13 @@ File: `~/.orchestrator-config.json`
 ```
 
 All keys optional. At least one API key required for API commands. `openai_reasoning_effort`
-(`low` | `medium` | `high`; default `medium`) is sent as `reasoning_effort` on every OpenAI
-call — GPT-5.x are reasoning models and this is the cost/depth dial. Anthropic and Gemini
-run their default adaptive thinking; thinking tokens are billed as output and counted in
-the usage line. `review_persona`
+(`low` | `medium` | `high`; default `medium`; `off`/`none` omits the field entirely, which
+non-reasoning models like `gpt-4o` require) is sent as `reasoning_effort` on every OpenAI
+call — GPT-5.x are reasoning models and this is the cost/depth dial. Gemini runs its
+default thinking. The Anthropic default (`claude-sonnet-4-6`) does **not** think: the
+router sends no `thinking` param, and 4.6 treats an omitted param as off. Escalate per
+call with `--model claude-opus-5`, which thinks adaptively by default. Thinking tokens
+bill as output and are counted in the usage line. `review_persona`
 sets the default fix posture for `review` (Phase 3): `developer` (default) →
 `suggest` (committable inline suggestions, no auto-edits); `guided` → `auto`
 (guarded auto-fixer). Override per run with `--fix=<level>`. The `auto` posture
@@ -75,7 +78,7 @@ If missing, run setup:
        "anthropic_api_key": os.environ.get("ANTHROPIC_KEY", "") or None,
        "openai_api_key":    os.environ.get("OPENAI_KEY", "")    or None,
        "gemini_api_key":    os.environ.get("GEMINI_KEY", "")    or None,
-       "default_anthropic_model": "claude-opus-5",
+       "default_anthropic_model": "claude-sonnet-4-6",
        "default_openai_model":    "gpt-5.6-sol",
        "default_gemini_model":    "gemini-3.7-flash",
        "openai_reasoning_effort": "medium",
@@ -128,7 +131,7 @@ Recommend Claude Code model tier and whether to also call externals:
 
 | Signal words | CC Model | External | Reason |
 |-------------|----------|----------|--------|
-| plan, architect, design, strategy, system design | Opus | Anthropic (Opus) | Deep reasoning, long coherence |
+| plan, architect, design, strategy, system design | Opus | Anthropic (`--model claude-opus-5`) | Deep reasoning, long coherence |
 | code, implement, refactor, debug, fix, build | Sonnet | — | Best cost/quality for coding |
 | format, rename, lookup, quick question, typo, lint | Haiku | — | Fast and cheap |
 | review, audit, security, vulnerability | Sonnet | Ensemble (all) | Multiple perspectives catch more |
@@ -525,7 +528,7 @@ Show config with redacted keys (first 6 + last 4 chars; first 3 + `...` if short
 
 | Provider | Key | Model | Status |
 |----------|-----|-------|--------|
-| Anthropic | sk-ant-...qAAA | claude-opus-5      | Active |
+| Anthropic | sk-ant-...qAAA | claude-sonnet-4-6  | Active |
 | OpenAI    | sk-pro...DcA   | gpt-5.6-sol (medium) | Active |
 | Gemini    | —              | —                  | Not configured |
 

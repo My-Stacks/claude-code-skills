@@ -16,14 +16,14 @@ This file is not needed for `route`, `config`, or `setup` commands. Load on dema
 
 | Provider | Default Model | Strengths | Context |
 |----------|--------------|-----------|---------|
-| Anthropic | claude-opus-5 | Deep reasoning, code, instruction following; adaptive thinking on by default | 1M |
+| Anthropic | claude-sonnet-4-6 | Code, instruction following, cost-efficient reviews; no thinking unless requested | 1M |
 | OpenAI | gpt-5.6-sol (`reasoning_effort` medium) | Broad knowledge, agentic/multi-step coding, reasoning | 1.1M |
 | Gemini | gemini-3.7-flash | Speed, long context, multimodal, cost efficiency; thinking on | 1M |
 
 ### Model Override
 
 To use a non-default model for a single call:
-> `/ai-router ask --model claude-sonnet-5 "quick question, cheaper tier"`
+> `/ai-router ask --model claude-opus-5 "hard architectural question, deeper tier"`
 
 Parse `--model <value>` from the prompt. Validate the model name contains only `[a-zA-Z0-9._-]`. Substitute into the API call, overriding the config default for that single call.
 
@@ -337,7 +337,7 @@ Line numbers come from the `__new hunk__` side of `format-diff.py` (real new-fil
 *gpt-5.6-sol promotional pricing, published through 2026-11-21.
 †gemini-3.7-flash introductory pricing through 2026-12-31; standard rate from 2027-01-01 is $1.50 / $7.50.
 
-Thinking/reasoning tokens are billed as output on all three providers and are included in the usage line (`output_tokens` for Anthropic, `completion_tokens` for OpenAI, `candidatesTokenCount + thoughtsTokenCount` for Gemini).
+The Anthropic default `claude-sonnet-4-6` sends no `thinking` param and so bills no thinking tokens; `claude-opus-5` thinks adaptively by default and does. Thinking/reasoning tokens are billed as output on all three providers and are included in the usage line (`output_tokens` for Anthropic, `completion_tokens` for OpenAI, `candidatesTokenCount + thoughtsTokenCount` for Gemini).
 
 Prices may change. These are used for cost estimates only.
 

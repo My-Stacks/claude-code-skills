@@ -6,6 +6,7 @@ Usage:
 
 reasoning_effort (optional, OpenAI only): low | medium | high. Sent as the
 `reasoning_effort` field; omitted when empty so non-reasoning models keep working.
+Set `openai_reasoning_effort` to `off`/`none` in the config to reach the empty case.
 
 Reads prompt from stdin, writes compact JSON to stdout.
 """
