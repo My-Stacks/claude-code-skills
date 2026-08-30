@@ -124,15 +124,22 @@ print(json.dumps({"model":os.environ["MODEL"],"messages":msgs,
                   "max_tokens":int(os.environ["MAXTOK"]),"stream":False}))')
   curl -s --max-time "${HF_TIMEOUT:-600}" "$ROUTER/chat/completions" \
     -H "Authorization: Bearer $t" -H 'Content-Type: application/json' \
-    -d "$body" | python3 -c '
-import sys,json
+    -d "$body" | SHOW_REASONING="${HF_SHOW_REASONING:-}" python3 -c '
+import sys,json,os
 d=json.load(sys.stdin)
 if "error" in d: print("API error:",json.dumps(d["error"])[:500]); raise SystemExit(1)
 c=d["choices"][0]["message"]
+if os.environ.get("SHOW_REASONING") and c.get("reasoning"):
+    print("[reasoning] "+c["reasoning"], file=sys.stderr)
 print(c.get("content") or "")
 u=d.get("usage") or {}
-print("\n--- {} | in={} out={} ---".format(
-    d.get("model","?"), u.get("prompt_tokens"), u.get("completion_tokens")), file=sys.stderr)
+out=u.get("completion_tokens")
+reas=(u.get("completion_tokens_details") or {}).get("reasoning_tokens")
+cached=(u.get("prompt_tokens_details") or {}).get("cached_tokens")
+bits=["in={}".format(u.get("prompt_tokens")), "out={}".format(out)]
+if reas: bits.append("of which reasoning={} ({:.0f}% of billed output)".format(reas, 100*reas/out if out else 0))
+if cached: bits.append("cached_in={}".format(cached))
+print("\n--- {} | {} ---".format(d.get("model","?"), " | ".join(bits)), file=sys.stderr)
 '
 }
 
@@ -195,7 +202,8 @@ hf.sh — Hugging Face Inference Providers router
   hf.sh table [--write <file>]    regenerate the full model catalogue
 
 Model suffixes: :fastest (default) :cheapest :preferred or a provider (:groq, :deepinfra)
-Env: HF_TOKEN, HF_SYSTEM, HF_MAX_TOKENS (4096), HF_TIMEOUT (600)
+Env: HF_TOKEN, HF_SYSTEM, HF_MAX_TOKENS (4096), HF_TIMEOUT (600),
+     HF_SHOW_REASONING=1 (print a reasoning model's hidden trace to stderr)
 H
   ;;
 esac

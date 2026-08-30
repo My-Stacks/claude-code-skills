@@ -58,6 +58,8 @@ def main() -> int:
     print()
     print(f"  cheapest: {lo['prov']} ${lo['total']:,.2f}   priciest: {hi['prov']} ${hi['total']:,.2f}"
           + (f"   spread {hi['total'] / lo['total']:.1f}x" if lo["total"] else ""))
+    print("  NB: on a reasoning model, hidden reasoning is billed as output — measure real")
+    print("      out-tokens with `hf.sh ask` before trusting an out-token estimate here.")
     if any(r["struct"] is False for r in rows):
         bad = [r["prov"] for r in rows if r["struct"] is False]
         print(f"  no structured output on: {', '.join(bad)} — pin a provider if you parse a schema")

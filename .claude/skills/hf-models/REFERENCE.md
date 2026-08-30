@@ -10,7 +10,7 @@ without re-running the command.
 | Model | In | Out | Ctx | Licence | Use it for |
 |---|--:|--:|--:|---|---|
 | `openai/gpt-oss-20b` | 0.03 | 0.14 | 131k | Apache 2.0 | Highest-volume trivial calls |
-| `openai/gpt-oss-120b` | 0.037 | 0.17 | 131k | Apache 2.0 | **Default workhorse.** Classification, tagging, extraction |
+| `openai/gpt-oss-120b` | 0.037 | 0.17 | 131k | Apache 2.0 | Fast + cheap, but **reasoning inflates output ~3x** — see below |
 | `deepseek-ai/DeepSeek-V4-Flash` | 0.09 | 0.18 | 1M | MIT | Cheap summarisation over long inputs |
 | `zai-org/GLM-5.3-Flash` | 0.15 | 0.50 | 1M | open weights | Whole-site / whole-corpus reads |
 | `Qwen/Qwen3-Coder-Next` | 0.20 | 1.50 | 262k | Apache 2.0 | Mechanical code work |
@@ -38,7 +38,7 @@ not on the leaderboard.
 
 | Task | Model | Why |
 |---|---|---|
-| Bulk tagging / classification / structured extraction | `openai/gpt-oss-120b:groq` | ~$0.15/$0.75 on Groq for speed, $0.037/$0.17 on DeepInfra for cost |
+| Bulk tagging / classification / structured extraction | **Measure both** — `Qwen/Qwen3-4B-Instruct-2507` vs `openai/gpt-oss-120b` | The small non-reasoning model can be ~8x cheaper for schema filling; the big one is more accurate. Run `hf.sh compare` on real rows |
 | Summaries, FAQ, blurbs at volume | `deepseek-ai/DeepSeek-V4-Flash-0731` | Cheapest 1M-context model, and the dated snapshot is *cheaper and faster* than the floating tag ($0.08 vs $0.09, 105 vs 84 tok/s) |
 | Read an entire site / sitemap / corpus in one call | `zai-org/GLM-5.3-Flash` | 1M ctx at $0.15 in |
 | Codemods, test scaffolding, mechanical refactors | `Qwen/Qwen3-Coder-Next` | $0.20/$1.50, Apache 2.0 |
@@ -73,6 +73,32 @@ Both found by generating the catalogue rather than reasoning from model reputati
   `gemma-3-12b-it` does vision + tools + structured output at $0.05/$0.15, versus
   $0.40/$3.00 for `Qwen3.8-27B` — 8x cheaper in, 20x out. Reach for Qwen only when
   gemma measurably fails the task, or you need video.
+
+## Reasoning tokens break output-cost estimates
+
+Measured 2026-08-30, same one-word-answer prompt:
+
+| Model | Billed output tokens | Hidden reasoning |
+|---|--:|--:|
+| `openai/gpt-oss-120b` | 32-74 | **66-85%** |
+| `Qwen/Qwen3-4B-Instruct-2507` | 2 | none |
+| `google/gemma-3-12b-it` | 2 | none |
+
+`gpt-oss-120b` is a reasoning model: it thinks in a `reasoning` field the OpenAI
+response shape hides, and **bills every one of those tokens as output**. A headline
+price of $0.17/M out behaves like ~$0.50/M on short structured replies.
+
+This inverts a cheap-looking choice. For 100k cards at 800 in / 150 visible out:
+
+- `gpt-oss-120b` with ~300 reasoning tokens: **~$10.60**
+- `Qwen3-4B-Instruct-2507`, no reasoning: **~$1.25**
+
+So for short structured output, a small non-reasoning model can be ~8x cheaper than
+the "cheap" reasoning model. Reasoning earns its cost on hard judgement, not on
+filling a JSON schema.
+
+`hf.sh ask` prints `of which reasoning=N (X% of billed output)` when present, so
+measure before you extrapolate. `HF_SHOW_REASONING=1` dumps the trace itself.
 
 ## Providers are not interchangeable
 
