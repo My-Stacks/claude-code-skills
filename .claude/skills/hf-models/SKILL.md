@@ -13,9 +13,11 @@ major open-weight model. Switching models is changing one string.
 Requires `curl` and `python3`. All network calls go through `scripts/hf.sh` so a
 single `permissions.allow` rule covers the skill.
 
-**Read `REFERENCE.md` before recommending a model.** It holds the routing table and the
-last-verified prices. Prices rot — re-run `hf.sh models` rather than quoting the file
-when the answer is a cost decision.
+**Read `REFERENCE.md` before recommending a model.** It holds the curated routing
+table plus a generated catalogue of every priced model on the router. The catalogue
+is regenerated with `hf.sh table --write REFERENCE.md`, so when prices look stale,
+**refresh it rather than trusting it** — and for an actual cost decision, run
+`hf.sh cost`, which always reads live.
 
 ## Setup
 
@@ -86,6 +88,7 @@ page and the Inference Providers overview only, so budget control has to be
 | `/hf ask <model> <prompt>` | One call | Yes |
 | `/hf compare <m1,m2,...> <prompt>` | Same prompt to N models in parallel | Yes |
 | `/hf cost <model> <in-tok> <out-tok> <calls>` | Total cost across every provider, from live prices | No |
+| `/hf table [--write]` | Regenerate the full 111-model catalogue in `REFERENCE.md` | No |
 
 Under the hood:
 

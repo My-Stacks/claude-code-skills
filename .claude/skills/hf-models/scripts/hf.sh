@@ -163,6 +163,18 @@ cmd_cost() {
     | python3 "$(dirname "${BASH_SOURCE[0]}")/cost.py" "$1" "$2" "$3" "$4"
 }
 
+# table [--write <ref.md>] — regenerate the full catalogue from live data. No auth.
+cmd_table() {
+  local d; d="$(dirname "${BASH_SOURCE[0]}")"
+  local dest=""
+  if [ "${1:-}" = "--write" ]; then
+    dest="${2:-$d/../REFERENCE.md}"
+    curl -s --max-time 60 "$ROUTER/models" | python3 "$d/table.py" --write "$dest"
+  else
+    curl -s --max-time 60 "$ROUTER/models" | python3 "$d/table.py"
+  fi
+}
+
 case "${1:-help}" in
   setup)   shift; cmd_setup "$@" ;;
   models)  shift; cmd_models "$@" ;;
@@ -170,6 +182,7 @@ case "${1:-help}" in
   ask)     shift; cmd_ask "$@" ;;
   compare) shift; cmd_compare "$@" ;;
   cost)    shift; cmd_cost "$@" ;;
+  table)   shift; cmd_table "$@" ;;
   *) cat <<'H'
 hf.sh — Hugging Face Inference Providers router
 
@@ -179,6 +192,7 @@ hf.sh — Hugging Face Inference Providers router
   hf.sh ask <model> [file]        one call; prompt from file or stdin
   hf.sh compare <m1,m2> [file]    same prompt to N models in parallel
   hf.sh cost <model> <in> <out> <n>       budget math across every provider
+  hf.sh table [--write <file>]    regenerate the full model catalogue
 
 Model suffixes: :fastest (default) :cheapest :preferred or a provider (:groq, :deepinfra)
 Env: HF_TOKEN, HF_SYSTEM, HF_MAX_TOKENS (4096), HF_TIMEOUT (600)
