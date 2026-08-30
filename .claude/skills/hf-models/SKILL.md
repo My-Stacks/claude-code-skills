@@ -21,8 +21,11 @@ is regenerated with `hf.sh table --write REFERENCE.md`, so when prices look stal
 
 ## Setup
 
-Token: hf.co/settings/tokens/new -> fine-grained -> **"Make calls to Inference
-Providers"**. A plain read token will not work.
+Token: hf.co/settings/tokens/new -> type **Fine-grained** -> name it anything
+(it's just a label, e.g. `stacklist-hf-models`) -> click the **Inference** preset.
+The preset is what grants "Make calls to Inference Providers" — the permission is a
+scope, not the token's name, and *Create token* stays disabled until a scope is
+picked. A plain Read token will not work. The value is shown once; copy it then.
 
 ```bash
 scripts/hf.sh setup hf_xxxxx     # validates against whoami-v2, writes ~/.hf-router.json (0600)
