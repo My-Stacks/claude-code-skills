@@ -47,7 +47,8 @@ def main() -> int:
     print(f"  {'PROVIDER':14s} {'TOTAL':>12s} {'PER CALL':>12s} {'STRUCT':>7s} {'CTX':>10s} {'TOK/S':>7s}")
     for r in rows:
         ctx = f"{r['ctx']:,}" if r["ctx"] else "-"
-        flag = "  << input exceeds context" if r["ctx"] and i_tok > r["ctx"] else ""
+        # a request must fit input AND generated output inside the context window
+        flag = "  << in+out exceeds context" if r["ctx"] and (i_tok + o_tok) > r["ctx"] else ""
         tps = f"{r['tps']:.0f}" if r["tps"] else "-"
         struct = str(r["struct"]) if r["struct"] is not None else "-"
         total = "$" + format(r["total"], ",.2f")

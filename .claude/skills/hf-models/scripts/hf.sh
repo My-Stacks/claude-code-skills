@@ -23,13 +23,47 @@ need_token() {
   printf '%s' "$t"
 }
 
+# fetch_json <url> [timeout] — GET, die on HTTP error / empty / non-JSON (never a raw traceback).
+fetch_json() {
+  local url="$1" tmo="${2:-45}" out code
+  out=$(mktemp "${TMPDIR:-/tmp}/hf-fetch-XXXXXX") || die "cannot create temp file"
+  code=$(curl -s -o "$out" -w '%{http_code}' --max-time "$tmo" "$url" 2>/dev/null) || {
+    rm -f "$out"; die "network error contacting the router (is it reachable?)"; }
+  if [ "$code" != "200" ]; then rm -f "$out"; die "router returned HTTP $code"; fi
+  if ! python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$out" 2>/dev/null; then
+    rm -f "$out"; die "router returned a non-JSON body (HTTP $code)"; fi
+  cat "$out"; rm -f "$out"
+}
+
+# auth_config_file <token> — a 0600 curl --config carrying the auth header, so the
+# token never lands in argv (readable by any local user via `ps`).
+auth_config_file() {
+  local f; f=$(mktemp "${TMPDIR:-/tmp}/hf-auth-XXXXXX") || die "cannot create temp file"
+  chmod 600 "$f"
+  printf 'header = "Authorization: Bearer %s"\n' "$1" > "$f"
+  printf '%s' "$f"
+}
+
 cmd_setup() {
-  [ $# -ge 1 ] || die "usage: hf.sh setup <hf_token>"
-  local t="$1"
-  local code
-  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
-    -H "Authorization: Bearer $t" "https://huggingface.co/api/whoami-v2")
-  [ "$code" = "200" ] || die "token rejected (HTTP $code). Needs 'Make calls to Inference Providers' permission."
+  local t
+  if [ $# -ge 1 ] && [ "$1" != "-" ]; then
+    t="$1"   # convenience only; argv is world-readable via `ps` — prefer the prompt
+  else
+    printf 'HF token (input hidden): ' >&2
+    read -rs t; printf '\n' >&2
+  fi
+  [ -n "$t" ] || die "no token given"
+
+  local acf resp code
+  acf=$(auth_config_file "$t")
+  resp=$(mktemp "${TMPDIR:-/tmp}/hf-whoami-XXXXXX") || die "cannot create temp file"
+  code=$(curl -s -o "$resp" -w '%{http_code}' --max-time 30 -K "$acf" \
+    "https://huggingface.co/api/whoami-v2" 2>/dev/null) || { rm -f "$acf" "$resp"; die "network error validating token"; }
+  rm -f "$acf"
+  [ "$code" = "200" ] || { rm -f "$resp"; die "token rejected (HTTP $code)"; }
+  python3 "$(dirname "${BASH_SOURCE[0]}")/check-scope.py" "$resp" || {
+    rm -f "$resp"; die "token is valid but lacks the inference scope — recreate it with the 'Inference' preset"; }
+  rm -f "$resp"
   ( umask 077
     HF_TOK="$t" python3 -c '
 import json,os,sys
@@ -41,13 +75,15 @@ if os.path.exists(p):
 cfg["hf_token"]=os.environ["HF_TOK"]
 json.dump(cfg,open(p,"w"),indent=2)
 ' "$CONFIG" )
+  chmod 600 "$CONFIG"
   echo "hf-models configured -> $CONFIG (chmod 600)"
 }
 
 # models [substring]  — warm models with live per-provider pricing. No auth needed.
 cmd_models() {
   local filter="${1:-}"
-  curl -s --max-time 45 "$ROUTER/models" | FILTER="$filter" python3 -c '
+  local json; json=$(fetch_json "$ROUTER/models") || exit 1
+  printf '%s' "$json" | FILTER="$filter" python3 -c '
 import sys,json,os
 f=os.environ.get("FILTER","").lower()
 rows=[]
@@ -71,7 +107,8 @@ print(f"\n{len(rows)} models with published pricing.")
 # price <model>  — every provider serving one model.
 cmd_price() {
   [ $# -ge 1 ] || die "usage: hf.sh price <org/model>"
-  curl -s --max-time 45 "$ROUTER/models" | MODEL="$1" python3 -c '
+  local json; json=$(fetch_json "$ROUTER/models") || exit 1
+  printf '%s' "$json" | MODEL="$1" python3 -c '
 import sys,json,os
 want,_,suffix=os.environ["MODEL"].lower().partition(":")
 for m in json.load(sys.stdin).get("data",[]):
@@ -92,7 +129,7 @@ for m in json.load(sys.stdin).get("data",[]):
             str(p.get("supports_structured_output")) if p.get("supports_structured_output") is not None else "-",
             n(p.get("first_token_latency_ms")), n(p.get("throughput")),
             p.get("status")))
-    if p.get("is_free"): print("  (a provider is currently free — promo, do not depend on it)")
+    if any(q.get("is_free") for q in m.get("providers",[])): print("  (a provider is currently free — promo, do not depend on it)")
     if suffix: print("  (:%s is a routing policy, not part of the id — all providers shown)" % suffix)
     break
 else:
@@ -122,9 +159,15 @@ if os.environ.get("SYS"): msgs.append({"role":"system","content":os.environ["SYS
 msgs.append({"role":"user","content":os.environ["PROMPT"]})
 print(json.dumps({"model":os.environ["MODEL"],"messages":msgs,
                   "max_tokens":int(os.environ["MAXTOK"]),"stream":False}))')
+  local acf bodyf
+  acf=$(auth_config_file "$t")
+  bodyf=$(mktemp "${TMPDIR:-/tmp}/hf-body-XXXXXX") || die "cannot create temp file"
+  chmod 600 "$bodyf"
+  printf '%s' "$body" > "$bodyf"
+  trap 'rm -f "$acf" "$bodyf"' RETURN
   curl -s --max-time "${HF_TIMEOUT:-600}" "$ROUTER/chat/completions" \
-    -H "Authorization: Bearer $t" -H 'Content-Type: application/json' \
-    -d "$body" | SHOW_REASONING="${HF_SHOW_REASONING:-}" python3 -c '
+    -K "$acf" -H 'Content-Type: application/json' \
+    --data-binary @"$bodyf" | SHOW_REASONING="${HF_SHOW_REASONING:-}" python3 -c '
 import sys,json,os
 d=json.load(sys.stdin)
 if "error" in d: print("API error:",json.dumps(d["error"])[:500]); raise SystemExit(1)
@@ -148,7 +191,12 @@ cmd_compare() {
   [ $# -ge 1 ] || die "usage: hf.sh compare <m1,m2,...> [prompt-file]"
   local models="$1"; shift
   local tmp; tmp="$(mktemp -d "${TMPDIR:-/tmp}/hf-compare-XXXXXX")"
-  if [ $# -ge 1 ] && [ -f "$1" ]; then cp "$1" "$tmp/prompt.txt"; else cat > "$tmp/prompt.txt"; fi
+  if [ $# -ge 1 ]; then
+    [ -f "$1" ] || die "prompt file not found: $1 (omit the argument to read stdin)"
+    cp "$1" "$tmp/prompt.txt"
+  else
+    cat > "$tmp/prompt.txt"
+  fi
   echo "run dir: $tmp"
   local pids=()
   IFS=',' read -ra arr <<< "$models"
@@ -166,19 +214,22 @@ cmd_compare() {
 # cost <model> <in_tok> <out_tok> <calls> — budget math across providers. No auth.
 cmd_cost() {
   [ $# -ge 4 ] || die "usage: hf.sh cost <org/model> <in_tokens> <out_tokens> <calls>"
-  curl -s --max-time 45 "$ROUTER/models" \
+  local json; json=$(fetch_json "$ROUTER/models") || exit 1
+  printf '%s' "$json" \
     | python3 "$(dirname "${BASH_SOURCE[0]}")/cost.py" "$1" "$2" "$3" "$4"
 }
 
 # table [--write <ref.md>] — regenerate the full catalogue from live data. No auth.
 cmd_table() {
   local d; d="$(dirname "${BASH_SOURCE[0]}")"
-  local dest=""
+  local dest="" json
   if [ "${1:-}" = "--write" ]; then
     dest="${2:-$d/../REFERENCE.md}"
-    curl -s --max-time 60 "$ROUTER/models" | python3 "$d/table.py" --write "$dest"
+    json=$(fetch_json "$ROUTER/models" 60) || exit 1
+    printf '%s' "$json" | python3 "$d/table.py" --write "$dest"
   else
-    curl -s --max-time 60 "$ROUTER/models" | python3 "$d/table.py"
+    json=$(fetch_json "$ROUTER/models" 60) || exit 1
+    printf '%s' "$json" | python3 "$d/table.py"
   fi
 }
 
@@ -193,7 +244,8 @@ case "${1:-help}" in
   *) cat <<'H'
 hf.sh — Hugging Face Inference Providers router
 
-  hf.sh setup <hf_token>          validate + store token in ~/.hf-router.json (0600)
+  hf.sh setup [<token>|-]         prompt for token (hidden), verify the inference
+                                  scope, store 0600 in ~/.hf-router.json
   hf.sh models [substring]        warm models + live cheapest price (substring, not glob)
   hf.sh price <org/model>         all providers for one model (no auth)
   hf.sh ask <model> [file]        one call; prompt from file or stdin
