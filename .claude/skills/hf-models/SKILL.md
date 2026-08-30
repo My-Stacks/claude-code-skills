@@ -41,6 +41,22 @@ error, so any real use means putting a card on the account.
 | PRO ($9/mo) | **$2.00** | Inference Providers, Endpoints, Spaces GPU, Jobs |
 | Team / Enterprise | **$2.00 per seat**, pooled | same as PRO |
 
+**Two different things are both called "credits" on the billing page**, and they
+behave differently:
+
+- **Included credits** — the monthly allowance in the table above. Recurring, and
+  tied to the billing period shown as *"Ends on <1st of next month>"*. Use them or
+  lose them; they refresh on the 1st.
+- **Purchased credits** — a prepaid balance from *Add Credits*, on its own line. The
+  *"Ends on"* date governs the period counters (`Current period usage`, the free
+  allowance), **not** this balance. HF's billing docs describe only included credits
+  as "credited every month" and say nothing about purchased credits expiring — but
+  they don't explicitly guarantee rollover either. If a balance is large enough to
+  matter, confirm with billing@huggingface.co rather than inferring it.
+
+Leave **Automatic Recharge off** while piloting. The prepaid balance is then a hard
+ceiling on any runaway job; auto-recharge removes exactly that protection.
+
 Credits apply automatically to routed requests, before any pay-as-you-go usage.
 Past them you buy credits and continue — **free accounts must purchase credits before
 pay-as-you-go works at all**, so a job that outruns $0.10 mid-run stops rather than
