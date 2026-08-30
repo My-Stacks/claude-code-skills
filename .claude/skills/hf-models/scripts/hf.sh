@@ -149,12 +149,20 @@ cmd_compare() {
   for f in "$tmp"/*.md; do echo; echo "===== $(basename "$f" .md) ====="; cat "$f"; done
 }
 
+# cost <model> <in_tok> <out_tok> <calls> — budget math across providers. No auth.
+cmd_cost() {
+  [ $# -ge 4 ] || die "usage: hf.sh cost <org/model> <in_tokens> <out_tokens> <calls>"
+  curl -s --max-time 45 "$ROUTER/models" \
+    | python3 "$(dirname "${BASH_SOURCE[0]}")/cost.py" "$1" "$2" "$3" "$4"
+}
+
 case "${1:-help}" in
   setup)   shift; cmd_setup "$@" ;;
   models)  shift; cmd_models "$@" ;;
   price)   shift; cmd_price "$@" ;;
   ask)     shift; cmd_ask "$@" ;;
   compare) shift; cmd_compare "$@" ;;
+  cost)    shift; cmd_cost "$@" ;;
   *) cat <<'H'
 hf.sh — Hugging Face Inference Providers router
 
@@ -163,6 +171,7 @@ hf.sh — Hugging Face Inference Providers router
   hf.sh price <org/model>         all providers for one model (no auth)
   hf.sh ask <model> [file]        one call; prompt from file or stdin
   hf.sh compare <m1,m2> [file]    same prompt to N models in parallel
+  hf.sh cost <model> <in> <out> <n>       budget math across every provider
 
 Model suffixes: :fastest (default) :cheapest :preferred or a provider (:groq, :deepinfra)
 Env: HF_TOKEN, HF_SYSTEM, HF_MAX_TOKENS (4096), HF_TIMEOUT (600)

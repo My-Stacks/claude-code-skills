@@ -62,6 +62,20 @@ extra_headers: { "X-HF-Bill-To": "<org-name>" }   // or headers: {...} in JS
 
 Costs per model and provider: hf.co/settings/inference-providers/overview.
 
+**There is no public API for remaining balance.** Spend is visible on the billing
+page and the Inference Providers overview only, so budget control has to be
+*preventative*, not reactive:
+
+1. `hf.sh cost <model> <in> <out> <calls>` **before** any batch. It prices the whole
+   run against every provider and flags inputs that overflow a provider's context.
+2. Cap the blast radius at the org: Team/Enterprise admins can set a spending limit
+   and disable providers. Do this before a service calls the router in production.
+3. A free account is its own circuit breaker — pay-as-you-go needs a credit purchase
+   first, so an unfunded run stops at $0.10 instead of overflowing. Useful for a
+   first pilot; useless once funded, so add the org limit before you fund it.
+4. Bill runs to the org (`X-HF-Bill-To`) so spend is attributable per model and
+   provider, rather than pooled invisibly on a personal account.
+
 ## Commands
 
 | Command | Does | Auth |
@@ -71,7 +85,7 @@ Costs per model and provider: hf.co/settings/inference-providers/overview.
 | `/hf route <task>` | Recommend a model from `REFERENCE.md` + a cost estimate | No |
 | `/hf ask <model> <prompt>` | One call | Yes |
 | `/hf compare <m1,m2,...> <prompt>` | Same prompt to N models in parallel | Yes |
-| `/hf cost <model> <in-tok> <out-tok> <calls>` | Monthly cost math from live prices | No |
+| `/hf cost <model> <in-tok> <out-tok> <calls>` | Total cost across every provider, from live prices | No |
 
 Under the hood:
 
