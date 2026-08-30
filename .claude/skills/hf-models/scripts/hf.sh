@@ -77,11 +77,22 @@ want=os.environ["MODEL"].lower()
 for m in json.load(sys.stdin).get("data",[]):
     if m["id"].lower()!=want: continue
     print(m["id"])
-    for p in m.get("providers",[]):
+    print("  {:14s} {:>7s} {:>7s} {:>10s} {:>6s} {:>7s} {:>8s} {:>7s}  {}".format(
+        "PROVIDER","IN","OUT","CTX","TOOLS","STRUCT","TTFT_MS","TOK/S","STATUS"))
+    def n(v, f="{:.0f}"):
+        return "-" if v is None else f.format(v)
+    for p in sorted(m.get("providers",[]), key=lambda x:((x.get("pricing") or {}).get("input") is None,
+                                                          (x.get("pricing") or {}).get("input") or 0)):
         pr=p.get("pricing") or {}
-        print("  {:14s} in={} out={} ctx={} tools={} status={}".format(
-            p.get("provider") or "?", pr.get("input"), pr.get("output"),
-            p.get("context_length"), p.get("supports_tools"), p.get("status")))
+        print("  {:14s} {:>7s} {:>7s} {:>10s} {:>6s} {:>7s} {:>8s} {:>7s}  {}".format(
+            p.get("provider") or "?",
+            n(pr.get("input"),"{:.3f}"), n(pr.get("output"),"{:.3f}"),
+            n(p.get("context_length"),"{:,.0f}"),
+            str(p.get("supports_tools")) if p.get("supports_tools") is not None else "-",
+            str(p.get("supports_structured_output")) if p.get("supports_structured_output") is not None else "-",
+            n(p.get("first_token_latency_ms")), n(p.get("throughput")),
+            p.get("status")))
+    if p.get("is_free"): print("  (a provider is currently free — promo, do not depend on it)")
     break
 else:
     print("not found — check the exact repo id with: hf.sh models <substring>")

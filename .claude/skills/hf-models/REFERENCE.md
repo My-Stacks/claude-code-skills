@@ -58,6 +58,24 @@ not on the leaderboard.
 The same model can differ ~9x by provider (GLM-5.3-Flash: $0.15 Together vs $1.40
 Novita). Always check `hf.sh price <model>` before pinning.
 
+## Providers are not interchangeable
+
+`hf.sh price` prints per-provider price, context, tool support, **structured-output
+support**, time-to-first-token and throughput. Three traps it exposes, all verified
+2026-08-30:
+
+- **Structured output is not universal.** `DeepSeek-V4-Flash` supports JSON-schema
+  output on DeepInfra but **not on Novita**. Anything parsing a schema must pin the
+  provider, not trust `:cheapest`.
+- **Throughput varies ~22x on identical weights.** `gpt-oss-120b`: DeepInfra $0.037 at
+  51 tok/s, Groq $0.15 at 425 tok/s, Cerebras $0.35 at 1147 tok/s. `:cheapest` for
+  offline batch, `:fastest`/`:groq` for anything a user waits on.
+- **Context limits differ per provider for the same model.** A cheap provider may
+  serve a 1M-context model at 64k. Check `CTX` before relying on a long-context plan.
+
+So: `:cheapest` for offline batch with no schema; pin a provider explicitly when you
+need structured output, a latency budget, or the full context window.
+
 Only Groq and Cerebras serve the speed tier here, and only for gpt-oss:
 `gpt-oss-120b:groq` ($0.15/$0.75), `gpt-oss-20b:groq` ($0.10/$0.50),
 `gpt-oss-120b:cerebras` ($0.35/$0.75).
