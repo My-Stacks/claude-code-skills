@@ -8,8 +8,15 @@ def main() -> int:
     if len(sys.argv) != 5:
         print("usage: cost.py <org/model> <in_tokens> <out_tokens> <calls>", file=sys.stderr)
         return 2
-    want = sys.argv[1].lower()
-    i_tok, o_tok, calls = (float(x.replace(",", "")) for x in sys.argv[2:5])
+    want, _, suffix = sys.argv[1].lower().partition(":")
+    try:
+        i_tok, o_tok, calls = (float(x.replace(",", "").replace("_", "")) for x in sys.argv[2:5])
+    except ValueError:
+        print("in_tokens, out_tokens and calls must be numbers", file=sys.stderr)
+        return 2
+    if min(i_tok, o_tok, calls) < 0:
+        print("token counts and calls cannot be negative", file=sys.stderr)
+        return 2
 
     models = json.load(sys.stdin).get("data", [])
     model = next((m for m in models if m["id"].lower() == want), None)
@@ -31,9 +38,11 @@ def main() -> int:
     if not rows:
         print(f"{model['id']}: no provider publishes pricing")
         return 1
-    rows.sort(key=lambda r: r["total"])
+    rows.sort(key=lambda r: (r["total"], r["per"]))
 
     print(f"{model['id']}  |  {i_tok:,.0f} in + {o_tok:,.0f} out  x  {calls:,.0f} calls")
+    if suffix:
+        print(f"  (':{suffix}' is a routing policy, not part of the id — pricing every provider below)")
     print()
     print(f"  {'PROVIDER':14s} {'TOTAL':>12s} {'PER CALL':>12s} {'STRUCT':>7s} {'CTX':>10s} {'TOK/S':>7s}")
     for r in rows:

@@ -73,7 +73,7 @@ cmd_price() {
   [ $# -ge 1 ] || die "usage: hf.sh price <org/model>"
   curl -s --max-time 45 "$ROUTER/models" | MODEL="$1" python3 -c '
 import sys,json,os
-want=os.environ["MODEL"].lower()
+want,_,suffix=os.environ["MODEL"].lower().partition(":")
 for m in json.load(sys.stdin).get("data",[]):
     if m["id"].lower()!=want: continue
     print(m["id"])
@@ -93,6 +93,7 @@ for m in json.load(sys.stdin).get("data",[]):
             n(p.get("first_token_latency_ms")), n(p.get("throughput")),
             p.get("status")))
     if p.get("is_free"): print("  (a provider is currently free — promo, do not depend on it)")
+    if suffix: print("  (:%s is a routing policy, not part of the id — all providers shown)" % suffix)
     break
 else:
     print("not found — check the exact repo id with: hf.sh models <substring>")
@@ -104,7 +105,12 @@ cmd_ask() {
   [ $# -ge 1 ] || die "usage: hf.sh ask <model> [prompt-file]   (stdin if no file)"
   local model="$1"; shift
   local prompt
-  if [ $# -ge 1 ] && [ -f "$1" ]; then prompt="$(cat "$1")"; else prompt="$(cat)"; fi
+  if [ $# -ge 1 ]; then
+    [ -f "$1" ] || die "prompt file not found: $1 (omit the argument to read stdin)"
+    prompt="$(cat "$1")"
+  else
+    prompt="$(cat)"
+  fi
   [ -n "$prompt" ] || die "empty prompt"
   local t; t="$(need_token)"
   local body
@@ -142,7 +148,8 @@ cmd_compare() {
   for m in "${arr[@]}"; do
     local safe="${m//\//_}"; safe="${safe//:/-}"
     ( cmd_ask "$m" "$tmp/prompt.txt" > "$tmp/$safe.md" 2> "$tmp/$safe.err" \
-      || echo "FAILED: see $tmp/$safe.err" > "$tmp/$safe.md" ) &
+      || { echo "FAILED: $(head -c 300 "$tmp/$safe.err")"; echo "(full stderr: $tmp/$safe.err)"; } \
+         > "$tmp/$safe.md" ) &
     pids+=("$!")
   done
   for p in "${pids[@]}"; do wait "$p" || true; done
@@ -167,7 +174,7 @@ case "${1:-help}" in
 hf.sh — Hugging Face Inference Providers router
 
   hf.sh setup <hf_token>          validate + store token in ~/.hf-router.json (0600)
-  hf.sh models [substring]        warm models + live cheapest price (no auth)
+  hf.sh models [substring]        warm models + live cheapest price (substring, not glob)
   hf.sh price <org/model>         all providers for one model (no auth)
   hf.sh ask <model> [file]        one call; prompt from file or stdin
   hf.sh compare <m1,m2> [file]    same prompt to N models in parallel

@@ -73,8 +73,17 @@ support**, time-to-first-token and throughput. Three traps it exposes, all verif
 - **Context limits differ per provider for the same model.** A cheap provider may
   serve a 1M-context model at 64k. Check `CTX` before relying on a long-context plan.
 
+A worked case — `GLM-5.3-Flash`, where **Together and Baseten are both $0.15/$0.50**,
+but Together reports `supports_structured_output: false` and Baseten `true`. A
+`:cheapest` call can land on either. Same model, same price, and one of them cannot
+return your schema. Pin `:baseten`.
+
 So: `:cheapest` for offline batch with no schema; pin a provider explicitly when you
 need structured output, a latency budget, or the full context window.
+
+Note `:cheapest` / `:fastest` / `:groq` are **routing policies the router consumes**,
+not part of the model id. `hf.sh price` and `hf.sh cost` strip them and show every
+provider, since the point of those commands is to compare what a policy would pick.
 
 Only Groq and Cerebras serve the speed tier here, and only for gpt-oss:
 `gpt-oss-120b:groq` ($0.15/$0.75), `gpt-oss-20b:groq` ($0.10/$0.50),
