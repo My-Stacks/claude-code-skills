@@ -107,7 +107,8 @@ page and the Inference Providers overview only, so budget control has to be
 | `/hf ask <model> <prompt>` | One call | Yes |
 | `/hf compare <m1,m2,...> <prompt>` | Same prompt to N models in parallel | Yes |
 | `/hf cost <model> <in-tok> <out-tok> <calls>` | Total cost across every provider, from live prices | No |
-| `/hf table [--write]` | Regenerate the full 111-model catalogue in `REFERENCE.md` | No |
+| `/hf table [--write]` | Regenerate the full 112-model catalogue in `REFERENCE.md` | No |
+| `/hf claude [model]` | Launch a new session driven by an open model | No |
 
 Under the hood:
 
@@ -153,23 +154,33 @@ No API call. Match the task against the "Task -> model" table in `REFERENCE.md`,
 
 ## Driving Claude Code with an open model
 
-Claude Code speaks to the router directly. This replaces the model driving the whole
-session — it is not per-task routing:
+**There is no in-session switch.** `ANTHROPIC_BASE_URL` and auth are bound when the
+process starts, so pointing at a different endpoint means a new process. `/model`
+and `--model` pick *which* Anthropic model to talk to; they cannot change *where*
+requests go.
+
+One command, no files touched, token read from the config:
 
 ```bash
-ANTHROPIC_BASE_URL="https://router.huggingface.co" \
-ANTHROPIC_AUTH_TOKEN="$HF_TOKEN" \
-ANTHROPIC_DEFAULT_OPUS_MODEL="zai-org/GLM-5.3" \
-ANTHROPIC_DEFAULT_SONNET_MODEL="zai-org/GLM-5.3" \
-ANTHROPIC_DEFAULT_HAIKU_MODEL="openai/gpt-oss-120b" \
-CLAUDE_CODE_SUBAGENT_MODEL="openai/gpt-oss-120b" \
-claude
+hf.sh claude                                   # DeepSeek V4 Pro (default)
+hf.sh claude zai-org/GLM-5.3                   # any router model
+hf.sh claude moonshotai/Kimi-K3 --sub openai/gpt-oss-120b
+hf.sh claude <model> --dry-run                 # show what it would launch
 ```
 
-Set it for one shell, never in a shell profile — a stray export silently downgrades
-every future session. Worth it for bulk mechanical work in a throwaway session;
-not worth it for real work: the harness is tuned for Claude, and tool-calling
-reliability drops noticeably.
+`--sub` sets the model for subagents and the Haiku tier — keep that cheap. Exit the
+launched session to return to Claude; nothing persists.
+
+Prefer this over editing settings: no second plaintext copy of the token on disk, and
+nothing to remember to undo. Use a project's `.claude/settings.local.json` `env` block
+only when a whole repo should *always* run on an open model — and check that file is
+gitignored by the repo itself, not just by your global gitignore, before putting a
+token in it.
+
+Worth it for bulk mechanical work in a throwaway session. Not worth it for real work:
+the launched session is not Claude, and tool-calling reliability drops noticeably.
+For a second opinion, `ask` / `compare` from a normal session is strictly better —
+you keep the context.
 
 ## Wiring into a Stacklist service
 

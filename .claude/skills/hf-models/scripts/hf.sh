@@ -233,6 +233,42 @@ cmd_table() {
   fi
 }
 
+# claude [model] [--sub <model>] [--dry-run] [-- <claude args>]
+# Launch a NEW Claude Code session driven by an open model. There is no in-session
+# switch: the endpoint is bound at process start, so changing it means a new process.
+cmd_claude() {
+  local model="deepseek-ai/DeepSeek-V4-Pro" sub="openai/gpt-oss-120b" dry=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --sub) sub="${2:?--sub needs a model}"; shift 2 ;;
+      --dry-run) dry=1; shift ;;
+      --) shift; break ;;
+      -*) die "unknown flag: $1" ;;
+      *) model="$1"; shift ;;
+    esac
+  done
+  command -v claude >/dev/null 2>&1 || die "claude CLI not on PATH"
+  local t; t="$(need_token)"
+
+  if [ -n "$dry" ]; then
+    printf 'would launch: ANTHROPIC_BASE_URL=%s OPUS/SONNET=%s HAIKU/SUBAGENT=%s claude %s\n' \
+      "https://router.huggingface.co" "$model" "$sub" "$*"
+    return 0
+  fi
+
+  echo "Launching Claude Code on $model (subagents: $sub)." >&2
+  echo "This session is NOT Claude — exit it to come back. Token comes from the config;" >&2
+  echo "nothing is written to any settings file." >&2
+  ANTHROPIC_BASE_URL="https://router.huggingface.co" \
+  ANTHROPIC_AUTH_TOKEN="$t" \
+  ANTHROPIC_API_KEY="$t" \
+  ANTHROPIC_DEFAULT_OPUS_MODEL="$model" \
+  ANTHROPIC_DEFAULT_SONNET_MODEL="$model" \
+  ANTHROPIC_DEFAULT_HAIKU_MODEL="$sub" \
+  CLAUDE_CODE_SUBAGENT_MODEL="$sub" \
+  exec claude "$@"
+}
+
 case "${1:-help}" in
   setup)   shift; cmd_setup "$@" ;;
   models)  shift; cmd_models "$@" ;;
@@ -241,6 +277,7 @@ case "${1:-help}" in
   compare) shift; cmd_compare "$@" ;;
   cost)    shift; cmd_cost "$@" ;;
   table)   shift; cmd_table "$@" ;;
+  claude)  shift; cmd_claude "$@" ;;
   *) cat <<'H'
 hf.sh — Hugging Face Inference Providers router
 
@@ -252,6 +289,7 @@ hf.sh — Hugging Face Inference Providers router
   hf.sh compare <m1,m2> [file]    same prompt to N models in parallel
   hf.sh cost <model> <in> <out> <n>       budget math across every provider
   hf.sh table [--write <file>]    regenerate the full model catalogue
+  hf.sh claude [model] [--sub M]  launch a NEW session driven by an open model
 
 Model suffixes: :fastest (default) :cheapest :preferred or a provider (:groq, :deepinfra)
 Env: HF_TOKEN, HF_SYSTEM, HF_MAX_TOKENS (4096), HF_TIMEOUT (600),
