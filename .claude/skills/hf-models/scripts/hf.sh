@@ -233,6 +233,13 @@ cmd_table() {
   fi
 }
 
+# pick [filter] — interactive chooser; prints the chosen model id to stdout.
+cmd_pick() {
+  local d; d="$(dirname "${BASH_SOURCE[0]}")"
+  local json; json=$(fetch_json "$ROUTER/models") || exit 1
+  printf '%s' "$json" | python3 "$d/pick.py" "${1:-}"
+}
+
 # claude [model] [--sub <model>] [--dry-run] [-- <claude args>]
 # Launch a NEW Claude Code session driven by an open model. There is no in-session
 # switch: the endpoint is bound at process start, so changing it means a new process.
@@ -241,6 +248,7 @@ cmd_claude() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --sub) sub="${2:?--sub needs a model}"; shift 2 ;;
+      --pick) model="$(cmd_pick "${2:-}")" || die "no model chosen"; [ -n "${2:-}" ] && shift; shift ;;
       --dry-run) dry=1; shift ;;
       --) shift; break ;;
       -*) die "unknown flag: $1" ;;
@@ -278,6 +286,7 @@ case "${1:-help}" in
   cost)    shift; cmd_cost "$@" ;;
   table)   shift; cmd_table "$@" ;;
   claude)  shift; cmd_claude "$@" ;;
+  pick)    shift; cmd_pick "$@" ;;
   *) cat <<'H'
 hf.sh — Hugging Face Inference Providers router
 
@@ -289,7 +298,9 @@ hf.sh — Hugging Face Inference Providers router
   hf.sh compare <m1,m2> [file]    same prompt to N models in parallel
   hf.sh cost <model> <in> <out> <n>       budget math across every provider
   hf.sh table [--write <file>]    regenerate the full model catalogue
+  hf.sh pick [filter]             interactive chooser, prints the model id
   hf.sh claude [model] [--sub M]  launch a NEW session driven by an open model
+                                  (add --pick to choose from a menu)
 
 Model suffixes: :fastest (default) :cheapest :preferred or a provider (:groq, :deepinfra)
 Env: HF_TOKEN, HF_SYSTEM, HF_MAX_TOKENS (4096), HF_TIMEOUT (600),

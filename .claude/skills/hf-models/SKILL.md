@@ -108,6 +108,7 @@ page and the Inference Providers overview only, so budget control has to be
 | `/hf compare <m1,m2,...> <prompt>` | Same prompt to N models in parallel | Yes |
 | `/hf cost <model> <in-tok> <out-tok> <calls>` | Total cost across every provider, from live prices | No |
 | `/hf table [--write]` | Regenerate the full 112-model catalogue in `REFERENCE.md` | No |
+| `/hf pick [filter]` | Interactive chooser; prints the chosen model id | No |
 | `/hf claude [model]` | Launch a new session driven by an open model | No |
 
 Under the hood:
@@ -164,9 +165,24 @@ One command, no files touched, token read from the config:
 ```bash
 hf.sh claude                                   # DeepSeek V4 Pro (default)
 hf.sh claude zai-org/GLM-5.3                   # any router model
+hf.sh claude --pick                            # choose from a menu
+hf.sh claude --pick qwen                       # menu, filtered
 hf.sh claude moonshotai/Kimi-K3 --sub openai/gpt-oss-120b
 hf.sh claude <model> --dry-run                 # show what it would launch
 ```
+
+**To come back: exit that session** (`/exit` or Ctrl+D). Nothing was written, so
+there is nothing to undo.
+
+`hf.sh pick` also works standalone and prints the id to stdout, so it composes:
+
+```bash
+M=$(hf.sh pick qwen) && hf.sh cost "$M" 800 150 100000
+```
+
+With no filter it shows a curated shortlist with a note on what each is for; with a
+filter it shows every match, cheapest first. The menu goes to stderr so `$(...)`
+captures only the id.
 
 `--sub` sets the model for subagents and the Haiku tier — keep that cheap. Exit the
 launched session to return to Claude; nothing persists.
