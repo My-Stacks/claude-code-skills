@@ -71,13 +71,14 @@ The ledger must land beside the baseline it will be read with, so the key deriva
 root=$(git rev-parse --show-toplevel) || exit 1
 raw=$(git remote get-url origin 2>/dev/null | head -1); [ -z "$raw" ] && raw=$root
 canon=$(printf '%s' "$raw" | tr 'A-Z' 'a-z' \
-  | sed -E 's#^[a-z]+://##; s#^[^@/]+@##; s#:#/#; s#\.git$##; s#/+$##')
+  | sed -E 's#^([a-z]+://([^/@]+@)?[^/:]+):[0-9]+/#\1/#; s#^[a-z]+://##; s#^[^@/]+@##; s#:#/#; s#/+$##; s#\.git$##; s#/+$##')
 stem=$(printf '%s' "$canon" | tr -c 'a-z0-9._-' '-' | sed -E 's#-+#-#g; s#^[-.]+##; s#[-.]+$##')
 hash=$(printf '%s' "$canon" | { shasum 2>/dev/null || sha1sum 2>/dev/null; } | cut -c1-12)
 key="${stem:-repo}-${hash}"
+tree=$(printf '%s' "$root" | { shasum 2>/dev/null || sha1sum 2>/dev/null; } | cut -c1-12)
 ```
 
-Read `$HOME/.claude/preflight/${key}.session-start.json` and **verify its `root` matches `$root`**. A mismatch means it belongs to a sibling worktree; treat it as absent.
+Read `$HOME/.claude/preflight/${key}.${tree}.session-start.json`. The baseline is **per-tree** as of `/preflight` 5.3 — `$key` alone names whichever sibling worktree wrote last, so reading it would certify against another tree. If that file is missing, fall back to the same root-glob `/mise-en-place` uses: scan `~/.claude/preflight/*.session-start.json` and take the one whose top-level `root` field equals `$root` (never by grep — `worktrees` lists every sibling path, so a text match confirms a sibling's file). That fallback also recovers a baseline left by a pre-5.3 `/preflight`, which used the un-treed name. Either way **verify its `root` matches `$root`**; a mismatch means it belongs to a sibling worktree, so treat it as absent.
 
 **No baseline is not a reason to stop.** Write the ledger anyway with `"baseline": false` — the certification is still the scarce thing, and `/mise-en-place` can pair it with a baseline written later. Say plainly that closedown will still be report-only until `/preflight` has run.
 
@@ -87,10 +88,14 @@ Read `$HOME/.claude/preflight/${key}.session-start.json` and **verify its `root`
 
 List every path **this session edited**, from your own memory of the session — files you wrote, changed, or created, whether through an edit tool or through a shell command. Under a shell-first working style the transcript holds no `file_path` fields at all, so this list cannot be derived mechanically; it is yours to produce.
 
-Then intersect it with reality:
+Then intersect it with reality. Read the tree with **exactly the flags `/preflight` used to write the baseline** — `--no-optional-locks ... -z -uall`. Without `-uall` a new file inside a new directory collapses to `?? newdir/`, which never compares equal to the full path the baseline stored, so every such file is misread as a candidate:
 
 ```bash
-git status --porcelain -z > /tmp/cc.porcelain   # NUL-delimited: a filename may contain a newline
+mkdir -p "$HOME/.claude/compact-clean"
+tmp="$HOME/.claude/compact-clean/.${key}.${tree}.porcelain.$$"   # never /tmp: the charter keeps every
+trap 'rm -f "$tmp"' EXIT                                        # write under ~/.claude/compact-clean/,
+git --no-optional-locks status --porcelain -z -uall > "$tmp"     # and a fixed name collides across sessions
+                                                                 # -z: a filename may contain a newline
 ```
 
 Classify each path you named:
@@ -142,8 +147,9 @@ Append **one JSON object on one line**, built with `python3` — never string-co
 | `candidates` | dirty-not-in-baseline paths this run could not certify. |
 | `baseline` | whether a `root`-matching baseline existed. |
 | `notes` | path to the notes file, or `null`. |
+| `trigger` | what wrote the record: absent for a manual run, `precompact-hook` from the `PreCompact` hook. |
 
-Write to `$ledger.new` and `mv -f` into place only if non-empty — a truncated ledger is worse than no ledger, because it looks like data.
+Open the ledger in **append mode** (`open(ledger, "a")`) and write the finished line in a single call. Never build a replacement file and `mv` it into place: that destroys every earlier record, and this ledger is append-only because one session may compact many times. Serialise the whole line in memory first and write it only if non-empty — a half-written line is worse than no line, because it looks like data.
 
 **Done when:** the record is appended and its path reported.
 
