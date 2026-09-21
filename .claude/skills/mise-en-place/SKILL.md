@@ -142,7 +142,7 @@ for f in sorted(glob.glob(os.path.join(d, "*.session-start.json"))):
 PY
 ```
 
-Reuse `$key` for the run ledger and the consent file. If `$base` is missing but the fallback finds a file whose `root` matches, use it and report `ATTRIBUTION: key mismatch — used <filename>`.
+Reuse `$key` for the run ledger and the consent file. If `$base` is missing but the fallback finds a file whose `root` matches, use it (several: the newest valid `started_at`) and report `ATTRIBUTION: key mismatch, used <filename>`.
 
 **Validity — all required:** `schema` equal to `1` (anything else is a payload you do not understand: **absent**, not best-effort parsed); `started_at` under 16 hours old; `root` byte-equal to this run's `git rev-parse --show-toplevel` (a baseline from another root describes a different tree); parseable; `head_sha` non-empty and passing `git rev-parse --verify "<head_sha>^{commit}"` — an empty `head_sha` makes `git log ..HEAD` mean `HEAD..HEAD`, which returns nothing with exit 0 and reads as "no unlanded commits" while the day's work sits unpushed.
 
@@ -152,23 +152,27 @@ Reuse `$key` for the run ledger and the consent file. If `$base` is missing but 
 
 **Never yours, whatever the test says:** a **deleted path** (status contains `D` — a session's `rm -rf generated/` satisfies both limbs, and a landed deletion removes content from every future clone; report it as `deleted by a session command — restore or commit deliberately`) and **build output** (the Phase 1 build gate writes files absent from the baseline through this session's own Bash call; name untracked, non-ignored build paths in Still dirty).
 
-**The other fields.** `head_sha` is the session's starting commit, recorded *before* preflight's fast-forward — bound it as `git log --oneline "<head_sha>"..HEAD --since=@<started_at>` (`@` marks a Unix timestamp; without `--since`, commits preflight *pulled* read as this session's). It is the report's `oldSHA` and the only attribution signal that survives a compaction. `stashes` is a count — more now than then means this session stashed work, and Phase 1's ladder applies. `worktrees` defines "stray" in Phase 2: present now, absent there. `listening_ports` were the operator's before you started. **If the session was compacted**, the edit-call signal is unreliable and attribution is UNKNOWN, **unless a certified compaction ledger covers the gap** (next).
+**The other fields.** `head_sha` is the session's starting commit, recorded *before* preflight's fast-forward — bound it as `git log --oneline "<head_sha>"..HEAD --since=@<started_at>` (`@` marks a Unix timestamp; without `--since`, commits preflight *pulled* read as this session's). It is the report's `oldSHA` and the only attribution signal that survives a compaction. `stashes` is a count — more now than then means this session stashed work, and Phase 1's ladder applies. `worktrees` defines "stray" in Phase 2: present now, absent there. `listening_ports` were the operator's before you started. **If the session was compacted**, the edit-call signal is unreliable and attribution is UNKNOWN, **unless a certified ledger record is bound to this session** (next).
 
-**The compaction ledger — the only way a compacted session still lands.** Compaction destroys one limb of the test and only one: the session's own knowledge that *it* made an edit. The baseline is a file and `git status` is a live read, so the change set always survives; what dies is authorship. `/compact-clean` writes that authorship down before it is lost, to `~/.claude/compact-clean/<key>.ledger.jsonl` — same `$key`, JSONL, append-only, one record per compaction.
+**The compaction ledger: the only way a compacted session still lands.** `/compact-clean` writes this session's authorship down before compaction, to `~/.claude/compact-clean/<key>.ledger.jsonl` (same `$key`, one JSON object per line, append-only).
 
-Read every record whose `root` equals `$root` (never by grep — the key is shared by every worktree of one origin) and whose `schema` you understand. Then:
+**Consult it only if this session was itself compacted** (your context opens with a compaction summary). An uncompacted session has its own transcript and ignores the ledger.
 
-- **`certified: true`** — `paths` were certified by a model that still remembered the session. Treat them as satisfying the first limb, exactly as a live transcript would. The second limb still applies: a certified path present in the baseline is **not** yours.
-- **`certified: false`** — written by the PreCompact hook, which has no model and cannot certify. `candidates` are **evidence for the report only**. They never license a commit, a push, or a PR. A hook record proves a compaction happened; it does not say who wrote the file.
-- **Staleness and ordering** — ignore any record older than the baseline's `started_at`, or older than 16h, on the same reasoning that ages out the baseline. Where records conflict, the newest certified record wins.
+**Bind exactly one record to this session:** the newest whose `record_id` appears in **this session's own context** (the compaction summary, or output you produced), never an id read from the ledger file. `/compact-clean` carries each earlier record's still-valid paths forward, so the newest bound record is complete on its own; take no union. No id in context means no bound record, which means `session compacted, no certified ledger`. That fails closed by design: another session's record, however fresh, never lands here.
 
-A certified ledger lifts `session compacted` as a cause, and only that cause. A stale baseline or a wrong worktree still forces report-only — the ledger substitutes for the transcript, never for the baseline.
+The bound record counts only if **all** hold, checked on the parsed JSON and never repaired: `schema` is `1`; `certified` is JSON `true`; `root` equals `$root`; `baseline_started_at` equals the current baseline's `started_at` (a record from under another baseline belongs to another session window); `written_at` is under 16h old; `paths` is a list of strings. Any failure: treat it as absent.
 
-Say which applied: `ATTRIBUTION: session compacted — restored from certified ledger (<n> paths, written <t>).`
+Its `paths` satisfy the first limb, exactly as a live transcript would, and only for a path that byte-equals a path in a live porcelain status record. The second limb still applies: a path present in the baseline is **not** yours.
 
-**Baseline absent, stale, or attribution UNKNOWN → REPORT-ONLY.** The run commits nothing (the Phase 4 harvest is written, left uncommitted, reported local-only), kills nothing, deletes nothing, mutates no tickets, and suppresses `/linear handoff` (which also commits). It may push and PR only commits it can bound with `git log <head_sha>..HEAD` — with the baseline absent, or the session compacted with no certified ledger covering it, that bound does not exist, so push and PR are suppressed too. Say so on its own line, with the real cause and the remedy (without the remedy a first run reads as a broken skill rather than a missing prerequisite):
+Every other record, including all `certified: false` ones (the PreCompact hook and `--evidence` runs), is evidence for the report only. It never licenses a commit, a push, or a PR, and never removes a certification.
 
-`ATTRIBUTION: <baseline absent | baseline stale (Nh) | wrong worktree | session compacted, no certified ledger> — <actions suppressed>. Run /preflight at the start of your next session, and /compact-clean before you compact, and this will land normally.`
+A bound record lifts `session compacted` as a cause, and only that cause. A stale baseline or a wrong worktree still forces report-only: the ledger substitutes for the transcript, never for the baseline.
+
+Say which applied: `ATTRIBUTION: session compacted, restored from ledger record <record_id> (<n> paths, written <t>).`
+
+**Baseline absent, stale, or attribution UNKNOWN → REPORT-ONLY.** The run commits nothing (the Phase 4 harvest is written, left uncommitted, reported local-only), kills nothing, deletes nothing, mutates no tickets, and suppresses `/linear handoff` (which also commits). It may push and PR only commits it can bound with `git log <head_sha>..HEAD` — with the baseline absent, or the session compacted with no bound ledger record, that bound does not exist, so push and PR are suppressed too. Say so on its own line, with the real cause and the remedy (without the remedy a first run reads as a broken skill rather than a missing prerequisite):
+
+`ATTRIBUTION: <baseline absent | baseline stale (Nh) | wrong worktree | session compacted, no certified ledger>: <actions suppressed>. Run /preflight at the start of your next session, and /compact-clean before you compact, and this will land normally.`
 
 **Scope is this repo only.** Dirty state elsewhere is reported, never written to.
 
@@ -200,7 +204,7 @@ Candidates print as `repr()` so a newline inside a filename shows as `\n` instea
 **Detached HEAD** (on a commit, not a branch — anything committed here belongs to nothing) ends Phase 1 and disables every commit and push for the whole run, Phase 4's and `/linear handoff`'s included; Phases 2–4 run report-only. Report `RUN STATUS partial` and name the SHA. **No `origin`** → the ladder terminates at `committed`; a coverage finding, not a parked branch; skip `git fetch`.
 
 - **Yours and uncommitted** → print the path list, then stage each path **individually and literally**: `git --literal-pathspecs add -- "<path1>" "<path2>" …`. The flag matters — git expands globs *inside* a quoted pathspec, so plain `git add -- "star*.txt"` also stages `star1.txt`. Then `git diff --cached --name-only` must equal the printed list set-for-set; any extra path aborts — `git restore --staged -- <the printed list>` (never bare `git reset`, which would also unstage whatever the operator had staged before the run) and report. Run `git diff --cached` and refuse if it contains a credential shape — stop and report, never redact. Commit with a real message.
-- **Not yours** → never stage it; report in Still dirty as pre-existing.
+- **Not yours** → never stage it; report in Still dirty as `pre-existing` if the baseline lists it, otherwise as `authorship unknown` (a compacted session's unbound edits land here, and calling them pre-existing would misstate whose they are).
 - **Committed but unpushed** → push preconditions, then Posture B. A stated reason not to push goes in the handoff, not in your head.
 - **Pushed without a PR** → PR preconditions, then Posture B — or record why it is parked.
 
@@ -285,7 +289,7 @@ Escalate **once**, in a single ticket with a disposition table, filed in the sam
 
 The transcript is about to disappear. Harvest what would cost the next session real time to rediscover.
 
-**Start from the compaction notes, if any.** Every `notes` path in this repo's `~/.claude/compact-clean/<key>.ledger.jsonl` records was written mid-session, while the reasoning was still live — earlier and sharper than anything recoverable now. Fold them in and dedupe against them; do not paraphrase what they already say well. A compacted session's harvest is mostly *their* content, and a harvest that silently omits them has lost the session's best material.
+**Start from the compaction notes, if any.** Use only the `notes` of the record bound in Phase 0 and of the records its `prior` chain names (each with the same `root` and `baseline_started_at`), and only a notes path that resolves inside `~/.claude/compact-clean/` and is not a symlink. Notes from any other record belong to another session or tree. They were written mid-session, while the reasoning was still live, earlier and sharper than anything recoverable now. Fold them in and dedupe against them; do not paraphrase what they already say well. A compacted session's harvest is mostly *their* content, and a harvest that silently omits them has lost the session's best material.
 
 Harvest:
 

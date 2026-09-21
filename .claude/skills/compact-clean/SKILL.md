@@ -2,13 +2,13 @@
 name: compact-clean
 version: "1.0"
 description: >-
-  Pre-compaction flush for a working session — run it right before /compact,
-  or when the context bar is getting full. Certifies which files this session
-  edited and writes the session's live judgment (decisions, traps, dead ends)
-  to a local ledger that survives compaction, so the post-compact session
-  resumes without re-deriving and /mise-en-place can still land the work.
-  Writes nothing into the repo and lands nothing. For the end-of-day closedown
-  that commits, pushes and PRs, use /mise-en-place.
+  Pre-compaction flush for a working session. Run it right before /compact, or
+  when the context bar is getting full. Certifies which files this session
+  edited and saves the session's live judgment (decisions, traps, dead ends) to
+  a local ledger that survives compaction, so the post-compact session resumes
+  without re-deriving and /mise-en-place can still land the work. Writes nothing
+  into the repo and lands nothing. For the end-of-day closedown that commits,
+  pushes and PRs, use /mise-en-place.
 trigger: /compact-clean
 ---
 
@@ -18,172 +18,129 @@ Compare against this file's version in frontmatter.
 
 # Compact Clean
 
-*Compaction is not the enemy. Unplanned compaction is.*
+## What compaction destroys
 
-## The test
-
-> **After the context is compacted, can this session still commit its own work — and can it avoid re-deciding what it already decided?**
-
-Everything here serves those two answers. Nothing else earns a line.
-
-## What compaction actually destroys
-
-This is the whole reason the skill exists, and it is narrower than it looks.
-
-`/preflight`'s baseline is a file on disk — compaction cannot touch it. `git status` at closedown is a live read — compaction cannot touch that either. So the *change set* ("what is dirty that wasn't at session start") survives intact.
-
-What dies is **authorship certification**: the session's own knowledge that *it* made those edits. Without it, "changed since session start" and "changed by this session" become indistinguishable, and a background build, a second agent, a teammate's editor or a stray script are all equally good explanations for a dirty path.
-
-`/mise-en-place` refuses to commit on that ambiguity — correctly. This skill removes the ambiguity by writing the certification down while the session still holds it.
-
-**Corollary:** the certification can only come from the model. No shell script can produce it. That is why the PreCompact hook below is a *partial* net and not a replacement for running this skill.
+`/preflight`'s baseline is a file and `git status` is a live read, so the change set survives compaction. What dies is **authorship**: this session's own knowledge that *it* made an edit. Without it, "changed since session start" and "changed by this session" are indistinguishable, and `/mise-en-place` correctly refuses to commit. This skill writes the authorship down while you still hold it. Only a model can do that, which is why the hook below is a partial net and not a substitute.
 
 ## Charter
 
-**ALWAYS** — this skill writes only to `~/.claude/compact-clean/`, outside every repo.
+**ALWAYS:** write only under `~/.claude/compact-clean/`, outside every repo, and only through `scripts/ledger.sh`. Announce what was written; do not ask.
 
-- Write the ledger record and the notes file. Announce the paths; do not ask.
+**NEVER**, whatever the announcement or approval:
 
-**NEVER** — no announcement and no approval makes these allowed.
-
-- **Commit, stage, push, or open a PR.** This skill does not touch the ladder. It runs mid-session, often unattended, and a mid-session commit is the work, not housekeeping.
-- **Write anything inside a repo.** Not `journal/`, not `.linear/`, not a scratch file. The ledger is local-only, always, even in a repo that has opted into an in-repo journal. It may fire automatically; automatic writes into a client's tree are how you end up explaining yourself.
-- **Mutate a ticket, post a status, or notify anyone.** Nothing here crosses the wire.
-- **Certify a path the session did not edit.** An uncertain path is recorded as a candidate, never as certified. Over-certifying is the one failure here that can cost someone their work, because `/mise-en-place` trusts this file.
-- **Delete or rewrite an earlier ledger record.** Append only. A session may compact many times.
+- **Commit, stage, push, or open a PR.** This runs mid-session; a mid-session commit is the work, not housekeeping.
+- **Write inside a repo.** Not `journal/`, not `.linear/`, not a scratch file.
+- **Mutate a ticket, post a status, or notify anyone.**
+- **Certify a path this session did not deliberately edit.** Over-certifying is the one failure here that can cost someone their work, because `/mise-en-place` commits what this file certifies. Unsure means leave it out: it stays a candidate.
+- **Hand-write or rewrite a ledger record.** The script appends; records are never edited.
 
 ## Invocation
 
 ```
-/compact-clean              # certify + write notes, then tell you it is safe to /compact
-/compact-clean --evidence   # snapshot only: no certification, no notes (what the hook does)
+/compact-clean              # certify + notes, then hand you the exact /compact line
+/compact-clean --evidence   # snapshot only: nothing certified, nothing will land
 ```
 
-Run it **immediately before** `/compact`. Anything you do between the two is uncertified.
+Run it **immediately before** `/compact`. Anything done between the two is uncertified.
+
+Each call below is self-contained: it derives the key, tree and baseline itself, byte-identical to `/preflight`, so nothing needs to persist between shell calls.
 
 ## Procedure
 
-### Phase 1 — Derive the key and read the baseline (no writes)
-
-The ledger must land beside the baseline it will be read with, so the key derivation is **byte-identical to `/preflight` Step 3 and `/mise-en-place` Phase 0**. Never reconstruct it from memory — a one-character deviation writes a ledger nothing will ever read.
+### Phase 1: Probe
 
 ```bash
-root=$(git rev-parse --show-toplevel) || exit 1
-raw=$(git remote get-url origin 2>/dev/null | head -1); [ -z "$raw" ] && raw=$root
-canon=$(printf '%s' "$raw" | tr 'A-Z' 'a-z' \
-  | sed -E 's#^([a-z]+://([^/@]+@)?[^/:]+):[0-9]+/#\1/#; s#^[a-z]+://##; s#^[^@/]+@##; s#:#/#; s#/+$##; s#\.git$##; s#/+$##')
-stem=$(printf '%s' "$canon" | tr -c 'a-z0-9._-' '-' | sed -E 's#-+#-#g; s#^[-.]+##; s#[-.]+$##')
-hash=$(printf '%s' "$canon" | { shasum 2>/dev/null || sha1sum 2>/dev/null; } | cut -c1-12)
-key="${stem:-repo}-${hash}"
-tree=$(printf '%s' "$root" | { shasum 2>/dev/null || sha1sum 2>/dev/null; } | cut -c1-12)
+bash "$HOME/.claude/skills/compact-clean/scripts/ledger.sh" probe
 ```
 
-Read `$HOME/.claude/preflight/${key}.${tree}.session-start.json`. The baseline is **per-tree** as of `/preflight` 5.3 — `$key` alone names whichever sibling worktree wrote last, so reading it would certify against another tree. If that file is missing, fall back to the same root-glob `/mise-en-place` uses: scan `~/.claude/preflight/*.session-start.json` and take the one whose top-level `root` field equals `$root` (never by grep — `worktrees` lists every sibling path, so a text match confirms a sibling's file). That fallback also recovers a baseline left by a pre-5.3 `/preflight`, which used the un-treed name. Either way **verify its `root` matches `$root`**; a mismatch means it belongs to a sibling worktree, so treat it as absent.
+States the root, key, baseline and ledger path. **Baseline ABSENT** means nothing certified now can ever land (`/mise-en-place` binds every record to the baseline in force). Still run Phase 3 for the notes, and tell the operator to run `/preflight`.
 
-**No baseline is not a reason to stop.** Write the ledger anyway with `"baseline": false` — the certification is still the scarce thing, and `/mise-en-place` can pair it with a baseline written later. Say plainly that closedown will still be report-only until `/preflight` has run.
+Under `--evidence`, run `bash "$HOME/.claude/skills/compact-clean/scripts/ledger.sh" evidence </dev/null` instead, relay its output, and stop.
 
-**Done when:** `$key`, `$root` and baseline presence are resolved and stated in one line.
+### Phase 2: List your edits
 
-### Phase 2 — Certify authorship (the load-bearing phase)
+List every path **you deliberately changed** in the live part of this session: written, edited, created, or changed by a command whose purpose was to change that file (`sed -i` on it, a heredoc into it).
 
-List every path **this session edited**, from your own memory of the session — files you wrote, changed, or created, whether through an edit tool or through a shell command. Under a shell-first working style the transcript holds no `file_path` fields at all, so this list cannot be derived mechanically; it is yours to produce.
+- **Only what you remember first-hand.** Edits made before an earlier compaction are carried by `--prior` (Phase 4), never re-listed from a summary's description of them.
+- **Side effects are not edits.** A lockfile from an install, formatter or codegen output over a glob, build artifacts: leave them out. They fall into candidates and are reported, never committed.
+- **Deletions are never certified.** The script drops them; closedown handles them deliberately.
 
-Then intersect it with reality. Read the tree with **exactly the flags `/preflight` used to write the baseline** — `--no-optional-locks ... -z -uall`. Without `-uall` a new file inside a new directory collapses to `?? newdir/`, which never compares equal to the full path the baseline stored, so every such file is misread as a candidate:
+Absolute or relative paths are both fine; the script normalizes them to repo-relative and rejects anything outside the repo.
+
+### Phase 3: Harvest the volatile half
+
+Write down only what a fresh reader could not recover from the diff:
+
+- **Decisions and their why**, especially ones already litigated, so they are not reopened.
+- **Traps**: what looked right and wasn't, with the symptom that gave it away.
+- **Dead ends**, so they are not retried.
+- **Open threads**: what you were mid-way through, and the next concrete step.
+- **Operator constraints**: a veto, a deadline, a "don't push that".
+
+Prose, not a transcript. Nothing worth keeping means no notes, stated in one line.
+
+### Phase 4: Write the record
 
 ```bash
-mkdir -p "$HOME/.claude/compact-clean"
-tmp="$HOME/.claude/compact-clean/.${key}.${tree}.porcelain.$$"   # never /tmp: the charter keeps every
-trap 'rm -f "$tmp"' EXIT                                        # write under ~/.claude/compact-clean/,
-git --no-optional-locks status --porcelain -z -uall > "$tmp"     # and a fixed name collides across sessions
-                                                                 # -z: a filename may contain a newline
+bash "$HOME/.claude/skills/compact-clean/scripts/ledger.sh" certify [--prior <id>] -- <path> <path> ... <<'CC_NOTES_END'
+<notes from Phase 3>
+CC_NOTES_END
 ```
 
-Classify each path you named:
+With no notes, end the command with `</dev/null` instead of the heredoc. Always supply stdin one way or the other.
 
-- **In your list and dirty now and absent from the baseline** → `certified`. This is the set `/mise-en-place` may commit.
-- **In your list but present in the baseline** → `pre-existing`. You edited a file that was already dirty; authorship of the *earlier* change is not yours. Record it as a candidate, never certified.
-- **Dirty now but not in your list** → `candidate`. Something changed it and you cannot say what. Record it so closedown can report it as still dirty.
-- **In your list but clean now** → dropped, with a one-line note. It was reverted or already committed.
+**`--prior <id>`**: pass the record id from an earlier `/compact-clean` in this session, **only if you can see it in your own context** (the compaction summary, or your own earlier output). Never take an id from the ledger file: an id you did not see was written by another session, and carrying it would certify that session's work as yours. The script carries forward the prior record's paths that are still dirty and still certifiable, so the newest record is cumulative. No visible id means no `--prior`; earlier edits are then not carried, which fails safe.
 
-**State the certified list to the operator before writing it.** This is the one moment a wrong entry is cheap to fix; after compaction you will not remember enough to catch it.
+**Corrections.** If the operator says a certified path is not yours, re-run with `--prior <the id just printed> --drop <path>`. The newer record supersedes.
 
-**Under `--evidence`, skip this phase entirely** and record every dirty-not-in-baseline path as `candidate`. Certification requires a model that remembers the session; a hook has neither.
+The script classifies each path you named: **Certified** (dirty now, absent from the baseline), **Pre-existing** (dirty before the session; never certified), **Dropped** (clean now, a deletion, outside the repo, `--drop`, or no baseline). Everything else dirty is a **Candidate**: reported at closedown, never committed.
 
-**Done when:** the four buckets are printed, certified first.
+### Phase 5: Hand off
 
-### Phase 3 — Harvest the volatile half
+Relay the script's report verbatim. It ends with the exact command to run:
 
-The change set survives compaction. Your reasoning does not. Write down only what a fresh reader could not recover from the diff:
-
-- **Decisions and their why** — especially the ones already litigated. This is what stops the post-compact session reopening a settled question.
-- **Traps** — the thing that looked right and wasn't, with the symptom that gave it away.
-- **Dead ends** — approaches ruled out, so they are not retried at cost.
-- **Open threads** — what you were mid-way through, and the next concrete step.
-- **Anything the operator said that constrains the work** — a veto, a deadline, a "don't push that".
-
-Skip anything already in the diff, the commit messages, or a ticket. Prose, not a transcript. If the session produced nothing worth keeping, say so in one line and write no notes file — an empty notes file reads as a lost session.
-
-**Done when:** notes are written, or their absence is stated.
-
-### Phase 4 — Write the ledger (append only)
-
-```bash
-mkdir -p "$HOME/.claude/compact-clean"
-ledger="$HOME/.claude/compact-clean/${key}.ledger.jsonl"
+```
+Safe to compact. Run:  /compact Keep this line verbatim: compact-clean record <id>
 ```
 
-Append **one JSON object on one line**, built with `python3` — never string-concatenated, because a path may contain quotes, backslashes or a newline and a malformed line poisons every later read:
+Tell the operator to run that line as written. The instruction keeps the record id in the compaction summary, and `/mise-en-place` trusts only a record whose id it can see. If the id is lost, nothing is certified and closedown falls back to report-only, which is the safe direction.
+
+If the script exited non-zero, say the record was **not** written and that the certification exists only in this context: compacting now loses it.
+
+## Ledger format
+
+One JSON object per line in `~/.claude/compact-clean/<key>.ledger.jsonl`, append-only. `<key>` is shared by every worktree of an origin; `root` tells them apart.
 
 | field | meaning |
 |---|---|
-| `schema` | `1`. A reader refuses what it does not understand rather than misreading a renamed field. |
-| `writer` | `compact-clean 1.0` or `compact-clean 1.0 (hook)`. |
-| `root` | repo toplevel. The identity test — the key is shared by every worktree of one origin. |
-| `session_id` | groups records from one session across repeated compactions. |
-| `written_at` | epoch seconds. Staleness is the reader's call, not this skill's. |
-| `head_sha` | `HEAD` at write time, so a reader can bound commits made after it. |
-| `certified` | `true` only from Phase 2. `--evidence` and the hook always write `false`. |
-| `paths` | the certified list. Empty under `--evidence`. |
-| `candidates` | dirty-not-in-baseline paths this run could not certify. |
-| `baseline` | whether a `root`-matching baseline existed. |
-| `notes` | path to the notes file, or `null`. |
-| `trigger` | what wrote the record: absent for a manual run, `precompact-hook` from the `PreCompact` hook. |
+| `schema` | `1` |
+| `writer` | `compact-clean 1.0`, or `compact-clean 1.0 (hook)` |
+| `record_id` | random 12-hex id; the binding `/mise-en-place` checks against its own context |
+| `prior` | the `record_id` carried forward, or `null` |
+| `root` | repo toplevel |
+| `session_id` | Claude Code session id; hook records only, `null` for manual runs (a model cannot read its own) |
+| `written_at` | epoch seconds |
+| `baseline_started_at` | `started_at` of the baseline in force, or `null` if none |
+| `head_sha` | `HEAD` at write time |
+| `certified` | `true` only from `certify` with a baseline and at least one path |
+| `paths` | certified repo-relative paths |
+| `candidates` | dirty paths absent from the baseline and not certified |
+| `baseline` | whether a valid baseline was found |
+| `notes` | path to the notes file, or `null` |
+| `trigger` | `manual`, `evidence`, or `hook-<auto\|manual\|unknown>` |
 
-Open the ledger in **append mode** (`open(ledger, "a")`) and write the finished line in a single call. Never build a replacement file and `mv` it into place: that destroys every earlier record, and this ledger is append-only because one session may compact many times. Serialise the whole line in memory first and write it only if non-empty — a half-written line is worse than no line, because it looks like data.
+## The PreCompact hook: a partial net
 
-**Done when:** the record is appended and its path reported.
+Auto-compaction fires without warning, which is exactly the long session this skill protects. `PreCompact` runs a command hook: a shell, no model. It therefore records evidence only (`certified: false`): the candidate set and the moment of compaction, so closedown reports accurately instead of reporting clean. It cannot preserve the ability to land work, and it captures no notes. A manual `/compact` fires it too, adding an uncertified record right after yours; that is harmless.
 
-### Phase 5 — Report and hand off to /compact
-
-Six lines, no more:
-
-```
-COMPACT CLEAN
-Certified   <n> paths (listed)
-Candidates  <n> — reported at closedown, never committed
-Notes       <path> | none — nothing worth keeping
-Baseline    present | absent — closedown is report-only until /preflight runs
-Safe to compact.
-```
-
-End on `Safe to compact.` only when the ledger write succeeded. If it failed, say so in its place and say the certification is still in this context — compacting now loses it.
-
-## The PreCompact hook — a partial net, and why
-
-Auto-compaction fires without warning when the context fills, which is exactly the long session this skill protects. A `PreCompact` command hook catches that case.
-
-**It cannot certify.** Prompt-based hooks — the kind that can reason — support only `Stop`, `SubagentStop`, `UserPromptSubmit` and `PreToolUse`; `PreCompact` is a command hook, so it gets a shell and no model. It therefore runs the `--evidence` path: snapshot porcelain, `HEAD` and the timestamp, mark `certified: false`.
-
-That is still worth having. It preserves the candidate set and the exact moment of compaction, so closedown can report accurately instead of reporting clean. But it does **not** preserve the ability to land the work, and it captures no notes. Only running this skill does that.
-
-Install `hooks/precompact-snapshot.sh` and wire it into `~/.claude/settings.json`:
+Install: copy this skill directory to `~/.claude/skills/compact-clean/` (the path below assumes it), then add to `~/.claude/settings.json`:
 
 ```json
 { "hooks": { "PreCompact": [ { "hooks": [ { "type": "command",
-  "command": "$HOME/.claude/skills/compact-clean/hooks/precompact-snapshot.sh" } ] } ] } }
+  "command": "bash \"$HOME/.claude/skills/compact-clean/scripts/ledger.sh\" hook" } ] } ] } }
 ```
 
-The script exits 0 on every path, including outside a git repo. A hook that fails a compaction to protect a bookkeeping file has its priorities backwards.
+Hook mode exits 0 on every path. Failing a compaction to protect a bookkeeping file has its priorities backwards.
 
 ## Relationship to the other skills
 
@@ -193,5 +150,3 @@ The script exits 0 on every path, including outside a git repo. A hook that fail
 | **`/compact-clean`** | **before compaction** | **no** | **no** |
 | `/housekeeping` | mid-task, lost | no | on approval |
 | `/mise-en-place` | end of day | yes, to PR | on approval |
-
-`/preflight` opens the session and `/mise-en-place` closes it; this one keeps the thread intact in between. It is not a mini-closedown — it deliberately lands nothing, because the session is not over.
