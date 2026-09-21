@@ -87,11 +87,11 @@ bash "$HOME/.claude/skills/compact-clean/scripts/ledger.sh" certify [--prior <id
 CC_NOTES_END
 ```
 
-With no notes, end the command with `</dev/null` instead of the heredoc. Always supply stdin one way or the other.
+With no notes, end the command with `</dev/null` instead of the heredoc. Always supply stdin one way or the other. Options go **before** `--`, each as its own word (`--drop path`, never `--drop=path`); the script refuses anything else rather than guess, because a misread `--drop` would re-certify the file being disclaimed.
 
 **`--prior <id>`**: pass the record id from an earlier `/compact-clean` in this session, **only if you can see it in your own context** (the compaction summary, or your own earlier output). Never take an id from the ledger file: an id you did not see was written by another session, and carrying it would certify that session's work as yours. The script carries forward the prior record's paths that are still dirty and still certifiable, so the newest record is cumulative. No visible id means no `--prior`; earlier edits are then not carried, which fails safe.
 
-**Corrections.** If the operator says a certified path is not yours, re-run with `--prior <the id just printed> --drop <path>`. The newer record supersedes.
+**Corrections.** If the operator says a certified path is not yours, re-run with `certify --prior <the id just printed> --drop <path> </dev/null`. The newer record supersedes, including when it drops every path: closedown never falls back to an older record.
 
 The script classifies each path you named: **Certified** (dirty now, absent from the baseline), **Pre-existing** (dirty before the session; never certified), **Dropped** (clean now, a deletion, outside the repo, `--drop`, or no baseline). Everything else dirty is a **Candidate**: reported at closedown, never committed.
 
@@ -104,6 +104,8 @@ Safe to compact. Run:  /compact Keep this line verbatim: compact-clean record <i
 ```
 
 Tell the operator to run that line as written. The instruction keeps the record id in the compaction summary, and `/mise-en-place` trusts only a record whose id it can see. If the id is lost, nothing is certified and closedown falls back to report-only, which is the safe direction.
+
+If the report says **Nothing certified** or **Baseline ABSENT**, say so plainly: no work from this record can land, though its notes still will. Hand over the `/compact` line anyway; the id is what binds the notes.
 
 If the script exited non-zero, say the record was **not** written and that the certification exists only in this context: compacting now loses it.
 

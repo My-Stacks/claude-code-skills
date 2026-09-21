@@ -206,23 +206,34 @@ prior = None
 record_id = secrets.token_hex(6)
 
 if mode == 'certify':
+    # Strict: an option this loop does not recognise must never fall through to the path
+    # list. `--drop=x` or a `--drop` after `--` would otherwise leave the drop set empty,
+    # and --prior would carry forward the very path the operator just disclaimed.
     drops, names, i = set(), [], 0
     while i < len(args):
         a = args[i]
-        if a == '--prior' and i + 1 < len(args):
-            prior = args[i + 1]
-            i += 2
-        elif a == '--drop' and i + 1 < len(args):
-            r = rel(args[i + 1])
-            if r:
+        if a in ('--prior', '--drop'):
+            if i + 1 >= len(args) or args[i + 1].startswith('-'):
+                fail('%s needs a value: %s <value>' % (a, a))
+            if a == '--prior':
+                prior = args[i + 1]
+            else:
+                r = rel(args[i + 1])
+                if r is None:
+                    fail('--drop path is outside the repo: %s' % args[i + 1])
                 drops.add(r)
             i += 2
         elif a == '--':
             names.extend(args[i + 1:])
             break
+        elif a.startswith('-'):
+            fail('unrecognized option %s. Options are --prior ID and --drop PATH, before `--`.' % a)
         else:
             names.append(a)
             i += 1
+    for n in names:
+        if n.split('=', 1)[0] in ('--prior', '--drop'):
+            fail('%s appears after `--`, where it would be read as a path. Put options before `--`.' % n)
 
     chosen = []
     for n in names:
@@ -320,12 +331,16 @@ print('Candidates    %d  (reported at closedown, never committed)' % len(candida
 print('Notes         ' + (notes_path or 'none'))
 for w in out:
     print(w)
-if not baseline:
-    print('Baseline      ABSENT (%s): this record can never land work. Run /preflight.' % base_why)
-elif mode == 'evidence':
+if mode == 'evidence':
     print('Evidence only. Nothing certified, nothing will land from this record.')
-else:
-    print('Safe to compact. Run:  /compact Keep this line verbatim: compact-clean record %s' % record_id)
+    sys.exit(0)
+if not baseline:
+    print('Baseline      ABSENT (%s): no work from this record can land. Run /preflight.' % base_why)
+elif not certified:
+    print('Nothing certified: no work from this record can land. Re-check Phase 2 before you compact.')
+# The id is the binding for the notes as well as the paths, so hand it over every time.
+print('%s Run:  /compact Keep this line verbatim: compact-clean record %s'
+      % ('Safe to compact.' if certified else 'Then', record_id))
 PY
 
 python3 -c "$PY" "$mode" "$root" "$key" "$tree" "$sess_id" "$payload_trigger" "$@"
