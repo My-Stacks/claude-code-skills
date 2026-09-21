@@ -158,6 +158,24 @@ echo again > b
 CLAUDE_CODE_SESSION_ID=$S1 bash "$L" certify -- b </dev/null >/dev/null
 eq "$(last 'd["paths"]')" "[]" "a disclaimer survives a re-run of /preflight"
 
+# --- carry-forward stops at a new baseline ---
+R="$T/r13"; repo "$R"; cd "$R"; baseline "$R" 120; echo s > a
+CLAUDE_CODE_SESSION_ID=$S1 bash "$L" certify -- a </dev/null >/dev/null
+baseline "$R" 5                      # a new /preflight while a is still dirty
+eq "$(CLAUDE_CODE_SESSION_ID=$S1 bindq 'v["bound"]')" None "a certification does not bind under a newer baseline"
+CLAUDE_CODE_SESSION_ID=$S1 bash "$L" certify </dev/null >/dev/null
+eq "$(last 'd["paths"]')" "[]" "nor is it carried into one"
+
+# --- a torn ledger line fails closed ---
+R="$T/r14"; repo "$R"; cd "$R"; baseline "$R" 120; echo s > a; echo s > b
+CLAUDE_CODE_SESSION_ID=$S1 bash "$L" certify -- a b </dev/null >/dev/null
+CLAUDE_CODE_SESSION_ID=$S1 bash "$L" certify --drop b </dev/null >/dev/null
+led=$(ls "$HOME"/.claude/compact-clean/*.ledger.jsonl)
+python3 -c 'import sys; p=sys.argv[1]; L=open(p).read().splitlines(True); L[-1]=L[-1][:40]+"\n"; open(p,"w").writelines(L)' "$led"
+CLAUDE_CODE_SESSION_ID=$S1 bash "$L" bind >/dev/null 2>&1; eq "$?" 1 "bind refuses a torn newest record instead of falling back"
+CLAUDE_CODE_SESSION_ID=$S1 bash "$L" certify -- a </dev/null >/dev/null 2>&1; eq "$?" 1 "certify refuses a torn ledger"
+rm -f "$led"
+
 # --- probe ---
 eq "$(bash "$L" probe | grep -c '^Ledger ')" 1 "probe states the ledger path"
 

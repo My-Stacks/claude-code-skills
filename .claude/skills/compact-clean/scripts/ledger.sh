@@ -156,18 +156,24 @@ def find_baseline():
     return None, None, 'none for this tree'
 
 def load_records():
-    """Every parseable record, in file order. File order, not written_at, decides which
-    record is newest: written_at counts whole seconds and ties."""
+    """Every record, in file order. File order, not written_at, decides which record is
+    newest: written_at counts whole seconds and ties. An unparseable line fails closed:
+    skipping it would silently promote the record before it, which may still certify a
+    path the newest one disclaimed."""
     recs = []
     try:
-        with open(LEDGER, encoding='utf-8') as f:
-            for line in f:
+        with open(LEDGER, encoding='utf-8', errors='replace') as f:
+            for n, line in enumerate(f, 1):
+                if not line.strip():
+                    continue
                 try:
                     d = json.loads(line)
                 except Exception:
-                    continue
-                if isinstance(d, dict):
-                    recs.append(d)
+                    d = None
+                if not isinstance(d, dict):
+                    fail('ledger %s line %d is unparseable, so no record can be trusted; nothing bound or '
+                         'written. It is local bookkeeping: delete the file to reset.' % (LEDGER, n))
+                recs.append(d)
     except OSError:
         pass
     return recs
@@ -279,6 +285,11 @@ def bound_record():
             or not isinstance(r.get('fingerprints'), dict):
         return None, 'newest certification record %s certifies nothing' % r.get('record_id')
     return r, None
+
+if mode in ('verify-staged', 'bind'):
+    # Readers wait for an in-flight append: reading mid-write would see the record
+    # before a fresh --drop and approve the path it disclaims.
+    _lock = Lock().__enter__()
 
 if mode == 'verify-staged':
     names = args[1:] if args[:1] == ['--'] else args
