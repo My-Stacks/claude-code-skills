@@ -1,5 +1,6 @@
 ---
 name: design-qa-lite
+version: "1.0"
 description: Cross-agent portable design QA skill. Use when reviewing a deployed web URL for responsive layout, accessibility, Core Web Vitals, and SEO basics in any agent that supports markdown skills (Cursor, Codex, Gemini CLI, Claude Code without the design-qa plugin). Lighter than the full design-qa plugin but follows the same workflow.
 ---
 
