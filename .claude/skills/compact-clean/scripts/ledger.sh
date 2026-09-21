@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
-# compact-clean ledger tool. The one implementation behind both the /compact-clean
-# skill and the PreCompact hook, so the two cannot drift apart.
+# compact-clean ledger tool. The one implementation behind the /compact-clean skill,
+# the PreCompact hook, and /mise-en-place's read of the ledger, so none can drift.
 #
-#   ledger.sh probe                     resolve root, key, tree and baseline; writes nothing
-#   ledger.sh certify [--prior ID] [--drop PATH]... [--] [PATH...]
-#                                       append one certified record; notes, if any, on stdin
+#   ledger.sh probe                     resolve root, key, tree, baseline, session; no writes
+#   ledger.sh certify [--drop PATH]... [--] [PATH...]
+#                                       append one certification record; notes on stdin
 #   ledger.sh evidence                  append one uncertified snapshot
 #   ledger.sh hook                      PreCompact hook: JSON payload on stdin
+#   ledger.sh bind                      closedown verdict for THIS session, as JSON; no writes
 #
-# Hook mode exits 0 on every path: failing a compaction to protect a bookkeeping file
-# has its priorities backwards. Manual modes exit non-zero on failure, because a model
-# that believes a record was written when it was not loses the session's work.
+# Records bind to a session mechanically, by CLAUDE_CODE_SESSION_ID, never by an id a
+# model has merely seen. Hook mode exits 0 on every path: failing a compaction to protect
+# a bookkeeping file has its priorities backwards. Every other mode exits non-zero on
+# failure, because a model that believes a record exists when it does not loses work.
 
 set -u
 mode=${1:-}
@@ -22,15 +24,15 @@ die() {
   exit 1
 }
 
-case "$mode" in probe|certify|evidence|hook) ;; *) die "usage: ledger.sh probe|certify|evidence|hook" ;; esac
+case "$mode" in probe|certify|evidence|hook|bind) ;; *) die "usage: ledger.sh probe|certify|evidence|hook|bind" ;; esac
 [ -n "${HOME:-}" ] || die "HOME is unset"
 command -v python3 >/dev/null 2>&1 || die "python3 not found"
 
-sess_id='' payload_trigger=''
+sess_id=${CLAUDE_CODE_SESSION_ID:-} payload_trigger=''
 if [ "$mode" = hook ]; then
-  # cwd, session_id and trigger arrive ONLY in the stdin payload; there is no session
-  # id env var. One field per line, read with sed: `read a b` word-splits, so a cwd
-  # containing spaces would bleed into the next field.
+  # The hook's cwd, session_id and trigger arrive ONLY in the stdin payload. One field
+  # per line, read with sed: `read a b` word-splits, so a cwd containing spaces would
+  # bleed into the next field.
   payload=$(cat 2>/dev/null || true)
   fields=$(printf '%s' "$payload" | python3 -c 'import json, sys
 try: d = json.load(sys.stdin)
@@ -61,8 +63,9 @@ key="${stem:-repo}-${hash}"
 tree=$(printf '%s' "$root" | { shasum 2>/dev/null || sha1sum 2>/dev/null; } | cut -c1-12)
 
 read -r -d '' PY <<'PY'
-import glob, json, os, secrets, subprocess, sys, time
+import glob, json, os, secrets, subprocess, sys, time, unicodedata
 
+sys.stdout.reconfigure(errors='backslashreplace')
 mode, root, key, tree, sess, ptrig = sys.argv[1:7]
 args = sys.argv[7:]
 HOME = os.environ['HOME']
@@ -71,7 +74,6 @@ DIR = os.path.join(HOME, '.claude', 'compact-clean')
 LEDGER = os.path.join(DIR, key + '.ledger.jsonl')
 MAX_AGE = 16 * 3600
 now = int(time.time())
-out = []
 
 def fail(msg):
     if mode == 'hook':
@@ -80,7 +82,7 @@ def fail(msg):
     sys.exit(1)
 
 def git(*a):
-    return subprocess.run(['git', *a], capture_output=True)
+    return subprocess.run(['git', '-C', root, *a], capture_output=True)
 
 def parse_porcelain(entries):
     """Porcelain -z records to ({path: XY}, {rename/copy sources}), or None if malformed.
@@ -133,7 +135,7 @@ def load_json(path):
 def find_baseline():
     """Same lookup as /mise-en-place Phase 0: the per-tree file if it exists; only when
     it is missing, a scan matched on the root FIELD (never a filename or grep), newest
-    started_at first. Returns (doc, path, reason_if_absent)."""
+    valid started_at. Returns (doc, path, reason_if_absent)."""
     primary = os.path.join(PRE, '%s.%s.session-start.json' % (key, tree))
     if os.path.exists(primary):
         d = load_json(primary)
@@ -149,6 +151,8 @@ def find_baseline():
     return None, None, 'none for this tree'
 
 def load_records():
+    """Every parseable record, in file order. File order, not written_at, decides which
+    record is newest: written_at counts whole seconds and ties."""
     recs = []
     try:
         with open(LEDGER, encoding='utf-8') as f:
@@ -163,8 +167,13 @@ def load_records():
         pass
     return recs
 
+def blob(p):
+    """Content fingerprint of a working-tree file, the same way at certify and at bind."""
+    r = git('hash-object', '--', p)
+    return r.stdout.decode().strip() if r.returncode == 0 else None
+
 def rel(p):
-    """A path the model named, absolute or relative to its cwd, as a repo-relative path,
+    """A path the model named, relative to its cwd or absolute, as a repo-relative path,
     or None if it lies outside the repo. Resolves directory symlinks only: git tracks a
     symlinked file as itself, not as its target."""
     a = p if os.path.isabs(p) else os.path.join(os.getcwd(), p)
@@ -172,6 +181,26 @@ def rel(p):
     a = os.path.join(os.path.realpath(os.path.dirname(a)), os.path.basename(a))
     r = os.path.relpath(a, os.path.realpath(root))
     return None if r == '.' or r == '..' or r.startswith('..' + os.sep) else r
+
+def resolve(p, known):
+    """Resolve against the cwd first, then as repo-relative: a model standing in a
+    subdirectory copies repo-relative paths straight from this script's own reports."""
+    cands = [c for c in (rel(p), None if os.path.isabs(p) else rel(os.path.join(root, p))) if c]
+    for c in cands:
+        if c in known:
+            return c
+    return cands[0] if cands else None
+
+def near(p, pool):
+    f = unicodedata.normalize('NFC', p).casefold()
+    return [q for q in pool if unicodedata.normalize('NFC', q).casefold() == f and q != p]
+
+def mine(r, baseline):
+    """This session's certification records for this tree and baseline window."""
+    return (r.get('schema') == 1 and r.get('session_id') == sess and sess
+            and r.get('root') == root and r.get('trigger') == 'manual'
+            and baseline is not None and r.get('baseline_started_at') == baseline['started_at']
+            and isinstance(r.get('written_at'), int) and 0 <= now - r['written_at'] < MAX_AGE)
 
 baseline, base_path, base_why = find_baseline()
 
@@ -181,69 +210,130 @@ if mode == 'probe':
     if baseline:
         print('Baseline  %s  started %.1fh ago' % (base_path, (now - baseline['started_at']) / 3600))
     else:
-        print('Baseline  ABSENT (%s): nothing certified now can ever land; run /preflight' % base_why)
-    print('Ledger    ' + LEDGER)
+        print('Baseline  ABSENT (%s): nothing certified now can land; run /preflight' % base_why)
+    print('Session   ' + ('bound (CLAUDE_CODE_SESSION_ID present)' if sess else
+                         'UNAVAILABLE: CLAUDE_CODE_SESSION_ID is not set, so nothing can be certified'))
     sys.exit(0)
 
+# Decoded with errors='replace' to match how /preflight decodes the baseline: a name
+# that is not valid UTF-8 then compares equal on both sides instead of reading as new.
 st = git('--no-optional-locks', 'status', '--porcelain', '-z', '-uall')
 if st.returncode:
-    fail('git status failed, so the tree state is unknown; no record written')
-parsed = parse_porcelain(st.stdout.decode('utf-8', 'surrogateescape').split('\0'))
+    fail('git status failed, so the tree state is unknown; nothing written')
+parsed = parse_porcelain(st.stdout.decode('utf-8', 'replace').split('\0'))
 if parsed is None:
-    fail('could not parse git status output; no record written')
-live, _ = parsed
+    fail('could not parse git status output; nothing written')
+live, live_src = parsed
 
 base_paths = set()
 if baseline:
     b_live, b_src = parse_porcelain(baseline['porcelain'])
     base_paths = set(b_live) | b_src
 
-def ok_to_certify(p):
+def certifiable(p):
     return p in live and p not in base_paths and 'D' not in live[p]
 
-certified, carried, pre, dropped, notes_path = [], [], [], [], None
-prior = None
+if mode == 'bind':
+    verdict = {'session_id_present': bool(sess), 'baseline': bool(baseline),
+               'bound': None, 'reason': None, 'notes': []}
+    recs = load_records()
+    for r in recs:
+        n = r.get('notes')
+        rid = r.get('record_id')
+        if (sess and r.get('session_id') == sess and r.get('root') == root
+                and isinstance(r.get('written_at'), int) and 0 <= now - r['written_at'] < MAX_AGE
+                and isinstance(n, str) and isinstance(rid, str)
+                and n == os.path.join(DIR, '%s.%s.%s.notes.md' % (key, tree, rid))
+                and os.path.isfile(n) and not os.path.islink(n)):
+            verdict['notes'].append(n)
+    if not sess:
+        verdict['reason'] = 'CLAUDE_CODE_SESSION_ID not set: no record can bind'
+    elif not baseline:
+        verdict['reason'] = 'no valid baseline (%s)' % base_why
+    else:
+        own = [r for r in recs if mine(r, baseline)]
+        if not own:
+            verdict['reason'] = 'no certification record from this session under this baseline'
+        else:
+            r = own[-1]   # the newest only: never an older record, never a union
+            if r.get('certified') is not True or not isinstance(r.get('paths'), list) \
+                    or not isinstance(r.get('hashes'), dict):
+                verdict['reason'] = 'newest certification record %s certifies nothing' % r.get('record_id')
+            else:
+                ok, rejected = [], []
+                for p in r['paths']:
+                    if not isinstance(p, str):
+                        continue
+                    if not certifiable(p):
+                        rejected.append({'path': p, 'reason': 'not a live, non-deleted path absent from the baseline'})
+                    elif blob(p) != r['hashes'].get(p):
+                        rejected.append({'path': p, 'reason': 'content changed since it was certified'})
+                    else:
+                        ok.append(p)
+                verdict['bound'] = {'record_id': r.get('record_id'), 'written_at': r['written_at'],
+                                    'paths': ok, 'rejected': rejected}
+    print(json.dumps(verdict, indent=1, ensure_ascii=False))
+    sys.exit(0)
+
+if mode in ('certify', 'evidence') and not sess:
+    fail('CLAUDE_CODE_SESSION_ID is not set, so no record can be bound to this session; '
+         'nothing written. The certification and notes exist only in this context.')
+
+certified, carried, pre, dropped, changed, notes_path = [], [], [], [], [], None
+hashes, sticky = {}, set()
 record_id = secrets.token_hex(6)
 
 if mode == 'certify':
     # Strict: an option this loop does not recognise must never fall through to the path
-    # list. `--drop=x` or a `--drop` after `--` would otherwise leave the drop set empty,
-    # and --prior would carry forward the very path the operator just disclaimed.
-    drops, names, i = set(), [], 0
+    # list, where `--drop=x` would leave the drop set empty and carry the file forward.
+    raw_drops, names, i = [], [], 0
     while i < len(args):
         a = args[i]
-        if a in ('--prior', '--drop'):
+        if a == '--drop':
             if i + 1 >= len(args) or args[i + 1].startswith('-'):
-                fail('%s needs a value: %s <value>' % (a, a))
-            if a == '--prior':
-                prior = args[i + 1]
-            else:
-                r = rel(args[i + 1])
-                if r is None:
-                    fail('--drop path is outside the repo: %s' % args[i + 1])
-                drops.add(r)
+                fail('--drop needs a value: --drop <path>')
+            raw_drops.append(args[i + 1])
             i += 2
+        elif a == '--prior':
+            fail('--prior is gone: records now bind by session automatically. Drop the option.')
         elif a == '--':
             names.extend(args[i + 1:])
             break
         elif a.startswith('-'):
-            fail('unrecognized option %s. Options are --prior ID and --drop PATH, before `--`.' % a)
+            fail('unrecognized option %s. The only option is --drop PATH, before `--`.' % a)
         else:
             names.append(a)
             i += 1
     for n in names:
-        if n.split('=', 1)[0] in ('--prior', '--drop'):
+        if n.split('=', 1)[0] in ('--drop', '--prior'):
             fail('%s appears after `--`, where it would be read as a path. Put options before `--`.' % n)
 
+    prev = None
+    if baseline:
+        own = [r for r in load_records() if mine(r, baseline)]
+        prev = own[-1] if own else None
+    prev_paths = [p for p in (prev or {}).get('paths') or [] if isinstance(p, str)]
+    prev_hash = (prev or {}).get('hashes') if isinstance((prev or {}).get('hashes'), dict) else {}
+    sticky = {p for p in (prev or {}).get('dropped') or [] if isinstance(p, str)}
+
+    resolved = [(n, resolve(n, live)) for n in names]
+    known = set(live) | set(prev_paths) | {r for _, r in resolved if r}
+    for d in raw_drops:
+        r = resolve(d, known)
+        if r is None or r not in known:
+            fail('--drop %s matches no named, carried or dirty path; nothing written. '
+                 'Use the repo-relative path from the report.' % d)
+        sticky.add(r)
+
     chosen = []
-    for n in names:
-        r = rel(n)
+    for n, r in resolved:
         if r is None:
             dropped.append((n, 'outside the repo'))
-        elif r in drops:
-            dropped.append((r, '--drop'))
+        elif r in sticky:
+            dropped.append((r, 'dropped earlier this session'))
         elif r not in live:
-            dropped.append((r, 'clean now'))
+            hint = near(r, live)
+            dropped.append((r, 'not a dirty path' + (' (did you mean %s?)' % ', '.join(hint) if hint else '')))
         elif r in base_paths:
             pre.append(r)
         elif 'D' in live[r]:
@@ -251,30 +341,23 @@ if mode == 'certify':
         else:
             chosen.append(r)
 
-    if prior:
-        match = [d for d in load_records() if d.get('record_id') == prior]
-        d = match[-1] if match else None
-        why = None
-        if d is None:
-            why = 'not in the ledger'
-        elif d.get('root') != root:
-            why = 'another tree'
-        elif d.get('certified') is not True:
-            why = 'not certified'
-        elif not baseline or d.get('baseline_started_at') != baseline['started_at']:
-            why = 'written under a different baseline'
-        elif not isinstance(d.get('paths'), list):
-            why = 'malformed'
-        if why:
-            out.append('WARNING   prior record %s not usable (%s): earlier edits are NOT carried' % (prior, why))
-            prior = None
+    # Carry this session's earlier certification forward, mechanically. A carried path
+    # whose content changed and was not re-named here was changed by something else.
+    for p in prev_paths:
+        if p in sticky or p in chosen or not certifiable(p):
+            continue
+        if blob(p) == prev_hash.get(p):
+            carried.append(p)
         else:
-            for p in d['paths']:
-                if isinstance(p, str) and p not in drops and p not in chosen and ok_to_certify(p):
-                    carried.append(p)
+            changed.append(p)
 
     if baseline:
         certified = sorted(set(chosen) | set(carried))
+        for p in certified:
+            h = blob(p)
+            if h is None:
+                fail('could not fingerprint %s; nothing written' % p)
+            hashes[p] = h
     else:
         dropped.extend((p, 'no baseline, cannot certify') for p in chosen + carried)
 
@@ -288,7 +371,7 @@ if mode == 'certify':
                 f.write(text + '\n')
 
 cset = set(certified)
-candidates = sorted(p for p in live if p not in base_paths and p not in cset)
+candidates = sorted(p for p in set(live) | live_src if p not in base_paths and p not in cset)
 head = git('rev-parse', '--verify', '--quiet', 'HEAD')
 trigger = {'certify': 'manual', 'evidence': 'evidence'}.get(mode, 'hook-' + (ptrig or 'unknown'))
 
@@ -296,7 +379,6 @@ rec = {
     'schema': 1,
     'writer': 'compact-clean 1.0' + (' (hook)' if mode == 'hook' else ''),
     'record_id': record_id,
-    'prior': prior,
     'root': root,
     'session_id': sess or None,
     'written_at': now,
@@ -304,16 +386,17 @@ rec = {
     'head_sha': head.stdout.decode().strip() if head.returncode == 0 else '',
     'certified': bool(certified),
     'paths': certified,
+    'hashes': hashes,
+    'dropped': sorted(sticky),
     'candidates': candidates,
     'baseline': bool(baseline),
     'notes': notes_path,
     'trigger': trigger,
 }
-line = json.dumps(rec, ensure_ascii=True) + '\n'
 try:
     os.makedirs(DIR, mode=0o700, exist_ok=True)
     with open(LEDGER, 'a', encoding='utf-8') as f:
-        f.write(line)
+        f.write(json.dumps(rec, ensure_ascii=True) + '\n')
 except OSError as e:
     fail('ledger write failed (%s); the certification exists only in this context' % e)
 
@@ -322,25 +405,27 @@ if mode == 'hook':
 
 j = lambda xs: json.dumps(xs, ensure_ascii=False)
 print('COMPACT CLEAN  record %s' % record_id)
-print('Certified     %d  %s' % (len(certified), j(certified)))
-if mode == 'certify' and prior:
-    print('Carried       %d from record %s' % (len(carried), prior))
-print('Pre-existing  %d  %s  (dirty before this session, never certified)' % (len(pre), j(pre)))
-print('Dropped       %d  %s' % (len(dropped), j(['%s: %s' % x for x in dropped])))
-print('Candidates    %d  (reported at closedown, never committed)' % len(candidates))
-print('Notes         ' + (notes_path or 'none'))
-for w in out:
-    print(w)
 if mode == 'evidence':
+    print('Candidates    %d  (reported at closedown, never committed)' % len(candidates))
     print('Evidence only. Nothing certified, nothing will land from this record.')
     sys.exit(0)
+print('Certified     %d  %s' % (len(certified), j(certified)))
+print('Carried       %d  (from this session\'s earlier record, content unchanged)' % len(carried))
+if changed:
+    print('NOT CARRIED   %d  %s  (changed since certified and not re-named here: something else edited it)'
+          % (len(changed), j(changed)))
+print('Pre-existing  %d  %s  (dirty before this session, never certified)' % (len(pre), j(pre)))
+print('Dropped       %d  %s' % (len(dropped), j(['%s: %s' % x for x in dropped])))
+if sticky:
+    print('Disclaimed    %s  (never certified again this session)' % j(sorted(sticky)))
+print('Candidates    %d  (reported at closedown, never committed)' % len(candidates))
+print('Notes         ' + (notes_path or 'none'))
 if not baseline:
-    print('Baseline      ABSENT (%s): no work from this record can land. Run /preflight.' % base_why)
+    print('Baseline ABSENT (%s): no work from this record can land; notes are kept. Run /preflight.' % base_why)
 elif not certified:
-    print('Nothing certified: no work from this record can land. Re-check Phase 2 before you compact.')
-# The id is the binding for the notes as well as the paths, so hand it over every time.
-print('%s Run:  /compact Keep this line verbatim: compact-clean record %s'
-      % ('Safe to compact.' if certified else 'Then', record_id))
+    print('Nothing certified: no work from this record can land; notes are kept. Re-check Phase 2.')
+else:
+    print('Safe to compact.')
 PY
 
 python3 -c "$PY" "$mode" "$root" "$key" "$tree" "$sess_id" "$payload_trigger" "$@"

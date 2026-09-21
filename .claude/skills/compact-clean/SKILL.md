@@ -61,7 +61,7 @@ Under `--evidence`, run `bash "$HOME/.claude/skills/compact-clean/scripts/ledger
 
 List every path **you deliberately changed** in the live part of this session: written, edited, created, or changed by a command whose purpose was to change that file (`sed -i` on it, a heredoc into it).
 
-- **Only what you remember first-hand.** Edits made before an earlier compaction are carried by `--prior` (Phase 4), never re-listed from a summary's description of them.
+- **Only what you remember first-hand.** Edits certified before an earlier compaction are carried forward automatically; never re-list them from a summary's description.
 - **Side effects are not edits.** A lockfile from an install, formatter or codegen output over a glob, build artifacts: leave them out. They fall into candidates and are reported, never committed.
 - **Deletions are never certified.** The script drops them; closedown handles them deliberately.
 
@@ -82,30 +82,27 @@ Prose, not a transcript. Nothing worth keeping means no notes, stated in one lin
 ### Phase 4: Write the record
 
 ```bash
-bash "$HOME/.claude/skills/compact-clean/scripts/ledger.sh" certify [--prior <id>] -- <path> <path> ... <<'CC_NOTES_END'
+bash "$HOME/.claude/skills/compact-clean/scripts/ledger.sh" certify -- <path> <path> ... <<'CC_NOTES_END'
 <notes from Phase 3>
 CC_NOTES_END
 ```
 
 With no notes, end the command with `</dev/null` instead of the heredoc. Always supply stdin one way or the other. Options go **before** `--`, each as its own word (`--drop path`, never `--drop=path`); the script refuses anything else rather than guess, because a misread `--drop` would re-certify the file being disclaimed.
 
-**`--prior <id>`**: pass the record id from an earlier `/compact-clean` in this session, **only if you can see it in your own context** (the compaction summary, or your own earlier output). Never take an id from the ledger file: an id you did not see was written by another session, and carrying it would certify that session's work as yours. The script carries forward the prior record's paths that are still dirty and still certifiable, so the newest record is cumulative. No visible id means no `--prior`; earlier edits are then not carried, which fails safe.
+**Binding is mechanical.** Every record carries `CLAUDE_CODE_SESSION_ID`, and closedown trusts only records from its own session. You never handle a record id. If that variable is unset, the script writes nothing and says so: the certification and notes then exist only in this context.
 
-**Corrections.** If the operator says a certified path is not yours, re-run with `certify --prior <the id just printed> --drop <path> </dev/null`. The newer record supersedes, including when it drops every path: closedown never falls back to an older record.
+**Carry-forward is automatic.** This session's earlier certification is carried into each new record, as long as each file is still dirty and its content is **unchanged** since it was certified. A file changed afterwards and not named again is reported `NOT CARRIED`: something else edited it. Name it again only if that edit was yours.
+
+**Corrections.** If the operator says a certified path is not yours, re-run with `certify --drop <path> </dev/null`, using the repo-relative path from the report. A drop is **sticky**: that path is never certified again this session. A `--drop` that matches nothing fails without writing. The newest record supersedes, including when it certifies nothing: closedown never falls back to an older one.
 
 The script classifies each path you named: **Certified** (dirty now, absent from the baseline), **Pre-existing** (dirty before the session; never certified), **Dropped** (clean now, a deletion, outside the repo, `--drop`, or no baseline). Everything else dirty is a **Candidate**: reported at closedown, never committed.
 
 ### Phase 5: Hand off
 
-Relay the script's report verbatim. It ends with the exact command to run:
+Relay the script's report verbatim. It ends with one of:
 
-```
-Safe to compact. Run:  /compact Keep this line verbatim: compact-clean record <id>
-```
-
-Tell the operator to run that line as written. The instruction keeps the record id in the compaction summary, and `/mise-en-place` trusts only a record whose id it can see. If the id is lost, nothing is certified and closedown falls back to report-only, which is the safe direction.
-
-If the report says **Nothing certified** or **Baseline ABSENT**, say so plainly: no work from this record can land, though its notes still will. Hand over the `/compact` line anyway; the id is what binds the notes.
+- `Safe to compact.` The operator can run `/compact`.
+- `Nothing certified` or `Baseline ABSENT`. Say plainly that no work from this record can land, though its notes will be harvested.
 
 If the script exited non-zero, say the record was **not** written and that the certification exists only in this context: compacting now loses it.
 
@@ -117,19 +114,22 @@ One JSON object per line in `~/.claude/compact-clean/<key>.ledger.jsonl`, append
 |---|---|
 | `schema` | `1` |
 | `writer` | `compact-clean 1.0`, or `compact-clean 1.0 (hook)` |
-| `record_id` | random 12-hex id; the binding `/mise-en-place` checks against its own context |
-| `prior` | the `record_id` carried forward, or `null` |
+| `record_id` | random 12-hex id, for reports and notes filenames; binding does not use it |
 | `root` | repo toplevel |
-| `session_id` | Claude Code session id; hook records only, `null` for manual runs (a model cannot read its own) |
+| `session_id` | `CLAUDE_CODE_SESSION_ID` (manual runs) or the hook payload's `session_id`: the binding |
 | `written_at` | epoch seconds |
 | `baseline_started_at` | `started_at` of the baseline in force, or `null` if none |
 | `head_sha` | `HEAD` at write time |
 | `certified` | `true` only from `certify` with a baseline and at least one path |
-| `paths` | certified repo-relative paths |
-| `candidates` | dirty paths absent from the baseline and not certified |
+| `paths` | certified repo-relative paths, cumulative for the session |
+| `hashes` | `git hash-object` of each certified path at certification |
+| `dropped` | paths disclaimed this session; sticky |
+| `candidates` | dirty paths (and rename sources) absent from the baseline and not certified |
 | `baseline` | whether a valid baseline was found |
-| `notes` | path to the notes file, or `null` |
+| `notes` | `<key>.<tree>.<record_id>.notes.md` in the same directory, or `null` |
 | `trigger` | `manual`, `evidence`, or `hook-<auto\|manual\|unknown>` |
+
+Closedown reads it only through `ledger.sh bind`, never directly. `tests/run.sh` covers the attribution rules.
 
 ## The PreCompact hook: a partial net
 

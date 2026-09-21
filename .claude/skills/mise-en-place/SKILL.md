@@ -154,19 +154,17 @@ Reuse `$key` for the run ledger and the consent file. If `$base` is missing but 
 
 **The other fields.** `head_sha` is the session's starting commit, recorded *before* preflight's fast-forward — bound it as `git log --oneline "<head_sha>"..HEAD --since=@<started_at>` (`@` marks a Unix timestamp; without `--since`, commits preflight *pulled* read as this session's). It is the report's `oldSHA` and the only attribution signal that survives a compaction. `stashes` is a count — more now than then means this session stashed work, and Phase 1's ladder applies. `worktrees` defines "stray" in Phase 2: present now, absent there. `listening_ports` were the operator's before you started. **If the session was compacted**, the edit-call signal is unreliable and attribution is UNKNOWN, **unless a certified ledger record is bound to this session** (next).
 
-**The compaction ledger: the only way a compacted session still lands.** `/compact-clean` writes this session's authorship down before compaction, to `~/.claude/compact-clean/<key>.ledger.jsonl` (same `$key`, one JSON object per line, append-only).
+**The compaction ledger: the only way a compacted session still lands.** `/compact-clean` writes this session's authorship down before compaction. **Never read the ledger file yourself**: ids and paths you read there belong to every session that shares the tree. Get the verdict from the script, which binds mechanically:
 
-**Consult it only if this session was itself compacted** (your context opens with a compaction summary). An uncompacted session has its own transcript and ignores the ledger.
+```bash
+bash "$HOME/.claude/skills/compact-clean/scripts/ledger.sh" bind   # absent script: there is no ledger; skip
+```
 
-**Bind exactly one record to this session:** the newest whose `record_id` appears in **this session's own context** (the compaction summary, or output you produced), never an id read from the ledger file. When `/compact-clean` was given `--prior`, it carried the earlier record's still-valid paths forward, so the newest record is cumulative. When it was not, the earlier record's paths are simply not certified and fall to `authorship unknown`. **Never fall back to, or union with, an older record**, even when the newest certifies nothing: a newer record may have dropped a path on the operator's word. No id in context means no bound record, which means `session compacted, no certified ledger`. That fails closed by design: another session's record, however fresh, never lands here.
+It returns JSON. `bound` is the **newest certification record written under this session's own `CLAUDE_CODE_SESSION_ID`**, in this tree, under the baseline in force, under 16h old. Never an older record and never a union, even when the newest certifies nothing, because a newer record may have dropped a path on the operator's word. `bound.paths` are the paths still dirty, still absent from the baseline, not deletions, and **byte-identical in content** to when they were certified; `bound.rejected` says why any other certified path failed. `bound: null` comes with a `reason`.
 
-The bound record counts only if **all** hold, checked on the parsed JSON and never repaired: `schema` is `1`; `certified` is JSON `true`; `root` equals `$root`; `baseline_started_at` equals the current baseline's `started_at` (a record from under another baseline belongs to another session window); `written_at` is under 16h old; `paths` is a list of strings. Any failure: treat it as absent.
+**For attribution, consult it only if this session was itself compacted** (your context opens with a compaction summary). Then `bound.paths` satisfy the first limb for edits made before the last compaction, exactly as a live transcript would, and edits made after it are attributed from the live transcript as usual. The second limb still applies. Everything else is `authorship unknown`. Hook and evidence records never license anything. Notes bind separately (Phase 4) and are used whether or not the session compacted.
 
-Its `paths` satisfy the first limb, exactly as a live transcript would, and only for a path that byte-equals a path in a live porcelain status record. The second limb still applies: a path present in the baseline is **not** yours.
-
-Every other record, including all `certified: false` ones (the PreCompact hook and `--evidence` runs), is evidence for the report only. It never licenses a commit, a push, or a PR, and never removes a certification.
-
-A bound record lifts `session compacted` as a cause, and only that cause. A stale baseline or a wrong worktree still forces report-only: the ledger substitutes for the transcript, never for the baseline.
+A bound record lifts `session compacted` as a cause, and only that cause. A stale baseline or a wrong worktree still forces report-only: the ledger substitutes for the transcript, never for the baseline. Attribution is by path and certified content, so two sessions editing the same file in one tree cannot be told apart; the content check rejects such a file rather than guess.
 
 Say which applied: `ATTRIBUTION: session compacted, restored from ledger record <record_id> (<n> paths, written <t>).`
 
@@ -289,7 +287,7 @@ Escalate **once**, in a single ticket with a disposition table, filed in the sam
 
 The transcript is about to disappear. Harvest what would cost the next session real time to rediscover.
 
-**Start from the compaction notes, if any.** Notes bind separately from paths: use the `notes` of every record whose `record_id` appears in this session's own context, plus the records their `prior` fields name, each with `root` equal to `$root` and `written_at` under 16h old. `certified` does not matter here; a notes-only or no-baseline record is still this session's. Only a notes path that resolves inside `~/.claude/compact-clean/` and is not a symlink. Notes from any other record belong to another session or tree. They were written mid-session, while the reasoning was still live, earlier and sharper than anything recoverable now. Fold them in and dedupe against them; do not paraphrase what they already say well. A compacted session's harvest is mostly *their* content, and a harvest that silently omits them has lost the session's best material.
+**Start from the compaction notes, if any.** Use exactly the files `ledger.sh bind` lists under `notes`: this session's own notes (same `CLAUDE_CODE_SESSION_ID`, same tree, under 16h), whatever their certification status. Read no other notes file; the rest belong to another session or tree. They were written mid-session, while the reasoning was still live, earlier and sharper than anything recoverable now. Fold them in and dedupe against them; do not paraphrase what they already say well. A compacted session's harvest is mostly *their* content, and a harvest that silently omits them has lost the session's best material.
 
 Harvest:
 
