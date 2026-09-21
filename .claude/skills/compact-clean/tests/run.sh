@@ -59,8 +59,9 @@ cd "$R"
 eq "$(last 'd["paths"]')" "['a', 'sub/x y/q\"z.txt']" "certified set"
 eq "$(echo "$out" | grep -c 'Pre-existing  1')" 1 "baseline path is pre-existing"
 eq "$(last '"c" in d["candidates"] and "lock.json" in d["candidates"]')" True "deletion and side effect stay candidates"
-eq "$(last 'sorted(d["hashes"])==sorted(d["paths"])')" True "every certified path fingerprinted"
-eq "$(last 'd["session_id"]')" "$S1" "session id recorded"
+eq "$(last 'sorted(d["fingerprints"])==sorted(d["paths"])')" True "every certified path fingerprinted"
+eq "$(last 'd["session"].startswith("sha256:")')" True "session stored as a hash"
+eq "$(grep -c "$S1" "$HOME"/.claude/compact-clean/*.ledger.jsonl)" 0 "raw session id never written to the ledger"
 eq "$(echo "$out" | grep -c 'Safe to compact.')" 1 "success reported"
 
 # --- binding: session, content, newest-only ---
@@ -70,7 +71,7 @@ eq "$(bindq 'v["bound"]')" None "no session id binds nothing"
 eq "$(CLAUDE_CODE_SESSION_ID=$S1 bindq 'len(v["notes"])')" 1 "own notes bound"
 eq "$(CLAUDE_CODE_SESSION_ID=$S2 bindq 'len(v["notes"])')" 0 "other session's notes not bound"
 echo tampered >> a
-eq "$(CLAUDE_CODE_SESSION_ID=$S1 bindq '[r["reason"] for r in v["bound"]["rejected"]]')" "['content changed since it was certified']" "edited-after-certify rejected"
+eq "$(CLAUDE_CODE_SESSION_ID=$S1 bindq '[r["reason"] for r in v["bound"]["rejected"]]')" "['content or mode changed since it was certified']" "edited-after-certify rejected"
 printf '{"cwd":"%s","session_id":"%s","trigger":"manual"}' "$R" "$S1" | bash "$L" hook
 eq "$(CLAUDE_CODE_SESSION_ID=$S1 bindq 'v["bound"] is not None')" True "hook record does not shadow the certification"
 
@@ -92,6 +93,59 @@ eq "$(CLAUDE_CODE_SESSION_ID=$S1 bindq 'v["bound"]')" None "newest certifies not
 echo t > d; echo other >> a
 CLAUDE_CODE_SESSION_ID=$S2 bash "$L" certify -- d </dev/null >/dev/null
 eq "$(last 'd["paths"]')" "['d']" "a second session carries nothing from the first"
+
+# --- evidence never shadows; mode is part of the fingerprint ---
+R="$T/r8"; repo "$R"; cd "$R"; baseline "$R" 120; echo s > a; echo s > b
+CLAUDE_CODE_SESSION_ID=$S1 bash "$L" certify -- a b </dev/null >/dev/null
+CLAUDE_CODE_SESSION_ID=$S1 bash "$L" evidence </dev/null >/dev/null
+eq "$(last 'd["certified"]')" False "evidence record is uncertified"
+eq "$(CLAUDE_CODE_SESSION_ID=$S1 bindq 'v["bound"]["paths"]')" "['a', 'b']" "evidence does not shadow the certification"
+env -u CLAUDE_CODE_SESSION_ID bash "$L" evidence </dev/null 2>/dev/null; eq "$?" 1 "evidence without a session id refused"
+chmod +x b
+eq "$(CLAUDE_CODE_SESSION_ID=$S1 bindq 'v["bound"]["paths"]')" "['a']" "chmod after certification rejected"
+
+# --- staged content must equal certified content ---
+git add a
+CLAUDE_CODE_SESSION_ID=$S1 bash "$L" verify-staged -- a >/dev/null; eq "$?" 0 "staged blob matches certification"
+echo late >> a; git add a
+CLAUDE_CODE_SESSION_ID=$S1 bash "$L" verify-staged -- a >/dev/null; eq "$?" 1 "content changed before staging refused"
+CLAUDE_CODE_SESSION_ID=$S1 bash "$L" verify-staged -- c >/dev/null; eq "$?" 1 "uncertified path refused"
+
+# --- symlinks and unfingerprintable paths ---
+R="$T/r9"; repo "$R"; cd "$R"; baseline "$R" 120
+echo s > a; ln -s "$T/outside.txt" lnk; echo v1 > "$T/outside.txt"; ln -s /nonexistent dangle; mkdir -p dir; echo s > dir/f
+CLAUDE_CODE_SESSION_ID=$S1 bash "$L" certify -- a lnk dangle dir <<'CC_NOTES_END' >/dev/null
+note survives an unfingerprintable path
+CC_NOTES_END
+eq "$?" 0 "unfingerprintable path does not abort the record"
+eq "$(last 'd["paths"]')" "['a', 'dangle', 'lnk']" "symlinks certified by link text; the directory is not a dirty path"
+eq "$(last 'd["notes"] is not None')" True "notes kept"
+eq "$(last 'd["fingerprints"]["lnk"].split()[1]')" "$(printf '%s' "$T/outside.txt" | git hash-object --stdin)" "symlink blob equals what git stores"
+echo v2 > "$T/outside.txt"
+eq "$(CLAUDE_CODE_SESSION_ID=$S1 bindq '"lnk" in v["bound"]["paths"]')" True "a symlink's target changing is not an edit to the link"
+
+# --- names resolve from the cwd only; drops never guess ---
+R="$T/r10"; repo "$R"; cd "$R"; mkdir -p src; echo 1 > src/app.ts; echo 1 > app.ts; git add -A; git commit -qm more; baseline "$R" 120
+echo other > new.ts; echo s > src/mine.ts
+cd src
+CLAUDE_CODE_SESSION_ID=$S1 bash "$L" certify -- new.ts mine.ts </dev/null >/dev/null
+eq "$(last 'd["paths"]')" "['src/mine.ts']" "a same-named root file is never certified from a subdirectory"
+echo s > app.ts; echo t > ../app.ts
+CLAUDE_CODE_SESSION_ID=$S1 bash "$L" certify -- app.ts ../app.ts </dev/null >/dev/null
+CLAUDE_CODE_SESSION_ID=$S1 bash "$L" certify --drop app.ts </dev/null 2>/dev/null; eq "$?" 1 "ambiguous --drop refused"
+cd "$R"
+
+# --- concurrent certify under one session loses nothing ---
+R="$T/r11"; repo "$R"; cd "$R"; baseline "$R" 120
+for k in 1 2 3 4 5 6; do echo s > "x$k"; echo s > "y$k"
+  CLAUDE_CODE_SESSION_ID=$S1 bash "$L" certify -- "x$k" </dev/null >/dev/null &
+  CLAUDE_CODE_SESSION_ID=$S1 bash "$L" certify -- "y$k" </dev/null >/dev/null &
+  wait
+done
+eq "$(CLAUDE_CODE_SESSION_ID=$S1 bindq 'len(v["bound"]["paths"])')" 12 "twelve parallel certifications, none lost"
+
+# --- probe ---
+eq "$(bash "$L" probe | grep -c '^Ledger ')" 1 "probe states the ledger path"
 
 # --- content drift blocks the carry ---
 R="$T/r3"; repo "$R"; cd "$R"; baseline "$R" 120; echo s > a
