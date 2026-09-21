@@ -53,7 +53,7 @@ Each call below is self-contained: it derives the key, tree and baseline itself,
 bash "$HOME/.claude/skills/compact-clean/scripts/ledger.sh" probe
 ```
 
-States the root, key, baseline and ledger path. **Baseline ABSENT** means nothing certified now can ever land (`/mise-en-place` binds every record to the baseline in force). Still run Phase 3 for the notes, and tell the operator to run `/preflight`.
+States the root, key, baseline and ledger path. **Baseline ABSENT** means nothing certified now can ever land (`/mise-en-place` binds every record to the baseline in force). Still run Phases 3 **and** 4 so the notes are written, and tell the operator to run `/preflight`.
 
 Under `--evidence`, run `bash "$HOME/.claude/skills/compact-clean/scripts/ledger.sh" evidence </dev/null` instead, relay its output, and stop.
 
@@ -63,6 +63,7 @@ List every path **you deliberately changed** in the live part of this session: w
 
 - **Only what you remember first-hand.** Edits certified before an earlier compaction are carried forward automatically; never re-list them from a summary's description.
 - **Side effects are not edits.** A lockfile from an install, formatter or codegen output over a glob, build artifacts: leave them out. They fall into candidates and are reported, never committed.
+- **Shared files.** If you know another session, agent or person also edited a file you edited, leave it out. Attribution is by path, so their changes would be certified along with yours.
 - **Deletions are never certified.** The script drops them; closedown handles them deliberately.
 
 Name paths **repo-relative**, and run the Phase 4 command from the repo root exactly as shown (absolute paths also work). A bare name is read from the directory the command runs in, never guessed at the root, because a same-named file there may be another session's.

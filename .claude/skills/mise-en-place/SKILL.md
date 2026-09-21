@@ -164,7 +164,7 @@ No script means no ledger. **If `bind` fails for any reason** (including an olde
 
 **For attribution, consult it only if this session was itself compacted** (your context opens with a compaction summary). Then `bound.paths` satisfy the first limb for edits made before the last compaction, exactly as a live transcript would, and edits made after it are attributed from the live transcript as usual. The second limb still applies. Everything else is `authorship unknown`. Hook and evidence records never license anything. Notes bind separately (Phase 4) and are used whether or not the session compacted.
 
-A bound record lifts `session compacted` as a cause, and only that cause. A stale baseline or a wrong worktree still forces report-only: the ledger substitutes for the transcript, never for the baseline. Attribution is by path and certified content, so two sessions editing the same file in one tree cannot be told apart; the content check rejects such a file rather than guess.
+A bound record lifts `session compacted` as a cause, and only that cause. A stale baseline or a wrong worktree still forces report-only: the ledger substitutes for the transcript, never for the baseline. Attribution is by path: a file another session also edited *before* certification cannot be told apart and is certified with this session's edits. The content check only catches changes made *after* certification.
 
 Say which applied: `ATTRIBUTION: session compacted, restored from ledger record <record_id> (<n> paths, written <t>).`
 
