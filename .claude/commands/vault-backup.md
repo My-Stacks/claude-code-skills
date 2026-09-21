@@ -1,3 +1,10 @@
+---
+name: vault-backup
+version: "1.1"
+description: "Save the current work to the shared Obsidian knowledge vault via the Vault Backup skill."
+allowed-tools: Bash, Read, Glob, Grep
+---
+
 Save the current work to the shared Obsidian knowledge vault using the Vault Backup skill.
 
 Read the Vault Backup SKILL.md and follow its full workflow:
