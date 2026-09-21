@@ -289,7 +289,7 @@ if mode == 'verify-staged':
     for n in names:
         p = rel(n)
         want = r['fingerprints'].get(p) if p else None
-        got = git('ls-files', '-s', '--', p).stdout.decode().split('\n')[0].split() if p else []
+        got = git('--literal-pathspecs', 'ls-files', '-s', '--', p).stdout.decode().split('\n')[0].split() if p else []
         have = '%s %s' % (got[0], got[1]) if len(got) >= 2 else None
         if want is None:
             bad.append('%s: not certified by the bound record' % n)
@@ -374,7 +374,11 @@ if mode == 'certify':
         prev = own[-1] if own else None
     prev_paths = [p for p in (prev or {}).get('paths') or [] if isinstance(p, str)]
     prev_fp = (prev or {}).get('fingerprints') if isinstance((prev or {}).get('fingerprints'), dict) else {}
-    sticky = {p for p in (prev or {}).get('dropped') or [] if isinstance(p, str)}
+    # Disclaimers outlive a re-run of /preflight: carry-forward is scoped to the baseline,
+    # but "never certified again this session" means the session.
+    sticky = {p for r in load_records()
+              if SESS and r.get('session') == SESS and r.get('root') == root and r.get('trigger') == 'manual'
+              for p in r.get('dropped') or [] if isinstance(p, str)}
 
     # Names resolve from the cwd only. Falling back to the repo root would pick up a
     # same-named file some other session dirtied there, and certify it as this one's.
@@ -438,11 +442,13 @@ if mode == 'certify':
     if not sys.stdin.isatty():
         text = sys.stdin.read().strip()
         if text:
-            os.makedirs(DIR, mode=0o700, exist_ok=True)
             notes_path = os.path.join(DIR, '%s.%s.%s.notes.md' % (key, tree, record_id))
-            fd = os.open(notes_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                f.write(text + '\n')
+            try:
+                fd = os.open(notes_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                    f.write(text + '\n')
+            except OSError as e:
+                fail('notes write failed (%s); nothing written. The notes exist only in this context.' % e)
 
 cset = set(certified)
 candidates = sorted(p for p in set(live) | live_src if p not in base_paths and p not in cset)

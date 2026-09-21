@@ -144,6 +144,20 @@ for k in 1 2 3 4 5 6; do echo s > "x$k"; echo s > "y$k"
 done
 eq "$(CLAUDE_CODE_SESSION_ID=$S1 bindq 'len(v["bound"]["paths"])')" 12 "twelve parallel certifications, none lost"
 
+# --- literal pathspec in verify-staged; sticky drops survive a new baseline ---
+R="$T/r12"; repo "$R"; cd "$R"; echo 1 > a1.json; git add -A; git commit -qm lit; baseline "$R" 120
+echo s > "a[1].json"; echo different > a1.json
+CLAUDE_CODE_SESSION_ID=$S1 bash "$L" certify -- "a[1].json" </dev/null >/dev/null
+git --literal-pathspecs add -- "a[1].json" a1.json
+CLAUDE_CODE_SESSION_ID=$S1 bash "$L" verify-staged -- "a[1].json" >/dev/null; eq "$?" 0 "glob-looking name verified literally"
+echo s > b
+CLAUDE_CODE_SESSION_ID=$S1 bash "$L" certify -- b </dev/null >/dev/null
+CLAUDE_CODE_SESSION_ID=$S1 bash "$L" certify --drop b </dev/null >/dev/null
+git commit -qam checkpoint; baseline "$R" 5          # b clean at the new baseline
+echo again > b
+CLAUDE_CODE_SESSION_ID=$S1 bash "$L" certify -- b </dev/null >/dev/null
+eq "$(last 'd["paths"]')" "[]" "a disclaimer survives a re-run of /preflight"
+
 # --- probe ---
 eq "$(bash "$L" probe | grep -c '^Ledger ')" 1 "probe states the ledger path"
 
