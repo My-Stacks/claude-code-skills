@@ -1,6 +1,6 @@
 ---
 name: mise-en-place
-version: "1.2"
+version: "1.3"
 description: >-
   End-of-day shutdown for a working repo — run when you are finished for the
   night, not when you are lost. Lands the session's work (commit, push, open a
@@ -66,7 +66,7 @@ Present the exact operation and **wait**. Default is no write.
 - **Posting a project status update** — always, including health.
 - Deleting a local branch, or removing a worktree.
 
-**Consent — only `push` is remembered.** On the first yes to a push in a repo, record `push: yes` with the date in `~/.claude/mise-en-place/<key>-consent.yml`. From then on push is announce-then-act **for that repo only**; the consent is void if `origin` changes, if the run is REPORT-ONLY (Phase 0), or after 30 days — re-ask rather than assume, and say at the top of the run whether it is in force. **`gh pr create` is asked every night, never remembered:** a PR pulls named humans into review and bills CI, and a 30-day yes would be a month of unattended PRs. **Linear has no consent key:** every ticket mutation goes through `/linear track` → `/linear push`, which previews and waits on each write (Phase 3), and that preview *is* the gate — nothing here overrides it.
+**Consent — only `push` is remembered.** On the first yes to a push in a repo, record `push: yes` with the date in `~/.claude/mise-en-place/<key>-consent.yml`. From then on push is announce-then-act **for that repo only**; the consent is void if `origin` changes, if the run is REPORT-ONLY (Phase 0), **if the session was compacted** (see the ledger, Phase 0), or after 30 days — re-ask rather than assume, and say at the top of the run whether it is in force. **`gh pr create` is asked every night, never remembered:** a PR pulls named humans into review and bills CI, and a 30-day yes would be a month of unattended PRs. **Linear has no consent key:** every ticket mutation goes through `/linear track` → `/linear push`, which previews and waits on each write (Phase 3), and that preview *is* the gate — nothing here overrides it.
 
 **First contact is a dry run — enforced, not advised.** If the repo has neither a consent file nor a run ledger, this skill has never closed it down: run as `--dry-run` whatever flags were passed, say so, and tell the operator to re-run once the report reads right. The build gate and the PR are both side effects on a repo whose shape nobody has checked.
 
@@ -164,7 +164,7 @@ No script at that path means `compact-clean` is not installed: say so by name. *
 
 **For attribution, consult it only if this session was itself compacted** (your context opens with a compaction summary). Then `bound.paths` satisfy the first limb for edits made before the last compaction, exactly as a live transcript would, and edits made after it are attributed from the live transcript as usual. The second limb still applies. Everything else is `authorship unknown`. Hook and evidence records never license anything. Notes bind separately (Phase 4) and are used whether or not the session compacted.
 
-A bound record lifts `session compacted` as a cause, and only that cause. A stale baseline or a wrong worktree still forces report-only: the ledger substitutes for the transcript, never for the baseline. Attribution is by path: a file another session also edited *before* certification cannot be told apart and is certified with this session's edits. The content check only catches changes made *after* certification.
+A bound record lifts `session compacted` as a cause, and only that cause, **for `git commit` only.** In a compacted run push and PR stay Posture B with **remembered push consent void**: ask for each, this run, however recently this repo granted it. A compacted session cannot read its own pre-compaction transcript, so it cannot rule out a "do not push that spike" said before the gap, and the ledger records paths, never vetoes. The ask is what recovers it. A stale baseline or a wrong worktree still forces report-only: the ledger substitutes for the transcript, never for the baseline. Attribution is by path: a file another session also edited *before* certification cannot be told apart and is certified with this session's edits. The content check only catches changes made *after* certification.
 
 Say which applied: `ATTRIBUTION: session compacted, restored from ledger record <record_id> (<n> paths, written <t>).`
 
