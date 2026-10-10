@@ -222,6 +222,70 @@ printf garbage > .git/index; n0=$(cat "$HOME"/.claude/compact-clean/*.ledger.jso
 printf '{"cwd":"%s"}' "$R" | bash "$L" hook
 eq "$(( $(cat "$HOME"/.claude/compact-clean/*.ledger.jsonl | wc -l) - n0 ))" 0 "failed git status records nothing"
 
+# --- guard (PreCompact) ---
+rm -f "$HOME"/.claude/compact-clean/*.ledger.jsonl   # test repos share one origin, so one ledger
+R="$T/g1"; repo "$R"; cd "$R"; baseline "$R" 120; echo s > a
+g() { printf '{"cwd":"%s","session_id":"%s","trigger":"%s","custom_instructions":"%s"}' "$R" "$1" "$2" "$3" | bash "$L" guard 2>"$T/gerr"; echo $?; }
+eq "$(g $S1 manual '')" 2 "guard blocks a manual /compact with no flush"
+eq "$(grep -c 'compact noflush' "$T/gerr")" 1 "guard explains the bypass"
+eq "$(g $S1 auto '')" 0 "guard never blocks auto-compaction"
+eq "$(g $S1 manual 'keep NoFlush please')" 0 "noflush in the instructions bypasses"
+eq "$(g '' manual '')" 0 "no session id: guard allows"
+printf '{"cwd":"%s","session_id":"%s","trigger":"manual"}' "$R" "$S1" | bash "$L" hook
+eq "$(g $S1 manual '')" 2 "a hook evidence record is not a flush"
+CLAUDE_CODE_SESSION_ID=$S1 bash "$L" certify -- a </dev/null >/dev/null
+eq "$(g $S1 manual '')" 0 "a fresh certify unblocks"
+eq "$(g $S2 manual '')" 2 "another session's flush does not unblock"
+CLAUDE_CODE_SESSION_ID=$S2 bash "$L" evidence </dev/null >/dev/null
+eq "$(g $S2 manual '')" 0 "a fresh evidence snapshot unblocks"
+set -- "$HOME"/.claude/compact-clean/*.ledger.jsonl; eq "$#" 1 "guard tests run against exactly one ledger"; LG=$1
+python3 - "$LG" <<'PY'
+import json, sys
+p = sys.argv[1]; rs = [json.loads(l) for l in open(p)]
+for r in rs: r['written_at'] -= 11 * 60
+open(p, 'w').write(''.join(json.dumps(r) + '\n' for r in rs))
+PY
+eq "$(g $S1 manual '')" 2 "a flush older than 10 min does not unblock"
+echo garbage >> "$LG"
+eq "$(g $S1 manual '')" 0 "corrupt ledger: guard fails open"
+cd "$T"; eq "$(printf '{"cwd":"%s","session_id":"%s","trigger":"manual"}' "$T" "$S1" | bash "$L" guard 2>/dev/null; echo $?)" 0 "outside a repo: guard allows"
+for p in '' '[1]' '{"cwd":"/nonexistent","trigger":"manual"}'; do
+  printf '%s' "$p" | bash "$L" guard 2>/dev/null; eq "$?" 0 "guard exit 0 on payload <$p>"
+done
+
+# --- cue (SessionStart) ---
+rm -f "$HOME"/.claude/compact-clean/*.ledger.jsonl   # the guard tests left it corrupt on purpose
+R="$T/c1"; repo "$R"; cd "$R"; baseline "$R" 120; echo s > a
+c() { printf '{"cwd":"%s","session_id":"%s","source":"%s"}' "$R" "$1" "$2" | bash "$L" cue; }
+eq "$(c $S1 compact)" "" "cue silent with no notes"
+CLAUDE_CODE_SESSION_ID=$S1 bash "$L" certify -- a <<<'NEXT: x' >/dev/null
+CLAUDE_CODE_SESSION_ID=$S1 bash "$L" certify -- a <<<'NEXT: y' >/dev/null
+eq "$(c $S1 compact | grep -c 'saved 2 notes file(s).*Run the /compact-resume skill')" 1 "cue names the notes and the skill"
+eq "$(c $S1 startup)" "" "cue silent on a non-compact start"
+eq "$(c $S2 compact)" "" "cue silent for another session"
+c $S1 compact >/dev/null; eq "$?" 0 "cue exit 0"
+printf '[1]' | bash "$L" cue; eq "$?" 0 "cue exit 0 on a bad payload"
+
+# --- worktrees, encoding, head_sha ---
+rm -f "$HOME"/.claude/compact-clean/*.ledger.jsonl; S3=33333333-3333-3333-3333-333333333333
+R="$T/w1"; repo "$R"; cd "$R"; baseline "$R" 120; echo s > a
+git worktree add -q "$T/w2" 2>/dev/null
+CLAUDE_CODE_SESSION_ID=$S3 bash "$L" certify -- a <<<'NEXT: w' >/dev/null
+eq "$(CLAUDE_CODE_SESSION_ID=$S3 bindq 'bool(v["bound"]["head_sha"])')" True "bind exposes head_sha"
+gw() { printf '{"cwd":"%s","session_id":"%s","trigger":"manual"}' "$T/w2" "$S3" | bash "$L" guard 2>/dev/null; echo $?; }
+eq "$(gw)" 0 "a flush in another worktree satisfies the guard"
+eq "$(printf '{"cwd":"%s","session_id":"%s","source":"compact"}' "$T/w2" "$S3" | bash "$L" cue | grep -c "/w1 (the worktree")" 1 "cue names the worktree holding the notes"
+eq "$(printf '{"cwd":"%s","session_id":"%s","source":"compact"}' "$R" "$S3" | bash "$L" cue | grep -c 'worktree')" 0 "cue names no worktree from the same one"
+( cd "$T/w2" && echo s > b && CLAUDE_CODE_SESSION_ID=$S3 bash "$L" certify -- b <<<'NEXT: w2' >/dev/null )
+out=$(printf '{"cwd":"%s","session_id":"%s","source":"compact"}' "$R" "$S3" | bash "$L" cue)
+eq "$(echo "$out" | grep -c 'saved 1 notes file(s).*/w2 (the worktree.*Earlier notes also exist in .*/w1: resume from there too')" 1 "cue counts per worktree and names the others"
+gx() { printf '{"cwd":"%s","session_id":"%s","trigger":"manual","custom_instructions":"%s"}' "$R" "$S2" "$1" | bash "$L" guard 2>/dev/null; echo $?; }
+eq "$(gx '\ud83d x')" 2 "lone surrogate in the payload still blocks"
+eq "$(PYTHONIOENCODING=ascii gx 'café')" 2 "raw UTF-8 under an ascii locale still blocks"
+eq "$(PYTHONIOENCODING=ascii gx 'caf\u00e9')" 2 "escaped non-ASCII under an ascii locale still blocks"
+eq "$(gx 'noflushlater')" 2 "noflush must be a word, not a substring"
+eq "$(gx 'focus on X (noflush)')" 0 "noflush beside punctuation bypasses"
+
 # --- key parity with /preflight 5.3 ---
 R="$T/kp"; repo "$R"; cd "$R"
 for o in 'git@github.com:Org/Repo.git' 'https://github.com/Org/Repo.git/' 'ssh://git@github.com:22/Org/Repo.git' 'https://user@github.com/org/repo'; do

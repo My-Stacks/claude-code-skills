@@ -10,10 +10,15 @@
 #   ledger.sh bind                      closedown verdict for THIS session, as JSON; no writes
 #   ledger.sh verify-staged -- PATH...  after staging: each path's staged mode and blob must
 #                                       equal what was certified; exit 1 on any mismatch
+#   ledger.sh guard                     PreCompact hook: exit 2 (block) on a manual /compact
+#                                       with no flush from this session in the last 10 min
+#   ledger.sh cue                       SessionStart hook: after a compaction, tell the model
+#                                       to run /compact-resume if this session left notes
 #
 # Records bind to a session mechanically, by CLAUDE_CODE_SESSION_ID, never by an id a
 # model has merely seen. Hook mode exits 0 on every path: failing a compaction to protect
-# a bookkeeping file has its priorities backwards. Every other mode exits non-zero on
+# a bookkeeping file has its priorities backwards; guard blocks only a manual /compact,
+# and only on a positive finding, never on an error. Every other mode exits non-zero on
 # failure, because a model that believes a record exists when it does not loses work.
 
 set -u
@@ -21,30 +26,35 @@ mode=${1:-}
 [ $# -gt 0 ] && shift
 
 die() {
-  [ "$mode" = hook ] && exit 0
+  case "$mode" in hook|guard|cue) exit 0 ;; esac
   printf 'compact-clean: %s\n' "$*" >&2
   exit 1
 }
 
-case "$mode" in probe|certify|evidence|hook|bind|verify-staged) ;; *) die "usage: ledger.sh probe|certify|evidence|hook|bind|verify-staged" ;; esac
+case "$mode" in probe|certify|evidence|hook|bind|verify-staged|guard|cue) ;; *) die "usage: ledger.sh probe|certify|evidence|hook|bind|verify-staged|guard|cue" ;; esac
 [ -n "${HOME:-}" ] || die "HOME is unset"
 command -v python3 >/dev/null 2>&1 || die "python3 not found"
 
-sess_id=${CLAUDE_CODE_SESSION_ID:-} payload_trigger=''
-if [ "$mode" = hook ]; then
+sess_id=${CLAUDE_CODE_SESSION_ID:-} payload_trigger='' payload_extra=''
+if [ "$mode" = hook ] || [ "$mode" = guard ] || [ "$mode" = cue ]; then
   # The hook's cwd, session_id and trigger arrive ONLY in the stdin payload. One field
   # per line, read with sed: `read a b` word-splits, so a cwd containing spaces would
   # bleed into the next field.
   payload=$(cat 2>/dev/null || true)
   fields=$(printf '%s' "$payload" | python3 -c 'import json, sys
-try: d = json.load(sys.stdin)
+sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+try: d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 except Exception: d = {}
 if not isinstance(d, dict): d = {}
 def clean(v): return str(v or "").replace("\n", " ").replace("\r", " ")
-print(clean(d.get("cwd"))); print(clean(d.get("session_id"))); print(clean(d.get("trigger")))' 2>/dev/null) || exit 0
+print(clean(d.get("cwd"))); print(clean(d.get("session_id"))); print(clean(d.get("trigger")))
+print(clean(d.get("source"))); print(clean(d.get("custom_instructions")))' 2>/dev/null) || exit 0
   cwd=$(printf '%s\n' "$fields" | sed -n '1p')
   sess_id=$(printf '%s\n' "$fields" | sed -n '2p')
   payload_trigger=$(printf '%s\n' "$fields" | sed -n '3p')
+  # guard reads the /compact instructions, cue reads the SessionStart source.
+  [ "$mode" = guard ] && payload_extra=$(printf '%s\n' "$fields" | sed -n '5p')
+  [ "$mode" = cue ] && payload_trigger=$(printf '%s\n' "$fields" | sed -n '4p')
   # Never fall through to the launch directory: that would file this compaction under
   # whatever repo happens to be there.
   [ -n "$cwd" ] || exit 0
@@ -65,7 +75,7 @@ key="${stem:-repo}-${hash}"
 tree=$(printf '%s' "$root" | { shasum 2>/dev/null || sha1sum 2>/dev/null; } | cut -c1-12)
 
 read -r -d '' PY <<'PY'
-import fcntl, glob, hashlib, json, os, secrets, subprocess, sys, time, unicodedata
+import fcntl, glob, hashlib, json, os, re, secrets, subprocess, sys, time, unicodedata
 
 sys.stdout.reconfigure(errors='backslashreplace')
 mode, root, key, tree, sess, ptrig = sys.argv[1:7]
@@ -75,13 +85,15 @@ PRE = os.path.join(HOME, '.claude', 'preflight')
 DIR = os.path.join(HOME, '.claude', 'compact-clean')
 LEDGER = os.path.join(DIR, key + '.ledger.jsonl')
 MAX_AGE = 16 * 3600
+GUARD_WINDOW = 10 * 60
+HOOKISH = ('hook', 'guard', 'cue')
 now = int(time.time())
 # The ledger stores a hash of the session id, never the id: an id read back out of the
 # file must not be usable to impersonate that session.
 SESS = ('sha256:' + hashlib.sha256(sess.encode()).hexdigest()) if sess else None
 
 def fail(msg):
-    if mode == 'hook':
+    if mode in HOOKISH:
         sys.exit(0)
     sys.stderr.write('compact-clean: ' + msg + '\n')
     sys.exit(1)
@@ -239,6 +251,54 @@ def mine(r, baseline):
             and baseline is not None and r.get('baseline_started_at') == baseline['started_at']
             and isinstance(r.get('written_at'), int) and 0 <= now - r['written_at'] < MAX_AGE)
 
+def session_notes(any_root=False):
+    """[(notes path, written_at, root)] for this session, under 16h, oldest first. Only this
+    tree unless any_root: worktrees of one origin share the ledger, and a session can move."""
+    out = []
+    for r in load_records():
+        n, rid, rr = r.get('notes'), r.get('record_id'), r.get('root')
+        if (SESS and r.get('session') == SESS and isinstance(rr, str) and (any_root or rr == root)
+                and isinstance(r.get('written_at'), int) and 0 <= now - r['written_at'] < MAX_AGE
+                and isinstance(n, str) and isinstance(rid, str)
+                and n == os.path.join(DIR, '%s.%s.%s.notes.md'
+                                      % (key, tree if rr == root else hashlib.sha1(rr.encode()).hexdigest()[:12], rid))
+                and os.path.isfile(n) and not os.path.islink(n)):
+            out.append((n, r['written_at'], rr))
+    return out
+
+if mode == 'guard':
+    # Auto-compaction is never blocked, and neither is anything this cannot judge.
+    if ptrig != 'manual' or not SESS or re.search(r'(?<![a-z0-9])noflush(?![a-z0-9])', (args[0] if args else '').lower()):
+        sys.exit(0)
+    # Any worktree of this origin: the guard protects against a failed flush, and a session
+    # that flushed in one worktree and moved to another did flush.
+    if any(r.get('session') == SESS
+           and r.get('trigger') in ('manual', 'evidence')
+           and isinstance(r.get('written_at'), int) and 0 <= now - r['written_at'] < GUARD_WINDOW
+           for r in load_records()):
+        sys.exit(0)
+    sys.stderr.write('compact-clean guard: no /compact-clean flush from this session in the last %d '
+                     'minutes, so compacting now loses which edits were yours. Run /compact-clean, then '
+                     '/compact. If /compact-clean itself fails, or to compact anyway: /compact noflush\n' % (GUARD_WINDOW // 60))
+    sys.exit(2)
+
+if mode == 'cue':
+    if ptrig != 'compact' or not SESS:
+        sys.exit(0)
+    notes = session_notes(any_root=True)
+    if notes:
+        # bind lists one worktree's notes, so count and name per worktree, newest first.
+        where = notes[-1][2]
+        here = [x for x in notes if x[2] == where]
+        others = sorted({x[2] for x in notes} - {where})
+        print('[compact-clean] This session was just compacted. Before compaction, /compact-clean saved '
+              '%d notes file(s) for it, the newest %d min ago. Run the /compact-resume skill first%s, before '
+              'acting on anything else, then carry on with the user\'s request.%s'
+              % (len(here), (now - notes[-1][1]) // 60,
+                 '' if where == root else ', from %s (the worktree the notes were written in)' % where,
+                 ' Earlier notes also exist in %s: resume from there too.' % ', '.join(others) if others else ''))
+    sys.exit(0)
+
 baseline, base_path, base_why = find_baseline()
 
 if mode == 'probe':
@@ -313,17 +373,7 @@ if mode == 'verify-staged':
 
 if mode == 'bind':
     verdict = {'session_id_present': bool(sess), 'baseline': bool(baseline),
-               'bound': None, 'reason': None, 'notes': []}
-    recs = load_records()
-    for r in recs:
-        n = r.get('notes')
-        rid = r.get('record_id')
-        if (SESS and r.get('session') == SESS and r.get('root') == root
-                and isinstance(r.get('written_at'), int) and 0 <= now - r['written_at'] < MAX_AGE
-                and isinstance(n, str) and isinstance(rid, str)
-                and n == os.path.join(DIR, '%s.%s.%s.notes.md' % (key, tree, rid))
-                and os.path.isfile(n) and not os.path.islink(n)):
-            verdict['notes'].append(n)
+               'bound': None, 'reason': None, 'notes': [n for n, _, _ in session_notes()]}
     r, why = bound_record()
     if r is None:
         verdict['reason'] = why
@@ -339,6 +389,7 @@ if mode == 'bind':
             else:
                 ok.append(p)
         verdict['bound'] = {'record_id': r.get('record_id'), 'written_at': r['written_at'],
+                            'head_sha': r.get('head_sha') or None,
                             'paths': ok, 'fingerprints': {p: r['fingerprints'][p] for p in ok},
                             'rejected': rejected}
     print(json.dumps(verdict, indent=1, ensure_ascii=False))
@@ -468,7 +519,7 @@ trigger = {'certify': 'manual', 'evidence': 'evidence'}.get(mode, 'hook-' + (ptr
 
 rec = {
     'schema': 1,
-    'writer': 'compact-clean 1.0' + (' (hook)' if mode == 'hook' else ''),
+    'writer': 'compact-clean 1.1' + (' (hook)' if mode == 'hook' else ''),
     'record_id': record_id,
     'root': root,
     'session': SESS,
@@ -519,7 +570,11 @@ else:
     print('Safe to compact.')
 PY
 
+if [ "$mode" = guard ]; then set -- "$payload_extra"; fi
 python3 -c "$PY" "$mode" "$root" "$key" "$tree" "$sess_id" "$payload_trigger" "$@"
 rc=$?
-[ "$mode" = hook ] && exit 0
+case "$mode" in
+  hook|cue) exit 0 ;;
+  guard) [ "$rc" -eq 2 ] && exit 2; exit 0 ;;
+esac
 exit $rc
