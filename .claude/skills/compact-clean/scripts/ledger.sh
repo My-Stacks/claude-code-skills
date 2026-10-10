@@ -42,6 +42,7 @@ if [ "$mode" = hook ] || [ "$mode" = guard ] || [ "$mode" = cue ]; then
   # bleed into the next field.
   payload=$(cat 2>/dev/null || true)
   fields=$(printf '%s' "$payload" | python3 -c 'import json, sys
+sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
 try: d = json.load(sys.stdin)
 except Exception: d = {}
 if not isinstance(d, dict): d = {}
@@ -250,43 +251,48 @@ def mine(r, baseline):
             and baseline is not None and r.get('baseline_started_at') == baseline['started_at']
             and isinstance(r.get('written_at'), int) and 0 <= now - r['written_at'] < MAX_AGE)
 
-def session_notes():
-    """[(notes path, written_at)] for this session and tree, under 16h, oldest first."""
+def session_notes(any_root=False):
+    """[(notes path, written_at, root)] for this session, under 16h, oldest first. Only this
+    tree unless any_root: worktrees of one origin share the ledger, and a session can move."""
     out = []
     for r in load_records():
-        n = r.get('notes')
-        rid = r.get('record_id')
-        if (SESS and r.get('session') == SESS and r.get('root') == root
+        n, rid, rr = r.get('notes'), r.get('record_id'), r.get('root')
+        if (SESS and r.get('session') == SESS and isinstance(rr, str) and (any_root or rr == root)
                 and isinstance(r.get('written_at'), int) and 0 <= now - r['written_at'] < MAX_AGE
                 and isinstance(n, str) and isinstance(rid, str)
-                and n == os.path.join(DIR, '%s.%s.%s.notes.md' % (key, tree, rid))
+                and n == os.path.join(DIR, '%s.%s.%s.notes.md'
+                                      % (key, hashlib.sha1(rr.encode()).hexdigest()[:12], rid))
                 and os.path.isfile(n) and not os.path.islink(n)):
-            out.append((n, r['written_at']))
+            out.append((n, r['written_at'], rr))
     return out
 
 if mode == 'guard':
     # Auto-compaction is never blocked, and neither is anything this cannot judge.
     if ptrig != 'manual' or not SESS or 'noflush' in (args[0] if args else '').lower():
         sys.exit(0)
-    if any(r.get('session') == SESS and r.get('root') == root
+    # Any worktree of this origin: the guard protects against a failed flush, and a session
+    # that flushed in one worktree and moved to another did flush.
+    if any(r.get('session') == SESS
            and r.get('trigger') in ('manual', 'evidence')
            and isinstance(r.get('written_at'), int) and 0 <= now - r['written_at'] < GUARD_WINDOW
            for r in load_records()):
         sys.exit(0)
     sys.stderr.write('compact-clean guard: no /compact-clean flush from this session in the last %d '
                      'minutes, so compacting now loses which edits were yours. Run /compact-clean, then '
-                     '/compact. To compact anyway: /compact noflush\n' % (GUARD_WINDOW // 60))
+                     '/compact. If /compact-clean itself fails, or to compact anyway: /compact noflush\n' % (GUARD_WINDOW // 60))
     sys.exit(2)
 
 if mode == 'cue':
     if ptrig != 'compact' or not SESS:
         sys.exit(0)
-    notes = session_notes()
+    notes = session_notes(any_root=True)
     if notes:
+        where = notes[-1][2]
         print('[compact-clean] This session was just compacted. Before compaction, /compact-clean saved '
-              '%d notes file(s) for it, the newest %d min ago. Run the /compact-resume skill first, before '
+              '%d notes file(s) for it, the newest %d min ago. Run the /compact-resume skill first%s, before '
               'acting on anything else, then carry on with the user\'s request.'
-              % (len(notes), (now - notes[-1][1]) // 60))
+              % (len(notes), (now - notes[-1][1]) // 60,
+                 '' if where == root else ', from %s (the worktree the notes were written in)' % where))
     sys.exit(0)
 
 baseline, base_path, base_why = find_baseline()
@@ -363,7 +369,7 @@ if mode == 'verify-staged':
 
 if mode == 'bind':
     verdict = {'session_id_present': bool(sess), 'baseline': bool(baseline),
-               'bound': None, 'reason': None, 'notes': [n for n, _ in session_notes()]}
+               'bound': None, 'reason': None, 'notes': [n for n, _, _ in session_notes()]}
     r, why = bound_record()
     if r is None:
         verdict['reason'] = why
@@ -379,6 +385,7 @@ if mode == 'bind':
             else:
                 ok.append(p)
         verdict['bound'] = {'record_id': r.get('record_id'), 'written_at': r['written_at'],
+                            'head_sha': r.get('head_sha') or None,
                             'paths': ok, 'fingerprints': {p: r['fingerprints'][p] for p in ok},
                             'rejected': rejected}
     print(json.dumps(verdict, indent=1, ensure_ascii=False))

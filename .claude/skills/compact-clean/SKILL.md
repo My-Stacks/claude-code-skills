@@ -147,7 +147,7 @@ Hook mode exits 0 on every path. Failing a compaction to protect a bookkeeping f
 
 ## The PreCompact guard: optional
 
-Blocks a **manual** `/compact` when this session wrote no `/compact-clean` record (certify or `--evidence`) in the last 10 minutes, so a queued `/compact` cannot run over a flush that failed. Exit 2 with the reason shown to the operator. It never blocks auto-compaction, and it allows whenever it cannot judge: no session id, outside a repo, a corrupt ledger, any error. To compact anyway: `/compact noflush` (the word may sit anywhere in the instructions). Add it beside the hook entry above:
+Blocks a **manual** `/compact` when this session wrote no `/compact-clean` record (certify or `--evidence`, in any worktree of this origin) in the last 10 minutes, so a queued `/compact` cannot run over a flush that failed. Exit 2 with the reason shown to the operator. It never blocks auto-compaction, and it allows whenever it cannot judge: no session id, outside a repo, a corrupt ledger, any error. To compact anyway, or when `/compact-clean` itself cannot write (no session id): `/compact noflush` (the word may sit anywhere in the instructions). A blocked attempt still leaves a harmless `hook-manual` evidence record, since hooks run in parallel. Add it beside the hook entry above:
 
 ```json
 { "type": "command", "command": "bash \"$HOME/.claude/skills/compact-clean/scripts/ledger.sh\" guard" }

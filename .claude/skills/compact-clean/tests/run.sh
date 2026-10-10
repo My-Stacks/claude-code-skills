@@ -223,6 +223,7 @@ printf '{"cwd":"%s"}' "$R" | bash "$L" hook
 eq "$(( $(cat "$HOME"/.claude/compact-clean/*.ledger.jsonl | wc -l) - n0 ))" 0 "failed git status records nothing"
 
 # --- guard (PreCompact) ---
+rm -f "$HOME"/.claude/compact-clean/*.ledger.jsonl   # test repos share one origin, so one ledger
 R="$T/g1"; repo "$R"; cd "$R"; baseline "$R" 120; echo s > a
 g() { printf '{"cwd":"%s","session_id":"%s","trigger":"%s","custom_instructions":"%s"}' "$R" "$1" "$2" "$3" | bash "$L" guard 2>"$T/gerr"; echo $?; }
 eq "$(g $S1 manual '')" 2 "guard blocks a manual /compact with no flush"
@@ -263,6 +264,20 @@ eq "$(c $S1 startup)" "" "cue silent on a non-compact start"
 eq "$(c $S2 compact)" "" "cue silent for another session"
 c $S1 compact >/dev/null; eq "$?" 0 "cue exit 0"
 printf '[1]' | bash "$L" cue; eq "$?" 0 "cue exit 0 on a bad payload"
+
+# --- worktrees, encoding, head_sha ---
+rm -f "$HOME"/.claude/compact-clean/*.ledger.jsonl; S3=33333333-3333-3333-3333-333333333333
+R="$T/w1"; repo "$R"; cd "$R"; baseline "$R" 120; echo s > a
+git worktree add -q "$T/w2" 2>/dev/null
+CLAUDE_CODE_SESSION_ID=$S3 bash "$L" certify -- a <<<'NEXT: w' >/dev/null
+eq "$(CLAUDE_CODE_SESSION_ID=$S3 bindq 'bool(v["bound"]["head_sha"])')" True "bind exposes head_sha"
+gw() { printf '{"cwd":"%s","session_id":"%s","trigger":"manual"}' "$T/w2" "$S3" | bash "$L" guard 2>/dev/null; echo $?; }
+eq "$(gw)" 0 "a flush in another worktree satisfies the guard"
+eq "$(printf '{"cwd":"%s","session_id":"%s","source":"compact"}' "$T/w2" "$S3" | bash "$L" cue | grep -c "/w1 (the worktree")" 1 "cue names the worktree holding the notes"
+eq "$(printf '{"cwd":"%s","session_id":"%s","source":"compact"}' "$R" "$S3" | bash "$L" cue | grep -c 'worktree')" 0 "cue names no worktree from the same one"
+gx() { printf '{"cwd":"%s","session_id":"%s","trigger":"manual","custom_instructions":"%s"}' "$R" "$S2" "$1" | bash "$L" guard 2>/dev/null; echo $?; }
+eq "$(gx '\\ud83d x')" 2 "lone surrogate in the payload still blocks"
+eq "$(PYTHONIOENCODING=ascii gx 'caf\\u00e9')" 2 "non-ASCII under an ascii locale still blocks"
 
 # --- key parity with /preflight 5.3 ---
 R="$T/kp"; repo "$R"; cd "$R"
