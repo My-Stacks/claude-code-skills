@@ -276,8 +276,11 @@ eq "$(gw)" 0 "a flush in another worktree satisfies the guard"
 eq "$(printf '{"cwd":"%s","session_id":"%s","source":"compact"}' "$T/w2" "$S3" | bash "$L" cue | grep -c "/w1 (the worktree")" 1 "cue names the worktree holding the notes"
 eq "$(printf '{"cwd":"%s","session_id":"%s","source":"compact"}' "$R" "$S3" | bash "$L" cue | grep -c 'worktree')" 0 "cue names no worktree from the same one"
 gx() { printf '{"cwd":"%s","session_id":"%s","trigger":"manual","custom_instructions":"%s"}' "$R" "$S2" "$1" | bash "$L" guard 2>/dev/null; echo $?; }
-eq "$(gx '\\ud83d x')" 2 "lone surrogate in the payload still blocks"
-eq "$(PYTHONIOENCODING=ascii gx 'caf\\u00e9')" 2 "non-ASCII under an ascii locale still blocks"
+eq "$(gx '\ud83d x')" 2 "lone surrogate in the payload still blocks"
+eq "$(PYTHONIOENCODING=ascii gx 'café')" 2 "raw UTF-8 under an ascii locale still blocks"
+eq "$(PYTHONIOENCODING=ascii gx 'caf\u00e9')" 2 "escaped non-ASCII under an ascii locale still blocks"
+eq "$(gx 'noflushlater')" 2 "noflush must be a word, not a substring"
+eq "$(gx 'focus on X (noflush)')" 0 "noflush beside punctuation bypasses"
 
 # --- key parity with /preflight 5.3 ---
 R="$T/kp"; repo "$R"; cd "$R"

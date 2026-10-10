@@ -55,10 +55,11 @@ Where the notes and the compaction summary disagree, prefer the notes (they had 
 ### Phase 3: Check against the live tree
 
 ```bash
-git status --short && git log --oneline <bound.head_sha>..HEAD
+HEAD_SHA=BOUND_HEAD_SHA   # replace with the value of bound.head_sha
+git status --short --branch && git log --oneline "$HEAD_SHA"..HEAD
 ```
 
-With `bound: null` there is no reference commit: run `git status --short` only and say the commit check was skipped.
+With `bound` or `bound.head_sha` null (a record from compact-clean 1.0), or a sha git no longer knows (rebase, reset), there is no reference commit: run `git status --short --branch` only and say the commit check was skipped.
 
 Every item below is **Drift**:
 
@@ -94,4 +95,4 @@ A `SessionStart` hook with matcher `compact` fires after every compaction, manua
   "command": "bash \"$HOME/.claude/skills/compact-clean/scripts/ledger.sh\" cue" } ] } ] } }
 ```
 
-Requires `compact-clean` 1.1 or later at `~/.claude/skills/compact-clean/` (1.0 has no `cue` and no `head_sha` in `bind`), `git` and `python3`.
+Requires `compact-clean` 1.1 or later at `~/.claude/skills/compact-clean/` (1.0 has no `cue`), `git` and `python3`.

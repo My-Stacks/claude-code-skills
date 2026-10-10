@@ -43,7 +43,7 @@ if [ "$mode" = hook ] || [ "$mode" = guard ] || [ "$mode" = cue ]; then
   payload=$(cat 2>/dev/null || true)
   fields=$(printf '%s' "$payload" | python3 -c 'import json, sys
 sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
-try: d = json.load(sys.stdin)
+try: d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 except Exception: d = {}
 if not isinstance(d, dict): d = {}
 def clean(v): return str(v or "").replace("\n", " ").replace("\r", " ")
@@ -75,7 +75,7 @@ key="${stem:-repo}-${hash}"
 tree=$(printf '%s' "$root" | { shasum 2>/dev/null || sha1sum 2>/dev/null; } | cut -c1-12)
 
 read -r -d '' PY <<'PY'
-import fcntl, glob, hashlib, json, os, secrets, subprocess, sys, time, unicodedata
+import fcntl, glob, hashlib, json, os, re, secrets, subprocess, sys, time, unicodedata
 
 sys.stdout.reconfigure(errors='backslashreplace')
 mode, root, key, tree, sess, ptrig = sys.argv[1:7]
@@ -261,14 +261,14 @@ def session_notes(any_root=False):
                 and isinstance(r.get('written_at'), int) and 0 <= now - r['written_at'] < MAX_AGE
                 and isinstance(n, str) and isinstance(rid, str)
                 and n == os.path.join(DIR, '%s.%s.%s.notes.md'
-                                      % (key, hashlib.sha1(rr.encode()).hexdigest()[:12], rid))
+                                      % (key, tree if rr == root else hashlib.sha1(rr.encode()).hexdigest()[:12], rid))
                 and os.path.isfile(n) and not os.path.islink(n)):
             out.append((n, r['written_at'], rr))
     return out
 
 if mode == 'guard':
     # Auto-compaction is never blocked, and neither is anything this cannot judge.
-    if ptrig != 'manual' or not SESS or 'noflush' in (args[0] if args else '').lower():
+    if ptrig != 'manual' or not SESS or re.search(r'(?<![a-z0-9])noflush(?![a-z0-9])', (args[0] if args else '').lower()):
         sys.exit(0)
     # Any worktree of this origin: the guard protects against a failed flush, and a session
     # that flushed in one worktree and moved to another did flush.
