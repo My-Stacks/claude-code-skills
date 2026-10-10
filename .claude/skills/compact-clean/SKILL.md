@@ -1,6 +1,6 @@
 ---
 name: compact-clean
-version: "1.0"
+version: "1.1"
 description: >-
   Pre-compaction flush for a working session. Run it right before /compact, or
   when the context bar is getting full. Certifies which files this session
@@ -41,7 +41,7 @@ Compare against this file's version in frontmatter.
 /compact-clean --evidence   # snapshot only: nothing certified, nothing will land
 ```
 
-Run it **immediately before** `/compact`. Anything done between the two is uncertified.
+Run it **immediately before** `/compact`. Anything done between the two is uncertified. To chain them, type `/compact` while this is still running: it queues and runs when the turn ends. With the guard below installed, a queued `/compact` is blocked if the record was not written.
 
 Each call below is self-contained: it derives the key, tree and baseline itself, byte-identical to `/preflight`, so nothing needs to persist between shell calls.
 
@@ -102,7 +102,7 @@ The script classifies each path you named: **Certified** (dirty now, absent from
 
 Relay the script's report verbatim. It ends with one of:
 
-- `Safe to compact.` The operator can run `/compact`.
+- `Safe to compact.` The operator can run `/compact` (or already queued it), then `/compact-resume`. With the `cue` hook installed, the resume is cued automatically.
 - `Nothing certified` or `Baseline ABSENT`. Say plainly that no work from this record can land, though its notes will be harvested.
 
 If the script exited non-zero, say the record was **not** written and that the certification exists only in this context: compacting now loses it.
@@ -114,7 +114,7 @@ One JSON object per line in `~/.claude/compact-clean/<key>.ledger.jsonl`, append
 | field | meaning |
 |---|---|
 | `schema` | `1` |
-| `writer` | `compact-clean 1.0`, or `compact-clean 1.0 (hook)` |
+| `writer` | `compact-clean 1.1`, or `compact-clean 1.1 (hook)` |
 | `record_id` | random 12-hex id, for reports and notes filenames; binding does not use it |
 | `root` | repo toplevel |
 | `session` | `sha256:` of `CLAUDE_CODE_SESSION_ID` (manual) or of the hook payload's `session_id`: the binding |
@@ -144,6 +144,16 @@ Install: copy this skill directory to `~/.claude/skills/compact-clean/` (the pat
 ```
 
 Hook mode exits 0 on every path. Failing a compaction to protect a bookkeeping file has its priorities backwards.
+
+## The PreCompact guard: optional
+
+Blocks a **manual** `/compact` when this session wrote no `/compact-clean` record (certify or `--evidence`) in the last 10 minutes, so a queued `/compact` cannot run over a flush that failed. Exit 2 with the reason shown to the operator. It never blocks auto-compaction, and it allows whenever it cannot judge: no session id, outside a repo, a corrupt ledger, any error. To compact anyway: `/compact noflush` (the word may sit anywhere in the instructions). Add it beside the hook entry above:
+
+```json
+{ "type": "command", "command": "bash \"$HOME/.claude/skills/compact-clean/scripts/ledger.sh\" guard" }
+```
+
+Once installed it applies to every manual `/compact` in every repo, including sessions that never meant to flush; those use `noflush`.
 
 ## Relationship to the other skills
 

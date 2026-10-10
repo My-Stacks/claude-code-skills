@@ -42,13 +42,15 @@ cd "$(git rev-parse --show-toplevel)" && bash "$HOME/.claude/skills/compact-clea
 
 No script at that path means `compact-clean` is not installed: say so by name and stop. A non-zero exit means nothing is bound: relay the error.
 
+**If something refused to run the command** (a permission prompt denied, a hook, a sandbox), the notes were **not read**, not absent. Never fall back to reading the notes file yourself. Say what blocked it, and in the brief write `notes UNREAD (<what blocked it>)`. Never say nothing was lost: the notes are where the settled decisions and dead ends live. Ask the operator to allow it and re-run.
+
 The JSON has `notes` (this session's notes files, oldest first) and `bound` (the newest certification record, or `null` with a `reason`). **They are independent:** `bound: null` still comes with notes when the flush ran without a baseline. Never stop on `bound: null` alone.
 
 `notes: []` means this session left nothing to resume from. Say so plainly, give the `reason` if `bound` is null, and note that a session started fresh (after `/clear`, or in a new terminal) has a different id, so its old notes are deliberately out of reach. Work from the compaction summary alone. If the operator names a notes file, read it as their choice, not yours.
 
 ### Phase 2: Read the notes
 
-Read **every** file in `notes`, in order. A session compacted twice has two: an earlier file can hold a decision or trap the later one never repeated. The **newest** file's open thread is the live one.
+Read **every** file in `notes`, in order. A session compacted twice has two: an earlier file can hold a decision or trap the later one never repeated. The **newest** file's open thread is the live one, unless an auto-compaction happened after it was written (the cue's age, or the summary, shows work after the flush): then treat that thread as possibly stale and confirm it before acting.
 
 Where the notes and the compaction summary disagree, prefer the notes (they had full context) and say which point you took from which.
 
@@ -79,6 +81,17 @@ Next        <the open thread's next concrete step>
 Then **do the next step**. Stop and ask instead only when there is no open thread, it is ambiguous, Drift is not `none`, or the step crosses a gate in Constraints or is outward-facing (push, PR, ticket, message).
 
 Edits made from here are new work, attributed from the live transcript. Before the next `/compact`, run `/compact-clean` again and name them; earlier certified paths carry forward on their own.
+
+## The SessionStart cue: automatic resume
+
+A `SessionStart` hook with matcher `compact` fires after every compaction, manual or auto. `ledger.sh cue` adds one line to the fresh context, and only when this session left notes: run `/compact-resume` first. The hook can add context but cannot start a turn, so the resume runs on the operator's next message, whatever it says. Exits 0 on every path. Install in `~/.claude/settings.json`:
+
+```json
+{ "hooks": { "SessionStart": [ { "matcher": "compact", "hooks": [ { "type": "command",
+  "command": "bash \"$HOME/.claude/skills/compact-clean/scripts/ledger.sh\" cue" } ] } ] } }
+```
+
+With compact-clean's `guard` also installed, the whole chain is: `/compact-clean`, queue `/compact` while it runs, then any message.
 
 ## Relationship to the other skills
 
