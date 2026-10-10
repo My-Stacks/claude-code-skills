@@ -287,12 +287,16 @@ if mode == 'cue':
         sys.exit(0)
     notes = session_notes(any_root=True)
     if notes:
+        # bind lists one worktree's notes, so count and name per worktree, newest first.
         where = notes[-1][2]
+        here = [x for x in notes if x[2] == where]
+        others = sorted({x[2] for x in notes} - {where})
         print('[compact-clean] This session was just compacted. Before compaction, /compact-clean saved '
               '%d notes file(s) for it, the newest %d min ago. Run the /compact-resume skill first%s, before '
-              'acting on anything else, then carry on with the user\'s request.'
-              % (len(notes), (now - notes[-1][1]) // 60,
-                 '' if where == root else ', from %s (the worktree the notes were written in)' % where))
+              'acting on anything else, then carry on with the user\'s request.%s'
+              % (len(here), (now - notes[-1][1]) // 60,
+                 '' if where == root else ', from %s (the worktree the notes were written in)' % where,
+                 ' Earlier notes also exist in %s: resume from there too.' % ', '.join(others) if others else ''))
     sys.exit(0)
 
 baseline, base_path, base_why = find_baseline()

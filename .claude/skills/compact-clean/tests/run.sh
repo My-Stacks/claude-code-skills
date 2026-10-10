@@ -238,14 +238,15 @@ eq "$(g $S1 manual '')" 0 "a fresh certify unblocks"
 eq "$(g $S2 manual '')" 2 "another session's flush does not unblock"
 CLAUDE_CODE_SESSION_ID=$S2 bash "$L" evidence </dev/null >/dev/null
 eq "$(g $S2 manual '')" 0 "a fresh evidence snapshot unblocks"
-python3 - "$HOME"/.claude/compact-clean/*.ledger.jsonl <<'PY'
+set -- "$HOME"/.claude/compact-clean/*.ledger.jsonl; eq "$#" 1 "guard tests run against exactly one ledger"; LG=$1
+python3 - "$LG" <<'PY'
 import json, sys
 p = sys.argv[1]; rs = [json.loads(l) for l in open(p)]
 for r in rs: r['written_at'] -= 11 * 60
 open(p, 'w').write(''.join(json.dumps(r) + '\n' for r in rs))
 PY
 eq "$(g $S1 manual '')" 2 "a flush older than 10 min does not unblock"
-echo garbage >> "$HOME"/.claude/compact-clean/*.ledger.jsonl
+echo garbage >> "$LG"
 eq "$(g $S1 manual '')" 0 "corrupt ledger: guard fails open"
 cd "$T"; eq "$(printf '{"cwd":"%s","session_id":"%s","trigger":"manual"}' "$T" "$S1" | bash "$L" guard 2>/dev/null; echo $?)" 0 "outside a repo: guard allows"
 for p in '' '[1]' '{"cwd":"/nonexistent","trigger":"manual"}'; do
@@ -275,6 +276,9 @@ gw() { printf '{"cwd":"%s","session_id":"%s","trigger":"manual"}' "$T/w2" "$S3" 
 eq "$(gw)" 0 "a flush in another worktree satisfies the guard"
 eq "$(printf '{"cwd":"%s","session_id":"%s","source":"compact"}' "$T/w2" "$S3" | bash "$L" cue | grep -c "/w1 (the worktree")" 1 "cue names the worktree holding the notes"
 eq "$(printf '{"cwd":"%s","session_id":"%s","source":"compact"}' "$R" "$S3" | bash "$L" cue | grep -c 'worktree')" 0 "cue names no worktree from the same one"
+( cd "$T/w2" && echo s > b && CLAUDE_CODE_SESSION_ID=$S3 bash "$L" certify -- b <<<'NEXT: w2' >/dev/null )
+out=$(printf '{"cwd":"%s","session_id":"%s","source":"compact"}' "$R" "$S3" | bash "$L" cue)
+eq "$(echo "$out" | grep -c 'saved 1 notes file(s).*/w2 (the worktree.*Earlier notes also exist in .*/w1: resume from there too')" 1 "cue counts per worktree and names the others"
 gx() { printf '{"cwd":"%s","session_id":"%s","trigger":"manual","custom_instructions":"%s"}' "$R" "$S2" "$1" | bash "$L" guard 2>/dev/null; echo $?; }
 eq "$(gx '\ud83d x')" 2 "lone surrogate in the payload still blocks"
 eq "$(PYTHONIOENCODING=ascii gx 'café')" 2 "raw UTF-8 under an ascii locale still blocks"

@@ -38,7 +38,7 @@ From the repo root:
 cd "$(git rev-parse --show-toplevel)" && bash "$HOME/.claude/skills/compact-clean/scripts/ledger.sh" bind
 ```
 
-No script at that path means `compact-clean` is not installed: say so by name and stop. If the cue named another worktree, run the command from that root instead: notes bind to the worktree they were written in.
+No script at that path means `compact-clean` is not installed: say so by name and stop. If the cue named another worktree, run the command from that root instead, and from each earlier worktree it lists: notes bind to the worktree they were written in.
 
 **If the command was refused** (a permission prompt denied, a hook, a sandbox) **or exited non-zero**, the notes were **not read**, which is not the same as absent. Never fall back to reading the notes file yourself and never report the notes as absent. Put `notes UNREAD (<what blocked it, or the error>)` in the brief header, work from the compaction summary, and ask the operator to fix the cause and re-run.
 
