@@ -1,6 +1,6 @@
 ---
 name: preflight
-version: "5.3"
+version: "5.4"
 description: >-
   Pre-session safe-sync briefing for git repos. Brings the repo up to date
   before work begins — fast-forwards active branches to origin, flags stale
@@ -362,6 +362,8 @@ End with one of:
 ⚠️ **Things worth handling first.** Items that could compound if ignored (flagged branches, PR backlog). Kyle decides priority.
 
 🛑 **Recommend resolving before starting.** Items that will likely cause problems (diverged default, secrets in tree, severely stale backlog). Kyle decides; the skill flags severity.
+
+When FLAGGED is non-empty, close with one line: `N items flagged. Run /tidy to clear them.` Never run /tidy from here.
 
 ## When Kyle asks "what would you do?" or "why does this matter?"
 
