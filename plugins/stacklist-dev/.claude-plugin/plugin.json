@@ -1,0 +1,13 @@
+{
+  "name": "stacklist-dev",
+  "version": "0.1.0",
+  "description": "Stacklist engineering kit: repo registry (PR bases, safe verify commands, hazards), /verify, /ship-pr, /angles, FE/BE architecture reviewers, and a rule-enforcer hook for branch names, PR bases and test safety.",
+  "author": {
+    "name": "Stacklist",
+    "url": "https://stacklist.com"
+  },
+  "homepage": "https://github.com/My-Stacks/claude-code-skills/tree/main/plugins/stacklist-dev",
+  "repository": "https://github.com/My-Stacks/claude-code-skills",
+  "license": "MIT",
+  "keywords": ["stacklist", "registry", "verify", "code-review", "guardrails"]
+}
