@@ -63,7 +63,7 @@ repos:
     area: mcp
     stack: Node MCP server (HTTP + stdio), Supabase client, Redis, vitest
     pr_base: dev
-    verify: npm run lint && npm run type-check && npm run test:unit -- --maxWorkers=4
+    verify: npm run lint && npm run type-check && npm run test:unit -- --maxWorkers=4 --minWorkers=1   # vitest 1.x rejects maxWorkers below its default minWorkers
     loop_ready: true
     deploy: Railway. main -> prod, dev -> dev (README still says Cloud Run, stale)
     hazards:
