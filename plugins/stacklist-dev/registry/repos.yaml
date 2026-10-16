@@ -72,7 +72,7 @@ repos:
     area: contract
     stack: pure TS library, tsup, vitest
     pr_base: main
-    verify: npm run ci && git diff --exit-code artifacts/
+    verify: npm run ci && npm run validate:templates && git diff --exit-code artifacts/   # matches CLAUDE.md. ci regenerates artifacts/: `git add artifacts/` first, then the diff check (working tree vs index) passes
     loop_ready: true
     deploy: none; consumers vendor a .tgz (npm run sync is human only)
     hazards:
@@ -123,7 +123,7 @@ repos:
     area: be
     stack: Node scraper service, Redis, jest
     pr_base: dev
-    verify: npm run lint && npm run typecheck && cp -n .env.example .env && npm test
+    verify: npm run lint && npm run typecheck && (test -f .env || cp .env.example .env) && npm test   # CI does the same copy; .env is gitignored
     loop_ready: true
     deploy: CI/CD to Google VMs. main -> prod VM, dev -> dev VM (pipeline not in this repo's .github on main)
     hazards:
@@ -147,7 +147,6 @@ repos:
     area: fe
     stack: browser extension (Chrome/Firefox/Edge/Safari), webpack, React
     pr_base: dev
-    umbrellas: [refactoring]
     verify: npm run build-chrome     # only gate that exists: no tests, lint or typecheck
     loop_ready: false
     deploy: manual store submission (human only)
@@ -158,7 +157,7 @@ repos:
     area: infra
     stack: Cloudflare Workers (images, smart-routes, analytics)
     pr_base: main
-    verify: null     # no tests; `wrangler deploy --dry-run` per worker is the closest check
+    verify: npx -y -p typescript@5 tsc --noEmit -p .   # matches CLAUDE.md; then `cd workers/<name> && npx wrangler deploy --dry-run` for each Worker touched (bundles only, no type-check)
     loop_ready: false
     deploy: every merge to main deploys all 3 workers to production, ungated
     hazards: [treat every PR as a prod deploy]

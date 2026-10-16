@@ -11,7 +11,7 @@ Reference for visual changes (optional): `$ARGUMENTS`
 ## 1. Find this repo's entry
 
 - Repo slug: `git remote get-url origin` → `My-Stacks/<name>`.
-- Registry: `registry/repos.yaml` in this plugin (two directories up from this skill). Read the entry under `repos.<name>`.
+- Registry: `${CLAUDE_PLUGIN_ROOT}/registry/repos.yaml`. In a cloud routine without the plugin installed, it is `plugins/stacklist-dev/registry/repos.yaml` in the cloned `My-Stacks/claude-code-skills`. Read the entry under `repos.<name>`.
 - No entry → report `VERIFY: none (repo not in registry)` and stop. Never invent a command.
 
 ## 2. Run the Verify command

@@ -9,7 +9,7 @@ The shared Claude Code kit for Stacklist (My-Stacks) repos. One setup for Martin
 | `/ship-pr <n> [comment\|fix]` | Review + triage + architecture pass + Sonar, then post verified findings as one review, or fix, `/verify`, push. Stops at "Merge?". |
 | `/angles <problem>` | Plan from four forced angles (smallest, proper, reuse, contrarian) in parallel, score, merge. For real decisions only; it is token-heavy. |
 | `fe-architecture-review`, `be-architecture-review` | Read-only (Read/Glob/Grep) architecture pass for platform-v2 and cloud-functions. Builders run them as a self-check. |
-| `hooks/rule-enforcer.mjs` | Blocks: person-named branches, `gh pr create --base main` in dev-flow repos, jest without a worker cap, bare jest in cloud-functions. Fails open. |
+| `hooks/rule-enforcer.mjs` | Blocks: person-named branches (bots may use `claude/`), `gh pr create` in dev-flow repos without an explicit `--base` or with `--base main` (promotions with `--head dev` allowed), jest without `--maxWorkers` ≤ 4 or `--runInBand`, bare jest in cloud-functions. Parses each simple command (newlines, `&&`, pipes, wrappers like `timeout`); the repo comes from the directory, `cd`, `git -C` or `gh -R`. Its PR-base table is tested against the registry. Fails open. |
 
 ## Install
 
