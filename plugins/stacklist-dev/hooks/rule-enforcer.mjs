@@ -25,11 +25,13 @@ export const PR_BASE = {
   'stacklist-hub-builder': 'main',
   'stacklist-extensions': 'dev',
   'stacklist-wrangler': 'main',
-  'stacklist-shopify': 'feat/be-780-shopify-app-build',
+  'stacklist-shopify': 'main',
   'stacklist-report-generator': 'main',
 }
 const MAX_WORKERS = 4
 const TRUNKS = ['main', 'master', 'staging']
+const PROTECTED = [...TRUNKS, 'dev']
+const PROD_SUPABASE_REFS = ['aohcnbwwbuiqzorvnxcq']
 const BRANCH_OK = /^(feat|fix|chore|refactor|docs|test|perf|ci|build|style|revert|hotfix|release|deps|spike|ops|claude)\//
 
 // ---- shell-ish parsing -------------------------------------------------------
@@ -260,7 +262,7 @@ export const createdBranches = ws => {
 }
 
 const branchRule = ws => {
-  const bad = createdBranches(ws).filter(b => !BRANCH_OK.test(b))
+  const bad = createdBranches(ws).filter(b => !BRANCH_OK.test(b) && !PROTECTED.includes(b))
   if (bad.length === 0) return null
   const fixes = bad.map(b => `${b} -> ${b.includes('/') ? b.replace(/^[^/]+\//, 'feat/') : `feat/${b}`}`)
   return `Branch names start with a type prefix (feat/, fix/, chore/, ...), never a person's name. Rename: ${fixes.join(', ')}.`
@@ -283,8 +285,62 @@ const prRule = (ws, repoAt) => {
   return null
 }
 
-/** First rule violation in the command, or null. `cwd` is where the command starts. */
-export const check = (cmd, cwd) => {
+// ---- the registry's `never` rules ------------------------------------------------
+// Blocked unless the command carries the confirm token, the same convention as
+// ~/.claude/hooks/guard-prod.sh. Tokens count only in the main session: a subagent
+// (agent: true) can never confirm its own command.
+
+const isEnvFile = p => /(^|\/)\.env(\.[\w.-]+)?$/.test(p) && !/\.(example|sample|template)$/.test(p)
+const READERS = ['cat', 'head', 'tail', 'less', 'more', 'bat', 'source', '.', 'grep', 'rg', 'awk', 'sed', 'cut', 'strings', 'xxd', 'base64']
+
+const neverRule = ws => {
+  const t = ws.map(w => w.text)
+  // merges
+  if ((t[0] === 'gh' && t[1] === 'pr' && t[2] === 'merge') || (t[0] === 'gh' && t[1] === 'api' && t.some(a => /\/merge(\b|$)/.test(a))))
+    return { token: 'CONFIRMED_MERGE', why: 'merging a PR. A human merges.' }
+  // pushes
+  if (t[0] === 'git') {
+    let i = 1
+    while (t[i]?.startsWith('-')) { if (t[i] === '-C' || t[i] === '-c') i++; i++ }
+    if (t[i] === 'push') {
+      const args = t.slice(i + 1)
+      const positional = args.filter(a => !a.startsWith('-'))
+      const refspecs = positional.slice(1)
+      if (args.some(a => a === '-f' || a === '--force' || a.startsWith('--force-with-lease') || a === '--force-if-includes') || refspecs.some(r => r.startsWith('+')))
+        return { token: 'CONFIRMED_FORCE', why: 'force-push.' }
+      const dst = refspecs.map(r => r.replace(/^\+/, '').split(':').pop().replace(/^refs\/heads\//, ''))
+      const hit = dst.find(d => PROTECTED.includes(d))
+      if (hit) return { token: 'CONFIRMED_MAIN', why: `push to ${hit}. Push your own branch and open a PR.` }
+    }
+  }
+  // deploys and migrations
+  const sub = `${t[0]} ${t[1] ?? ''} ${t[2] ?? ''}`
+  const isDeploy =
+    /^firebase deploy/.test(sub) ||
+    (['npm', 'pnpm', 'yarn'].includes(t[0]) && t.slice(1, 3).some(a => /^deploy(:|$)/.test(a))) ||
+    (t[0] === 'vercel' && (['deploy', 'promote'].includes(t[1]) || t.includes('--prod'))) ||
+    (t[0] === 'railway' && ['up', 'redeploy', 'deploy'].includes(t[1])) ||
+    /^supabase (db (push|reset)|migration up|functions deploy)/.test(sub) ||
+    (t[0] === 'wrangler' || (t[0] === 'npx' && t[1] === 'wrangler')) && t.some(a => a === 'deploy' || a === 'publish') && !t.includes('--dry-run') ||
+    /^shopify app deploy/.test(sub) ||
+    (t[0] === 'gcloud' && t.includes('deploy')) ||
+    (['node', 'bash', 'sh'].includes(t[0]) && /(^|\/)deploy\.(mjs|js|ts|sh)$/.test(t[1] ?? ''))
+  if (isDeploy) return { token: 'CONFIRMED_DEPLOY', why: 'a deploy or migration. Put the steps in the handoff; a human runs them.' }
+  // reading secrets
+  if (READERS.includes(t[0]) && t.slice(1).some(isEnvFile))
+    return { token: 'CONFIRMED_ENV', why: 'reading a .env file. Ask for the one value you need instead.' }
+  // production database
+  if (PROD_SUPABASE_REFS.some(ref => t.some(a => a.includes(ref))))
+    return { token: 'CONFIRMED_PROD', why: 'a command that targets the production Supabase project.' }
+  return null
+}
+
+/**
+ * First rule violation in the command, or null. `cwd` is where the command starts;
+ * `agent` is true when a subagent runs it (confirm tokens don't count then).
+ */
+export const check = (cmd, cwd, { agent = false } = {}) => {
+  const confirmed = token => !agent && cmd.includes(token)
   let dir = cwd
   for (const seg of segments(cmd)) {
     const ws = stripWrappers(words(seg))
@@ -300,10 +356,13 @@ export const check = (cmd, cwd) => {
     }
     if (['bash', 'sh', 'zsh'].includes(ws[0].text)) {
       const k = ws.findIndex(w => w.text === '-c')
-      const inner = k >= 0 && ws[k + 1] ? check(ws[k + 1].text, segDir) : null
+      const inner = k >= 0 && ws[k + 1] ? check(ws[k + 1].text, segDir, { agent }) : null
       if (inner) return inner
       continue
     }
+    const never = neverRule(ws)
+    if (never && !confirmed(never.token))
+      return `${never.why} ${agent ? 'Subagents can never confirm this; report it and stop.' : `If a human asked for exactly this, include ${never.token} in the command.`}`
     const jest = jestArgs(ws)
     const why = (jest && jestRules(jest, repoOf(segDir))) || branchRule(ws) || prRule(ws, () => repoOf(segDir))
     if (why) return why
@@ -317,7 +376,7 @@ const main = async () => {
   const input = JSON.parse(raw)
   const cmd = input?.tool_input?.command
   if (typeof cmd !== 'string') return
-  const why = check(cmd, input.cwd ?? process.cwd())
+  const why = check(cmd, input.cwd ?? process.cwd(), { agent: Boolean(input.agent_id) })
   if (why) {
     process.stderr.write(`stacklist rule: ${why}\n`)
     process.exit(2)

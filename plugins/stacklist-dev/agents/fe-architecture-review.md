@@ -1,6 +1,6 @@
 ---
 name: fe-architecture-review
-description: Read-only architecture pass on a frontend branch in stacklist-platform-v2. Checks that the change reuses existing hooks, utils, services and components, extracts into small reusable pieces, and follows the patterns neighbouring code uses. Called by fe-builder as its self-check. Never edits anything.
+description: Read-only architecture pass on a frontend branch in stacklist-platform-v2. Checks that the change reuses existing hooks, utils, services and components, extracts into small reusable pieces, and follows the patterns neighbouring code uses. Run as a self-check by builder agents or from /ship-pr. Never edits anything.
 tools: Read, Glob, Grep
 model: claude-sonnet-5-5
 ---

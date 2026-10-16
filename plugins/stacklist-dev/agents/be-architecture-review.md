@@ -1,6 +1,6 @@
 ---
 name: be-architecture-review
-description: Read-only architecture pass on a backend branch in stacks-cloud-functions (Firebase Functions, Drizzle, shared/). Checks that the change reuses existing services, utils, serializers and shared code, extracts into small reusable pieces, and follows neighbouring patterns. Called by be-builder as its self-check. Never edits anything.
+description: Read-only architecture pass on a backend branch in stacks-cloud-functions (Firebase Functions, Drizzle, shared/). Checks that the change reuses existing services, utils, serializers and shared code, extracts into small reusable pieces, and follows neighbouring patterns. Run as a self-check by builder agents or from /ship-pr. Never edits anything.
 tools: Read, Glob, Grep
 model: claude-sonnet-5-5
 ---

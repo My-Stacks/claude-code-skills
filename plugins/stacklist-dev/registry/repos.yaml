@@ -18,7 +18,7 @@
 # 30 merged PRs. Re-check when CI changes.
 
 defaults:
-  never:
+  never:   # enforced by hooks/rule-enforcer.mjs (confirm tokens count only in a main session)
     - merge a PR, push to main/master/staging/dev, or force-push
     - deploy anything, run a migration, or write to a prod or dev database
     - read or print .env* files
@@ -34,13 +34,13 @@ repos:
     umbrellas: [feat/stream-video-poc]   # feat/articles merged 2026-09-28, feat/blog-surface merged 2026-10-12
     verify: cd apps/app && npx tsc --noEmit && npm run lint && npm test -- --maxWorkers=4
     verify_ui: PR preview screenshots (desktop + phone) next to the Figma frame; e2e only via the `run-e2e` label
+    verify_notes: jest runs with --passWithNoTests, so "0 tests" passes. For changed logic, confirm the run included tests for it (add them if none exist).
     loop_ready: true
     deploy: Vercel. dev -> dev.stacklist.com, staging -> staging.stacklist.com, main -> prod (release/prod-* promotion, human only)
     hazards:
       - never install across apps/app and apps/marketing; marketing deps never go in the root lockfile
       - never regenerate the lockfile on macOS (drops linux swc/sharp/esbuild binaries, CI fails)
       - prod Supabase aohcnbwwbuiqzorvnxcq is off limits
-    notes: apps/app/CLAUDE.md lists dead dev Supabase ref qcnbsqglvxmelspkioys (stale, fix in Step 1.2)
 
   stacks-cloud-functions:
     slug: My-Stacks/stacks-cloud-functions
@@ -48,7 +48,8 @@ repos:
     stack: Firebase Functions (Node 22), 4 codebases (functions, functions-media, functions-billing, functions-read) + shared/, Supabase Postgres + Drizzle
     pr_base: dev
     umbrellas: [feat/stream-video-poc]
-    verify: cd functions && npm run lint && npm run build && npm test
+    verify: cd functions && npm run lint && npm run build && npm test   # jest.config caps workers at 4 outside CI
+    verify_notes: covers functions/ only. If the change touches functions-media or functions-billing, also run `npm run lint && npm run build` in each (as pr-checks.yml does), and `npm run build` in functions-read. A change in shared/ means all four.
     loop_ready: true
     deploy: GitHub Actions. dev -> stacks-d91c6, main -> stacklist-prod
     hazards:
@@ -62,7 +63,7 @@ repos:
     area: mcp
     stack: Node MCP server (HTTP + stdio), Supabase client, Redis, vitest
     pr_base: dev
-    verify: npm run lint && npm run type-check && npm run test:unit
+    verify: npm run lint && npm run type-check && npm run test:unit -- --maxWorkers=4
     loop_ready: true
     deploy: Railway. main -> prod, dev -> dev (README still says Cloud Run, stale)
     hazards:
@@ -73,7 +74,7 @@ repos:
     area: contract
     stack: pure TS library, tsup, vitest
     pr_base: main
-    verify: npm run ci && npm run validate:templates && git diff --exit-code artifacts/   # matches CLAUDE.md
+    verify: npm run ci && npm run validate:templates && git diff --exit-code artifacts/   # matches CLAUDE.md; vitest worker cap: none yet (composite script)
     verify_notes: npm run ci regenerates artifacts/. If they changed, run `git add artifacts/` and rerun verify; the diff check compares the working tree to the index, so it then passes. Commit the artifacts with the change.
     loop_ready: true
     deploy: none; consumers vendor a .tgz (npm run sync is human only)
@@ -92,27 +93,26 @@ repos:
     deploy: Vercel. main -> prod, dev -> preview
     hazards:
       - adding a Hub Builder label provisions a real Stacklist account
-    notes: CLAUDE.md says PRs go to main; practice is dev (16 of last 30). Fix in Step 1.2
 
   stacklist-capacitor:
     slug: My-Stacks/stacklist-capacitor
     area: mobile
     stack: Vite + React + Capacitor (ios/android), vitest, playwright, Maestro
     pr_base: dev
-    verify: npx tsc --noEmit && npm run lint && npm run test:unit
+    verify: npx tsc --noEmit && npm run lint && npm run test:unit -- --maxWorkers=4
     loop_ready: true
     deploy: manual store builds (human only)
     hazards:
       - never edit version strings; use /version-bump
       - playwright e2e logs into the dev backend; not part of verify
-    notes: CLAUDE.md has stale paths and an expired umbrella (feature/app-layout-mobile). Fix in Step 1.2
+    notes: CLAUDE.md stale paths and expired umbrella (feature/app-layout-mobile) are fixed in capacitor PR #1080 (open)
 
   stacklist-radar:
     slug: My-Stacks/stacklist-radar
     area: be
     stack: Astro on Cloudflare Workers (D1, Workflows, R2), vitest workers pool
     pr_base: main
-    verify: npm test && npm run typecheck
+    verify: npm test && npm run typecheck   # vitest worker cap: none yet (composite script); add maxWorkers to vitest config
     loop_ready: true
     deploy: manual scripts/deploy.mjs (human only)
     hazards:
@@ -125,11 +125,11 @@ repos:
     area: be
     stack: Node scraper service, Redis, jest
     pr_base: dev
-    verify: npm run lint && npm run typecheck && (test -f .env || cp .env.example .env) && npm test   # CI does the same copy; .env is gitignored
+    verify: npm run lint && npm run typecheck && (test -f .env || cp .env.example .env) && npm test -- --maxWorkers=4   # CI does the same copy; .env is gitignored
     loop_ready: true
     deploy: CI/CD to Google VMs. main -> prod VM, dev -> dev VM (pipeline not in this repo's .github on main)
     hazards:
-      - the Dockerfile copies .env into the image; never put real secrets in a committed file
+      - .dockerignore excludes .env; the image bakes in the committed .env.production, so never put a real secret in it
 
   stacklist-hub-builder:
     slug: My-Stacks/stacklist-hub-builder
@@ -168,8 +168,8 @@ repos:
   stacklist-shopify:
     slug: My-Stacks/stacklist-shopify
     area: be
-    stack: React Router Shopify app, Prisma, vitest (code lives on the umbrella branch)
-    pr_base: feat/be-780-shopify-app-build
+    stack: React Router Shopify app, Prisma, vitest
+    pr_base: main   # feat/be-780-shopify-app-build merged into main 2026-10-06 (#3)
     verify: npm run typecheck && npm test
     loop_ready: false
     deploy: planned Cloud Run; App Store submission human only

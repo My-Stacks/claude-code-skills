@@ -128,7 +128,7 @@ test('a value that starts like a short flag is not that flag', () => {
 
 test('staging and other trunks are refused, for every repo with its own base', () => {
   blocked('gh pr create --base staging', PV2, /not staging/)
-  blocked('gh pr create --base main', '/x/stacklist/stacklist-shopify', /not main/)
+  blocked('gh pr create --base staging', '/x/stacklist/stacklist-mcp', /not staging/)
   ok('gh pr create --base main --head release/prod-2026-10-16', PV2)
   ok('gh pr create --base main', RADAR)
 })
@@ -145,6 +145,44 @@ test('herestrings and quoted << do not swallow later lines', () => {
   blocked('cat <<< foo\nnpx jest', PV2, /worker cap/)
   blocked('echo "x << EOF"\nnpx jest', PV2, /worker cap/)
   blocked("cat <<'EOF'\nbody\nEOF\nnpx jest", PV2, /worker cap/)
+})
+
+// ---- Dusan's review ---------------------------------------------------------------
+
+test('trunk names are not judged as new branch names', () => {
+  ok('git branch dev origin/dev', PV2)
+  ok('git checkout -b main origin/main', PV2)
+})
+
+test('never rules: blocked unless the main session confirms', () => {
+  blocked('git push origin main', PV2, /CONFIRMED_MAIN/)
+  blocked('git push origin HEAD:dev', PV2, /CONFIRMED_MAIN/)
+  ok('git push origin main # CONFIRMED_MAIN', PV2)
+  blocked('git push -f origin feat/x', PV2, /CONFIRMED_FORCE/)
+  blocked('git push origin +feat/x', PV2, /CONFIRMED_FORCE/)
+  ok('git push -u origin feat/x', PV2)
+  blocked('gh pr merge 12 --squash', PV2, /CONFIRMED_MERGE/)
+  blocked('gh api repos/o/r/pulls/12/merge -X PUT', PV2, /CONFIRMED_MERGE/)
+  blocked('firebase deploy --only functions', CF, /CONFIRMED_DEPLOY/)
+  blocked('npm run deploy:production', CF, /CONFIRMED_DEPLOY/)
+  blocked('vercel --prod', PV2, /CONFIRMED_DEPLOY/)
+  blocked('cd workers/x && npx wrangler deploy', '/x/stacklist/stacklist-wrangler', /CONFIRMED_DEPLOY/)
+  ok('cd workers/x && npx wrangler deploy --dry-run', '/x/stacklist/stacklist-wrangler')
+  blocked('supabase db push', CF, /CONFIRMED_DEPLOY/)
+  ok('npm run build', PV2)
+  blocked('cat .env.local', PV2, /CONFIRMED_ENV/)
+  blocked('grep DB_URL scripts/.env.local', CF, /CONFIRMED_ENV/)
+  ok('cat .env.example', PV2)
+  blocked('psql "postgres://x@db.aohcnbwwbuiqzorvnxcq.supabase.co"', CF, /CONFIRMED_PROD/)
+})
+
+test('a subagent can never confirm its own command', () => {
+  assert.match(check('git push origin main # CONFIRMED_MAIN', PV2, { agent: true }) ?? '', /Subagents can never confirm/)
+  assert.match(check('gh pr merge 1 # CONFIRMED_MERGE', PV2, { agent: true }) ?? '', /Subagents can never confirm/)
+})
+
+test('shopify now targets main', () => {
+  ok('gh pr create --base main', '/x/stacklist/stacklist-shopify')
 })
 
 test('more ways to create a branch; copy is not create', () => {
