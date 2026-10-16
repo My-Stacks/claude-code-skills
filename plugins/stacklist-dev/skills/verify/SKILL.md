@@ -17,6 +17,7 @@ Reference for visual changes (optional): `$ARGUMENTS`
 ## 2. Run the Verify command
 
 - Run the entry's `verify` exactly as written, from the repo root (or the worktree root you are working in). Capture the exit code; don't eyeball output.
+- If the entry has `verify_notes`, follow them too; they are part of the check, not advice.
 - `verify: null` → report `VERIFY: none` with the entry's comment. The change needs a human.
 - Never substitute a broader command (integration/e2e suites, `npm test` where the registry says otherwise, deploy, migrate). The registry's command is the safe one; others in the repo may write to a real DB or call paid APIs.
 - Fails → read the failure, fix it if it is caused by your change, rerun once. Still failing, or failing on code you didn't touch → stop and report it.

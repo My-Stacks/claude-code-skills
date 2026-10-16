@@ -111,3 +111,47 @@ test('as a hook: exit 2 + reason, exit 0 otherwise, fail open, works through a s
   symlinkSync(HOOK, link)
   assert.equal(run(bad, link).status, 2)
 })
+
+// ---- second review round --------------------------------------------------------
+
+test('cloud-functions: only the unit project passes', () => {
+  blocked('npx jest --selectProjects e2e --maxWorkers=4', CF, /only the unit/)
+  blocked('npx jest --selectProjects unit integration --maxWorkers=4', CF, /only the unit/)
+  blocked('npx jest --selectProjects=unit,e2e --maxWorkers=4', CF, /only the unit/)
+  ok('npx jest --selectProjects=unit --maxWorkers=4', CF)
+})
+
+test('a value that starts like a short flag is not that flag', () => {
+  blocked('gh pr create --title "-Bump deps" --base main', PV2, /not main/)
+  blocked('gh pr create --title "-Hx" --base main', PV2, /not main/)
+})
+
+test('staging and other trunks are refused, for every repo with its own base', () => {
+  blocked('gh pr create --base staging', PV2, /not staging/)
+  blocked('gh pr create --base main', '/x/stacklist/stacklist-shopify', /not main/)
+  ok('gh pr create --base main --head release/prod-2026-10-16', PV2)
+  ok('gh pr create --base main', RADAR)
+})
+
+test('wrappers, subshells, sh -c and comments do not hide jest', () => {
+  blocked('nice -n 10 npx jest', PV2, /worker cap/)
+  blocked('(cd app && npx jest)', PV2, /worker cap/)
+  blocked('bash -c "npx jest"', PV2, /worker cap/)
+  blocked('npx jest # --maxWorkers=4', PV2, /worker cap/)
+  ok('echo $(git rev-parse HEAD)', PV2)
+})
+
+test('herestrings and quoted << do not swallow later lines', () => {
+  blocked('cat <<< foo\nnpx jest', PV2, /worker cap/)
+  blocked('echo "x << EOF"\nnpx jest', PV2, /worker cap/)
+  blocked("cat <<'EOF'\nbody\nEOF\nnpx jest", PV2, /worker cap/)
+})
+
+test('more ways to create a branch; copy is not create', () => {
+  blocked('git checkout -bmartina/x', PV2, /type prefix/)
+  blocked('git switch --create=martina/x', PV2, /type prefix/)
+  blocked('git push origin HEAD:martina/x', PV2, /type prefix/)
+  ok('git push origin HEAD:feat/x', PV2)
+  ok('git push -u origin feat/x', PV2)
+  ok('git branch -C old new', PV2)
+})

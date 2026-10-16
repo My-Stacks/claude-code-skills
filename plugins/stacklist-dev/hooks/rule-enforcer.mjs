@@ -2,6 +2,9 @@
 // PreToolUse(Bash) hook: blocks commands that break the Stacklist team rules.
 // Reads the hook JSON on stdin; exit 2 + stderr blocks the call and tells Claude why.
 // Fails open: any internal error lets the command through.
+//
+// This is a guardrail against honest mistakes, not a security boundary: it parses
+// common shell, not every shell construct.
 
 import { execFileSync } from 'node:child_process'
 import { realpathSync } from 'node:fs'
@@ -26,31 +29,22 @@ export const PR_BASE = {
   'stacklist-report-generator': 'main',
 }
 const MAX_WORKERS = 4
+const TRUNKS = ['main', 'master', 'staging']
 const BRANCH_OK = /^(feat|fix|chore|refactor|docs|test|perf|ci|build|style|revert|hotfix|release|deps|spike|ops|claude)\//
 
 // ---- shell-ish parsing -------------------------------------------------------
 
-const dropHeredocBodies = cmd => {
-  const out = []
-  let end = null
-  for (const line of cmd.split('\n')) {
-    if (end !== null) {
-      if (line.trim() === end) end = null
-      continue
-    }
-    out.push(line)
-    const m = line.match(/<<-?\s*['"]?([A-Za-z_]\w*)['"]?/)
-    if (m) end = m[1]
-  }
-  return out.join('\n')
-}
-
-/** Split into simple commands on newline, ;, &&, ||, |, & (quote-aware; keeps 2>&1). */
-export const segments = cmd => {
-  const text = dropHeredocBodies(cmd)
+/**
+ * Split into simple commands on newline, ;, &&, ||, |, &, ( and ) (quote-aware;
+ * keeps 2>&1 and $(...)). Skips heredoc bodies and unquoted # comments.
+ * A herestring (<<<) and a << inside quotes are not heredocs.
+ */
+export const segments = text => {
   const segs = []
+  const heredocs = []
   let cur = ''
   let quote = null
+  const flush = () => { segs.push(cur); cur = '' }
   for (let i = 0; i < text.length; i++) {
     const c = text[i]
     if (quote) {
@@ -61,20 +55,45 @@ export const segments = cmd => {
     }
     if (c === "'" || c === '"') { quote = c; cur += c; continue }
     if (c === '\\') { cur += c + (text[++i] ?? ''); continue }
+    if (c === '#' && (i === 0 || /[\s;&|()]/.test(text[i - 1]))) {
+      while (i + 1 < text.length && text[i + 1] !== '\n') i++
+      continue
+    }
+    if (c === '<' && text[i + 1] === '<' && text[i - 1] !== '<' && text[i + 2] !== '<') {
+      const m = text.slice(i + 2).match(/^-?\s*(['"]?)([A-Za-z_]\w*)\1/)
+      if (m) heredocs.push(m[2])
+      cur += c
+      continue
+    }
+    if (c === '\n' && heredocs.length) {
+      flush()
+      let j = i + 1
+      while (heredocs.length) {
+        const endTag = heredocs.shift()
+        for (;;) {
+          const nl = text.indexOf('\n', j)
+          const line = text.slice(j, nl === -1 ? text.length : nl)
+          j = nl === -1 ? text.length : nl + 1
+          if (line.trim() === endTag || nl === -1) break
+        }
+      }
+      i = j - 1
+      continue
+    }
     const isRedirectAmp = c === '&' && (text[i - 1] === '>' || text[i + 1] === '>')
-    if ((c === '\n' || c === ';' || c === '|' || c === '&') && !isRedirectAmp) {
-      segs.push(cur)
-      cur = ''
+    const isSubst = c === '(' && text[i - 1] === '$'
+    if (((c === '\n' || c === ';' || c === '|' || c === '&') && !isRedirectAmp) || ((c === '(' || c === ')') && !isSubst)) {
+      flush()
       if ((c === '&' || c === '|') && text[i + 1] === c) i++
       continue
     }
     cur += c
   }
-  segs.push(cur)
+  flush()
   return segs.map(s => s.trim()).filter(Boolean)
 }
 
-/** Words of one simple command, quotes removed. A word containing $ is marked unknown. */
+/** Words of one simple command, quotes removed. A word containing $ or ` is marked dynamic. */
 export const words = seg => {
   const out = []
   let cur = ''
@@ -105,7 +124,13 @@ const stripWrappers = ws => {
     const t = ws[i]?.text
     if (t === undefined) break
     if (/^[A-Za-z_]\w*=/.test(t)) { i++; continue }
-    if (['sudo', 'time', 'nice', 'command', 'exec', 'nohup'].includes(t)) { i++; continue }
+    if (['sudo', 'time', 'command', 'exec', 'nohup'].includes(t)) { i++; continue }
+    if (t === 'nice') {
+      i++
+      if (ws[i]?.text === '-n') i += 2
+      else if (/^-/.test(ws[i]?.text ?? '')) i++
+      continue
+    }
     if (t === 'env') { i++; while (ws[i] && (/^-/.test(ws[i].text) || /^[A-Za-z_]\w*=/.test(ws[i].text))) i++; continue }
     if (t === 'timeout') {
       i++
@@ -135,6 +160,17 @@ export const jestArgs = ws => {
   return null
 }
 
+/** Value of a flag: `--long value`, `--long=value`, or an exact short `-X value`. */
+const flagValue = (args, names) => {
+  for (let i = 0; i < args.length; i++) {
+    for (const n of names) {
+      if (args[i] === n) return args[i + 1] ?? null
+      if (n.startsWith('--') && args[i].startsWith(`${n}=`)) return args[i].slice(n.length + 1)
+    }
+  }
+  return undefined
+}
+
 // ---- repo detection ------------------------------------------------------------
 
 const repoCache = new Map()
@@ -159,24 +195,21 @@ export const repoOf = dir => {
   repoCache.set(dir, repo)
   return repo
 }
-
 const expandHome = p => (p === '~' || p.startsWith('~/') ? homedir() + p.slice(1) : p)
-const flagValue = (args, names) => {
-  for (let i = 0; i < args.length; i++) {
-    for (const n of names) {
-      if (args[i] === n) return args[i + 1] ?? null
-      if (args[i].startsWith(`${n}=`)) return args[i].slice(n.length + 1)
-      if (n.length === 2 && args[i].startsWith(n) && args[i].length > 2 && !args[i].startsWith('--')) return args[i].slice(2)
-    }
-  }
-  return undefined
-}
 
 // ---- rules ---------------------------------------------------------------------
 
 const jestRules = (args, repo) => {
-  if (repo === 'stacks-cloud-functions' && !args.some(a => a.startsWith('--selectProjects')))
-    return 'In stacks-cloud-functions, bare jest also runs the e2e/integration projects that write to a real database. Add --selectProjects unit, or use `npm test`.'
+  if (repo === 'stacks-cloud-functions') {
+    const projects = []
+    for (let i = 0; i < args.length; i++) {
+      if (args[i].startsWith('--selectProjects=')) projects.push(...args[i].split('=')[1].split(','))
+      else if (args[i] === '--selectProjects')
+        for (let j = i + 1; j < args.length && !args[j].startsWith('-'); j++) projects.push(...args[j].split(','))
+    }
+    if (projects.length === 0 || projects.some(p => p !== 'unit'))
+      return 'In stacks-cloud-functions only the unit jest project is safe; e2e and integration write to a real database. Use --selectProjects unit, or `npm test`.'
+  }
   if (args.includes('--runInBand') || args.includes('-i')) return null
   const w = flagValue(args, ['--maxWorkers', '-w'])
   if (w === undefined || w === null)
@@ -195,15 +228,29 @@ export const createdBranches = ws => {
   const sub = t[i]
   const rest = ws.slice(i + 1)
   const after = flags => {
-    const k = rest.findIndex(w => flags.includes(w.text))
-    return k >= 0 && rest[k + 1] ? [rest[k + 1]] : []
+    for (let k = 0; k < rest.length; k++) {
+      const w = rest[k].text
+      if (flags.includes(w)) return rest[k + 1] ? [rest[k + 1]] : []
+      for (const f of flags) {
+        if (f.startsWith('--') && w.startsWith(`${f}=`)) return [{ ...rest[k], text: w.slice(f.length + 1) }]
+        if (!f.startsWith('--') && w.startsWith(f) && w.length > 2 && !w.startsWith('--')) return [{ ...rest[k], text: w.slice(2) }]
+      }
+    }
+    return []
   }
   let found = []
   if (sub === 'checkout') found = after(['-b', '-B'])
   else if (sub === 'switch') found = after(['-c', '-C', '--create', '--force-create'])
   else if (sub === 'worktree' && rest[0]?.text === 'add') found = after(['-b', '-B'])
-  else if (sub === 'branch') {
-    const LIST_OR_EDIT = /^(-d|-D|--delete|-m|-M|--move|-c|--copy|-l|--list|-a|--all|-r|--remotes|-v|-vv|--show-current|--contains|--merged|--no-merged|--set-upstream-to|-u|--unset-upstream|--edit-description)$/
+  else if (sub === 'push') {
+    // git push <remote> <src>:<dst> creates <dst> on the remote
+    for (const w of rest) {
+      if (!w.text.includes(':') || w.text.startsWith('-')) continue
+      const dst = w.text.split(':').pop().replace(/^refs\/heads\//, '')
+      if (dst && !dst.startsWith('refs/') && !TRUNKS.includes(dst) && dst !== 'dev') found.push({ ...w, text: dst })
+    }
+  } else if (sub === 'branch') {
+    const LIST_OR_EDIT = /^(-d|-D|--delete|-m|-M|--move|-c|-C|--copy|-l|--list|-a|--all|-r|--remotes|-v|-vv|--show-current|--contains|--merged|--no-merged|--set-upstream-to|-u|--unset-upstream|--edit-description)$/
     if (!rest.some(w => LIST_OR_EDIT.test(w.text))) {
       const first = rest.find(w => !w.text.startsWith('-'))
       if (first && !/^[<>]/.test(first.text)) found = [first]
@@ -219,19 +266,20 @@ const branchRule = ws => {
   return `Branch names start with a type prefix (feat/, fix/, chore/, ...), never a person's name. Rename: ${fixes.join(', ')}.`
 }
 
-const prRule = (ws, repoAtDir) => {
+const prRule = (ws, repoAt) => {
   const t = ws.map(w => w.text)
   if (!(t[0] === 'gh' && t[1] === 'pr' && t[2] === 'create')) return null
   const args = t.slice(3)
   const repoFlag = flagValue(args, ['--repo', '-R'])
-  const repo = repoFlag ? repoFlag.split('/').pop() : repoAtDir
-  if (!repo || PR_BASE[repo] !== 'dev') return null
+  const repo = repoFlag ? repoFlag.split('/').pop() : repoAt()
+  const own = PR_BASE[repo]
+  if (!own) return null
   const base = flagValue(args, ['--base', '-B'])
   const head = flagValue(args, ['--head', '-H'])
-  if (!base)
-    return `In ${repo}, pass --base explicitly (--base dev, or the feature's umbrella). Without it the PR may go to the repo's default branch, which can be main.`
-  if (/^(main|master)$/.test(base) && head !== 'dev')
-    return `PRs in ${repo} target dev (or the feature's umbrella, e.g. feat/stream-video-poc), not ${base}. A dev -> main promotion is human-only and must say --head dev.`
+  if (!base && own !== 'main')
+    return `In ${repo}, pass --base explicitly (--base ${own}, or the feature's umbrella). Without it the PR goes to the repo's default branch, which can be main.`
+  if (base && base !== own && TRUNKS.includes(base) && !(head === 'dev' || head?.startsWith('release/')))
+    return `PRs in ${repo} target ${own} (or the feature's umbrella), not ${base}. Promotions are human-only and come from --head dev or a release/* branch.`
   return null
 }
 
@@ -250,11 +298,14 @@ export const check = (cmd, cwd) => {
       const k = ws.findIndex(w => w.text === '-C')
       if (k >= 0 && ws[k + 1] && !ws[k + 1].dynamic) segDir = resolve(dir ?? '/', expandHome(ws[k + 1].text))
     }
+    if (['bash', 'sh', 'zsh'].includes(ws[0].text)) {
+      const k = ws.findIndex(w => w.text === '-c')
+      const inner = k >= 0 && ws[k + 1] ? check(ws[k + 1].text, segDir) : null
+      if (inner) return inner
+      continue
+    }
     const jest = jestArgs(ws)
-    const why =
-      (jest && jestRules(jest, repoOf(segDir))) ||
-      branchRule(ws) ||
-      prRule(ws, repoOf(segDir))
+    const why = (jest && jestRules(jest, repoOf(segDir))) || branchRule(ws) || prRule(ws, () => repoOf(segDir))
     if (why) return why
   }
   return null

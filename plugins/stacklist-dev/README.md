@@ -9,14 +9,21 @@ The shared Claude Code kit for Stacklist (My-Stacks) repos. One setup for Martin
 | `/ship-pr <n> [comment\|fix]` | Review + triage + architecture pass + Sonar, then post verified findings as one review, or fix, `/verify`, push. Stops at "Merge?". |
 | `/angles <problem>` | Plan from four forced angles (smallest, proper, reuse, contrarian) in parallel, score, merge. For real decisions only; it is token-heavy. |
 | `fe-architecture-review`, `be-architecture-review` | Read-only (Read/Glob/Grep) architecture pass for platform-v2 and cloud-functions. Builders run them as a self-check. |
-| `hooks/rule-enforcer.mjs` | Blocks: person-named branches (bots may use `claude/`), `gh pr create` in dev-flow repos without an explicit `--base` or with `--base main` (promotions with `--head dev` allowed), jest without `--maxWorkers` ≤ 4 or `--runInBand`, bare jest in cloud-functions. Parses each simple command (newlines, `&&`, pipes, wrappers like `timeout`); the repo comes from the directory, `cd`, `git -C` or `gh -R`. Its PR-base table is tested against the registry. Fails open. |
+| `hooks/rule-enforcer.mjs` | Blocks: person-named branches (create, `-b<name>`, `--create=`, `push HEAD:<name>`; bots may use `claude/`); `gh pr create` without an explicit `--base` where the repo's base isn't main, or into main/master/staging when that isn't the repo's base (promotions from `--head dev` or `release/*` allowed); jest without `--maxWorkers` ≤ 4 or `--runInBand`; any jest project but `unit` in cloud-functions. Parses each simple command (newlines, `&&`, pipes, subshells, `bash -c`, heredocs, `timeout`/`nice`/`env` wrappers); the repo comes from the directory, `cd`, `git -C` or `gh -R`. PR-base table tested against the registry. A guardrail against mistakes, not a security boundary. Fails open. |
 
 ## Install
 
-For yourself, everywhere:
+For yourself, everywhere (Claude Code 2.1.275 or later, one step):
 
 ```
 /plugin install stacklist-dev --marketplace My-Stacks/claude-code-skills
+```
+
+Older versions, two steps:
+
+```
+/plugin marketplace add My-Stacks/claude-code-skills
+/plugin install stacklist-dev@stacks-inc-skills
 ```
 
 Each Stacklist repo turns it on in its checked-in `.claude/settings.json`:

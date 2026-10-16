@@ -6,6 +6,7 @@
 #   pr_base      where normal PRs go; promotions (dev -> main etc.) are human-only
 #   umbrellas    long-lived feature bases; a ticket's Linear project decides if one applies
 #   verify       the command an agent must run green before it may open or update a PR.
+#   verify_notes required steps around `verify` that a command can't express; /verify must follow them.
 #                Read-only for the outside world: no DB writes, no deploys, no paid APIs.
 #   loop_ready   true  = bots may open draft fix PRs here
 #                false = bots triage and comment only; anything else is `needs-human`
@@ -72,7 +73,8 @@ repos:
     area: contract
     stack: pure TS library, tsup, vitest
     pr_base: main
-    verify: npm run ci && npm run validate:templates && git diff --exit-code artifacts/   # matches CLAUDE.md. ci regenerates artifacts/: `git add artifacts/` first, then the diff check (working tree vs index) passes
+    verify: npm run ci && npm run validate:templates && git diff --exit-code artifacts/   # matches CLAUDE.md
+    verify_notes: npm run ci regenerates artifacts/. If they changed, run `git add artifacts/` and rerun verify; the diff check compares the working tree to the index, so it then passes. Commit the artifacts with the change.
     loop_ready: true
     deploy: none; consumers vendor a .tgz (npm run sync is human only)
     hazards:
@@ -157,7 +159,8 @@ repos:
     area: infra
     stack: Cloudflare Workers (images, smart-routes, analytics)
     pr_base: main
-    verify: npx -y -p typescript@5 tsc --noEmit -p .   # matches CLAUDE.md; then `cd workers/<name> && npx wrangler deploy --dry-run` for each Worker touched (bundles only, no type-check)
+    verify: npx -y -p typescript@5 tsc --noEmit -p .   # matches CLAUDE.md
+    verify_notes: then, for each Worker the change touches, run `cd workers/<name> && npx wrangler deploy --dry-run` (bundles only, never deploys). All must pass.
     loop_ready: false
     deploy: every merge to main deploys all 3 workers to production, ungated
     hazards: [treat every PR as a prod deploy]
@@ -178,7 +181,8 @@ repos:
     area: be
     stack: Node ESM Express service, Playwright PDF rendering, node:test
     pr_base: main
-    verify: npm test     # needs CHROME_PATH; no CI exists
+    verify: npm test     # no CI exists
+    verify_notes: needs CHROME_PATH set to a local Chrome (on macOS `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`).
     loop_ready: false
     deploy: Railway (stacklist-ops)
     hazards:
