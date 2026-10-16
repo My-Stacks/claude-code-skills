@@ -1,0 +1,190 @@
+# Stacklist repo registry: the single place agents (local sessions, cloud routines,
+# the bug loop, the wave orchestrator) read to route work and prove it works.
+#
+# Fields
+#   slug         GitHub repo
+#   pr_base      where normal PRs go; promotions (dev -> main etc.) are human-only
+#   umbrellas    long-lived feature bases; a ticket's Linear project decides if one applies
+#   verify       the command an agent must run green before it may open or update a PR.
+#   verify_notes required steps around `verify` that a command can't express; /verify must follow them.
+#                Read-only for the outside world: no DB writes, no deploys, no paid APIs.
+#   loop_ready   true  = bots may open draft fix PRs here
+#                false = bots triage and comment only; anything else is `needs-human`
+#   deploy       informational; agents NEVER deploy. Merge to the listed branch may deploy.
+#   hazards      hard "never do" rules for agents in this repo
+#   unknown:     facts not yet confirmed; fill them in, don't let agents guess
+#
+# Built 2026-10-15 from each repo's package.json, CI workflows, CLAUDE.md and the last
+# 30 merged PRs. Re-check when CI changes.
+
+defaults:
+  never:   # enforced by hooks/rule-enforcer.mjs (confirm tokens count only in a main session)
+    - merge a PR, push to main/master/staging/dev, or force-push
+    - deploy anything, run a migration, or write to a prod or dev database
+    - read or print .env* files
+  bot_branch_prefix: "claude/"     # cloud routines can only push claude/* branches
+  reviewers: round-robin [marti06, dusan0403]   # GitHub logins (Martina, Dusan)
+
+repos:
+  stacklist-platform-v2:
+    slug: My-Stacks/stacklist-platform-v2
+    area: fe
+    stack: Next.js app (apps/app) + Astro marketing (apps/marketing, own lockfile), turbo, npm 11, node >= 24
+    pr_base: dev
+    umbrellas: [feat/stream-video-poc]   # feat/articles merged 2026-09-28, feat/blog-surface merged 2026-10-12
+    verify: cd apps/app && npx tsc --noEmit && npm run lint && npm test -- --maxWorkers=4
+    verify_ui: PR preview screenshots (desktop + phone) next to the Figma frame; e2e only via the `run-e2e` label
+    verify_notes: jest runs with --passWithNoTests, so "0 tests" passes. For changed logic, confirm the run included tests for it (add them if none exist).
+    loop_ready: true
+    deploy: Vercel. dev -> dev.stacklist.com, staging -> staging.stacklist.com, main -> prod (release/prod-* promotion, human only)
+    hazards:
+      - never install across apps/app and apps/marketing; marketing deps never go in the root lockfile
+      - never regenerate the lockfile on macOS (drops linux swc/sharp/esbuild binaries, CI fails)
+      - prod Supabase aohcnbwwbuiqzorvnxcq is off limits
+
+  stacks-cloud-functions:
+    slug: My-Stacks/stacks-cloud-functions
+    area: be
+    stack: Firebase Functions (Node 22), 4 codebases (functions, functions-media, functions-billing, functions-read) + shared/, Supabase Postgres + Drizzle
+    pr_base: dev
+    umbrellas: [feat/stream-video-poc]
+    verify: cd functions && npm run lint && npm run build && npm test   # jest.config caps workers at 4 outside CI
+    verify_notes: covers functions/ only. If the change touches functions-media or functions-billing, also run `npm run lint && npm run build` in each (as pr-checks.yml does), and `npm run build` in functions-read. A change in shared/ means all four.
+    loop_ready: true
+    deploy: GitHub Actions. dev -> stacks-d91c6, main -> stacklist-prod
+    hazards:
+      - only the unit jest project is safe; test:integration and test:e2e write to a real DB
+      - a change in shared/ affects every codebase that imports it; say so in the PR
+      - prod Supabase aohcnbwwbuiqzorvnxcq is off limits; scripts/.env.local holds DB URLs, never read it
+      - do not touch the Cloudflare stacklist.app zone (legacy prod)
+
+  stacklist-mcp:
+    slug: My-Stacks/stacklist-mcp
+    area: mcp
+    stack: Node MCP server (HTTP + stdio), Supabase client, Redis, vitest
+    pr_base: dev
+    verify: npm run lint && npm run type-check && npm run test:unit -- --maxWorkers=4 --minWorkers=1   # vitest 1.x rejects maxWorkers below its default minWorkers
+    loop_ready: true
+    deploy: Railway. main -> prod, dev -> dev (README still says Cloud Run, stale)
+    hazards:
+      - never run `npm test` (watch mode, all tests) or `npm run validate`; integration tests fall back to the real Supabase in .env
+
+  stacklist-surfaces-contract:
+    slug: My-Stacks/stacklist-surfaces-contract
+    area: contract
+    stack: pure TS library, tsup, vitest
+    pr_base: main
+    verify: npm run ci && npm run validate:templates && git diff --exit-code artifacts/   # matches CLAUDE.md; vitest worker cap: none yet (composite script)
+    verify_notes: npm run ci regenerates artifacts/. If they changed, run `git add artifacts/` and rerun verify; the diff check compares the working tree to the index, so it then passes. Commit the artifacts with the change.
+    loop_ready: true
+    deploy: none; consumers vendor a .tgz (npm run sync is human only)
+    hazards:
+      - never hand-edit artifacts/registry.json or dist/
+      - a version bump also bumps registryVersion in every template fixture; a breaking release needs a migration + fixtures/history/v<old>.json
+      - never run `npm run sync`
+
+  stacklist-admin:
+    slug: My-Stacks/stacklist-admin
+    area: fe
+    stack: Next.js admin app, Tailwind, jest
+    pr_base: dev
+    verify: npx tsc --noEmit && npm run lint && npm run test:coverage -- --maxWorkers=4
+    loop_ready: true
+    deploy: Vercel. main -> prod, dev -> preview
+    hazards:
+      - adding a Hub Builder label provisions a real Stacklist account
+
+  stacklist-capacitor:
+    slug: My-Stacks/stacklist-capacitor
+    area: mobile
+    stack: Vite + React + Capacitor (ios/android), vitest, playwright, Maestro
+    pr_base: dev
+    verify: npx tsc -b && npm run lint && npm run test:unit -- --maxWorkers=4   # matches CLAUDE.md; root tsconfig is files:[] + references, so tsc --noEmit checks nothing
+    verify_notes: the pre-merge E2E gate (scripts/e2e-select.sh) is the merger's step, not part of verify.
+    loop_ready: true
+    deploy: manual store builds (human only)
+    hazards:
+      - never edit version strings; use /version-bump
+      - playwright e2e logs into the dev backend; not part of verify
+
+  stacklist-radar:
+    slug: My-Stacks/stacklist-radar
+    area: be
+    stack: Astro on Cloudflare Workers (D1, Workflows, R2), vitest workers pool
+    pr_base: main
+    verify: npm test && npm run typecheck   # vitest worker cap: none yet (composite script); add maxWorkers to vitest config
+    loop_ready: true
+    deploy: manual scripts/deploy.mjs (human only)
+    hazards:
+      - scan, sweep, discover, audit, judge:* call paid LLM providers; never run them
+      - never run db:migrate:remote
+      - never point a scan at a tracked deployment
+
+  stacklist-microservice-scrape:
+    slug: My-Stacks/stacklist-microservice-scrape
+    area: be
+    stack: Node scraper service, Redis, jest
+    pr_base: dev
+    verify: npm run lint && npm run typecheck && (test -f .env || cp .env.example .env) && npm test -- --maxWorkers=4   # CI does the same copy; .env is gitignored
+    loop_ready: true
+    deploy: CI/CD to Google VMs. main -> prod VM, dev -> dev VM (pipeline not in this repo's .github on main)
+    hazards:
+      - .dockerignore excludes .env; the image bakes in the committed .env.production, so never put a real secret in it
+
+  stacklist-hub-builder:
+    slug: My-Stacks/stacklist-hub-builder
+    area: be
+    stack: Python 3.13 (Forge), FastAPI + RQ + Redis, uv, ruff, pytest
+    pr_base: main
+    verify: uv lock --check && uv run --frozen ruff check . && ANTHROPIC_API_KEY=ci-not-a-real-key STACKLIST_MCP_URL=https://mcp.invalid uv run --frozen pytest -q -m "not live"
+    loop_ready: false     # builds write to real client hubs; keep humans on it until verify covers that
+    deploy: Railway (web + worker); merge to main deploys
+    hazards:
+      - always pass -m "not live"
+      - builds write to real client hubs; keep ACCOUNT_LOCK and TICKET_POST_ALLOWLIST
+      - do not move imports in src/main.py
+
+  stacklist-extensions:
+    slug: My-Stacks/stacklist-extensions
+    area: fe
+    stack: browser extension (Chrome/Firefox/Edge/Safari), webpack, React
+    pr_base: dev
+    verify: npm run build-chrome     # only gate that exists: no tests, lint or typecheck
+    loop_ready: false
+    deploy: manual store submission (human only)
+    hazards: [never publish or submit to a store, never commit Firebase config]
+
+  stacklist-wrangler:
+    slug: My-Stacks/stacklist-wrangler
+    area: infra
+    stack: Cloudflare Workers (images, smart-routes, analytics)
+    pr_base: main
+    verify: npx -y -p typescript@5 tsc --noEmit -p .   # matches CLAUDE.md
+    verify_notes: then, for each Worker the change touches, run `cd workers/<name> && npx wrangler deploy --dry-run` (bundles only, never deploys). All must pass.
+    loop_ready: false
+    deploy: every merge to main deploys all 3 workers to production, ungated
+    hazards: [treat every PR as a prod deploy]
+
+  stacklist-shopify:
+    slug: My-Stacks/stacklist-shopify
+    area: be
+    stack: React Router Shopify app, Prisma, vitest
+    pr_base: main   # feat/be-780-shopify-app-build merged into main 2026-10-06 (#3)
+    verify: npm run typecheck && npm test
+    loop_ready: false
+    deploy: planned Cloud Run; App Store submission human only
+    hazards:
+      - never run `npm run setup` (it runs prisma migrate deploy)
+
+  stacklist-report-generator:
+    slug: My-Stacks/stacklist-report-generator
+    area: be
+    stack: Node ESM Express service, Playwright PDF rendering, node:test
+    pr_base: main
+    verify: npm test     # no CI exists
+    verify_notes: needs CHROME_PATH set to a local Chrome (on macOS `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`).
+    loop_ready: false
+    deploy: Railway (stacklist-ops)
+    hazards:
+      - never edit kit/ or templates.lock.json
+      - send_feedback opens urgent Linear issues; never call it in tests

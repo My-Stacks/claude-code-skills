@@ -15,7 +15,29 @@
       "description": "Headless responsive UI review across breakpoints, themes, a11y, Core Web Vitals, SEO, and visual regression.",
       "version": "0.1.0",
       "category": "testing",
-      "tags": ["design-review", "qa", "responsive", "accessibility", "lighthouse", "visual-regression"],
+      "tags": [
+        "design-review",
+        "qa",
+        "responsive",
+        "accessibility",
+        "lighthouse",
+        "visual-regression"
+      ],
+      "strict": true
+    },
+    {
+      "name": "stacklist-dev",
+      "source": "./plugins/stacklist-dev",
+      "description": "Stacklist engineering kit: repo registry, /verify, /ship-pr, /angles, FE/BE architecture reviewers, rule-enforcer hook.",
+      "version": "0.1.0",
+      "category": "development",
+      "tags": [
+        "stacklist",
+        "registry",
+        "verify",
+        "code-review",
+        "guardrails"
+      ],
       "strict": true
     }
   ]
