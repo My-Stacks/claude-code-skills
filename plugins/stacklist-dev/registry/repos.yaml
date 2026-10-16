@@ -99,13 +99,13 @@ repos:
     area: mobile
     stack: Vite + React + Capacitor (ios/android), vitest, playwright, Maestro
     pr_base: dev
-    verify: npx tsc --noEmit && npm run lint && npm run test:unit -- --maxWorkers=4
+    verify: npx tsc -b && npm run lint && npm run test:unit -- --maxWorkers=4   # matches CLAUDE.md; root tsconfig is files:[] + references, so tsc --noEmit checks nothing
+    verify_notes: the pre-merge E2E gate (scripts/e2e-select.sh) is the merger's step, not part of verify.
     loop_ready: true
     deploy: manual store builds (human only)
     hazards:
       - never edit version strings; use /version-bump
       - playwright e2e logs into the dev backend; not part of verify
-    notes: CLAUDE.md stale paths and expired umbrella (feature/app-layout-mobile) are fixed in capacitor PR #1080 (open)
 
   stacklist-radar:
     slug: My-Stacks/stacklist-radar
