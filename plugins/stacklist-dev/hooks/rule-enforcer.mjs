@@ -293,6 +293,46 @@ const prRule = (ws, repoAt) => {
 const isEnvFile = p => /(^|\/)\.env(\.[\w.-]+)?$/.test(p) && !/\.(example|sample|template)$/.test(p)
 const READERS = ['cat', 'head', 'tail', 'less', 'more', 'bat', 'source', '.', 'grep', 'rg', 'awk', 'sed', 'cut', 'strings', 'xxd', 'base64']
 
+const DEV_TARGET = /^(dev|development|staging|preview|local|stacks-d91c6|zxudkfmyaxkovsypqzvx)$|(^|[-_])dev($|[-_])/i
+const PROD_TARGET = /prod/i
+
+/** The value of the first flag present, from `--flag value`, `--flag=value` or `-f value`. */
+const targetOf = (t, flags) => {
+  for (let i = 0; i < t.length; i++) {
+    for (const f of flags) {
+      if (t[i] === f) return t[i + 1] ?? ''
+      if (f.startsWith('--') && t[i].startsWith(`${f}=`)) return t[i].slice(f.length + 1)
+    }
+  }
+  return null
+}
+/** prod if the target says prod, dev if it says dev, else (unstated) prod. */
+const prodUnlessDev = target => target === null || target === '' || PROD_TARGET.test(target) || !DEV_TARGET.test(target)
+
+export const isProdDeploy = t => {
+  const sub = `${t[0]} ${t[1] ?? ''} ${t[2] ?? ''}`
+  // npm/pnpm/yarn deploy scripts: deploy:dev passes, deploy:production and a bare `deploy` need a project
+  if (['npm', 'pnpm', 'yarn'].includes(t[0])) {
+    const script = t.slice(1, 3).find(a => /^deploy(:|$)/.test(a))
+    if (!script) return false
+    const suffix = script.split(':')[1]
+    if (suffix) return !DEV_TARGET.test(suffix)
+    return prodUnlessDev(targetOf(t, ['--project', '-P']))
+  }
+  if (/^firebase deploy/.test(sub)) return prodUnlessDev(targetOf(t, ['--project', '-P']))
+  if (/^firebase use/.test(sub)) return PROD_TARGET.test(t[2] ?? '')
+  if (t[0] === 'vercel') return t.includes('--prod') || t[1] === 'promote'
+  if (t[0] === 'railway' && ['up', 'redeploy', 'deploy'].includes(t[1])) return prodUnlessDev(targetOf(t, ['--environment', '-e']))
+  if (/^supabase (db (push|reset)|migration up|functions deploy)/.test(sub))
+    return !t.includes('--local') && prodUnlessDev(targetOf(t, ['--project-ref']))
+  const wrangler = t[0] === 'wrangler' || (t[0] === 'npx' && t[1] === 'wrangler')
+  if (wrangler && t.some(a => a === 'deploy' || a === 'publish') && !t.includes('--dry-run')) return prodUnlessDev(targetOf(t, ['--env', '-e']))
+  if (/^shopify app deploy/.test(sub)) return true
+  if (t[0] === 'gcloud' && t.includes('deploy')) return prodUnlessDev(targetOf(t, ['--project']))
+  if (['node', 'bash', 'sh'].includes(t[0]) && /(^|\/)deploy\.(mjs|js|ts|sh)$/.test(t[1] ?? '')) return true
+  return false
+}
+
 const neverRule = ws => {
   const t = ws.map(w => w.text)
   // merges
@@ -313,19 +353,8 @@ const neverRule = ws => {
       if (hit) return { token: 'CONFIRMED_MAIN', why: `push to ${hit}. Push your own branch and open a PR.` }
     }
   }
-  // deploys and migrations
-  const sub = `${t[0]} ${t[1] ?? ''} ${t[2] ?? ''}`
-  const isDeploy =
-    /^firebase deploy/.test(sub) ||
-    (['npm', 'pnpm', 'yarn'].includes(t[0]) && t.slice(1, 3).some(a => /^deploy(:|$)/.test(a))) ||
-    (t[0] === 'vercel' && (['deploy', 'promote'].includes(t[1]) || t.includes('--prod'))) ||
-    (t[0] === 'railway' && ['up', 'redeploy', 'deploy'].includes(t[1])) ||
-    /^supabase (db (push|reset)|migration up|functions deploy)/.test(sub) ||
-    (t[0] === 'wrangler' || (t[0] === 'npx' && t[1] === 'wrangler')) && t.some(a => a === 'deploy' || a === 'publish') && !t.includes('--dry-run') ||
-    /^shopify app deploy/.test(sub) ||
-    (t[0] === 'gcloud' && t.includes('deploy')) ||
-    (['node', 'bash', 'sh'].includes(t[0]) && /(^|\/)deploy\.(mjs|js|ts|sh)$/.test(t[1] ?? ''))
-  if (isDeploy) return { token: 'CONFIRMED_DEPLOY', why: 'a deploy or migration. Put the steps in the handoff; a human runs them.' }
+  // production deploys and migrations (dev deploys pass; an unclear target counts as prod)
+  if (isProdDeploy(t)) return { token: 'CONFIRMED_PROD', why: 'a production deploy or migration (or one whose target is not stated). Name the dev target explicitly, or have a human confirm prod.' }
   // reading secrets
   if (READERS.includes(t[0]) && t.slice(1).some(isEnvFile))
     return { token: 'CONFIRMED_ENV', why: 'reading a .env file. Ask for the one value you need instead.' }
