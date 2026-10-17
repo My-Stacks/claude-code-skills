@@ -14,7 +14,7 @@ description: >-
   Not for landing today's uncommitted work (that is /mise-en-place) and not
   for being lost mid-task (that is /housekeeping).
 trigger: /tidy
-allowed-tools: Bash, Read, Write, AskUserQuestion, Agent
+allowed-tools: Bash, Read, Write, AskUserQuestion, Agent, Skill
 ---
 
 # tidy: Cleanup Pass, Asked Issue by Issue
@@ -166,7 +166,7 @@ After a merge: fetch, fast-forward the local default branch (`git -C "$wt" merge
 
 ## The reviewers (scout and skeptic)
 
-Two read-only sub-agents on `reviewer_model` (default Sonnet). At most two per run, however many issues there are. Their prompts are in `REFERENCE.md → "Scout prompt"` and `→ "Skeptic prompt"`; load them when spawning.
+Two read-only sub-agents on `reviewer_model` (default Sonnet; in Claude Code, the Agent tool with the general-purpose type). At most two per run, however many issues there are. Their prompts are in `REFERENCE.md → "Scout prompt"` and `→ "Skeptic prompt"`; load them when spawning.
 
 - **Scout** gets the full Phase 1 output pasted in (it does not re-gather) plus the list of decision items. For each item it investigates (`git log`, `git merge-tree`, `gh pr view`, file reads) and returns 2 to 4 candidate fixes with evidence.
 - **Skeptic** gets the scout's output and the same gather. It tries to break each candidate (wrong assumption, hidden risk, a charter violation, a cheaper option), then returns the final options per item: which is recommended, one line why, and what would change the answer.
@@ -179,7 +179,7 @@ Use the host's structured question tool (AskUserQuestion in Claude Code). If non
 
 - **One question per issue**, up to 4 per round (the tool's cap), most urgent first. Up to 4 options per question.
 - **Recommended option first**, label ending `(Recommended)`, description giving the skeptic's one-line reason. Every option's description says exactly what will happen, including any push.
-- **Every question has a no-op option** ("Leave it"), so declining is always one pick.
+- **Every question has a no-op option** ("Leave it"), so declining is always one pick. In the Tier 1 multi-select, an unticked item means leave it.
 - **Header** is the item's short name (`#32`, `old-branch`), at most 12 characters.
 - **Tier 1** is one multi-select question per round, not one question per removal.
 - **A typed answer ("Other") is an instruction**, not a yes to the recommendation. Re-plan that item from what it says; if that changes the action, confirm the new plan in the next round before running it.
