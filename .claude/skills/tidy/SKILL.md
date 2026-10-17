@@ -1,60 +1,61 @@
 ---
 name: tidy
-version: "1.0"
+version: "1.1"
 description: >-
-  Repo cleanup pass that acts on what /preflight flagged. Builds one cleanup
-  plan (unpushed branches, merged branches, finished worktrees, stale remote
-  refs, docs and journal PRs), sorts every item into a safety tier, asks for
-  approval once per tier instead of once per item, then executes and logs a
-  recovery line for everything it removed. Merges only docs and journal PRs,
-  only after their gates pass, only with an explicit yes in this run. Use when
-  preflight's FLAGGED table is non-empty, or when Kyle says "clean that up",
-  "tidy the repo", "land the journals", "clear out old branches or worktrees".
+  Repo cleanup pass that acts on what /preflight flagged. Gathers every
+  leftover (unpushed branches, merged branches, finished worktrees, stale
+  refs, open PRs, conflicts), has two read-only reviewer agents investigate
+  each issue and pressure-test the fixes, then asks Kyle one structured
+  question per issue with the vetted recommendation first. Executes only what
+  he picked, and logs a recovery line for everything it removed. Merges only
+  docs and journal PRs, only after their gates pass. Use when preflight's
+  FLAGGED table is non-empty, or when Kyle says "clean that up", "tidy the
+  repo", "land the journals", "clear out old branches or worktrees".
   Not for landing today's uncommitted work (that is /mise-en-place) and not
   for being lost mid-task (that is /housekeeping).
 trigger: /tidy
-allowed-tools: Bash, Read, Write
+allowed-tools: Bash, Read, Write, AskUserQuestion, Agent
 ---
 
-# tidy: Cleanup Pass With Tiered Approval
+# tidy: Cleanup Pass, Asked Issue by Issue
 
 ## What this skill is
 
-/preflight observes and syncs. /mise-en-place lands the day's new work. Neither one clears out the leftovers: the journal branch that never got pushed, the worktree from a finished session, the branch whose PR merged two weeks ago. Today those sit in a FLAGGED table until Kyle says "you can clean all that up".
+/preflight observes and syncs. /mise-en-place lands the day's new work. Neither one clears out the leftovers: the journal branch that never got pushed, the worktree from a finished session, the branch whose PR merged two weeks ago, the PR that now conflicts with main. Today those sit in a FLAGGED table until Kyle says "you can clean all that up".
 
-/tidy is that sentence, made into a process. It turns the flagged list into **one plan**, sorts each item by how reversible it is, gets approval **once per tier**, executes, and leaves a recovery log.
+/tidy is that sentence, made into a process. It gathers every leftover, has two reviewer agents work out how each one should be solved, **asks Kyle about each issue through structured questions** (never a wall of text he can't answer), executes what he picked, and leaves a recovery log.
 
 ## Where it sits
 
 | Skill | When | Writes |
 |---|---|---|
 | /preflight | start of session | fetch, fast-forward only, baseline file |
-| **/tidy** | right after preflight when anything is flagged, or on request | pushes, PRs, docs/journal merges, branch and worktree removal, all tiered |
+| **/tidy** | right after preflight when anything is flagged, or on request | pushes, PRs, docs/journal merges, branch and worktree removal, and fixes Kyle picks by name |
 | /mise-en-place | end of day | commits and pushes this session's new work, never merges |
 | /housekeeping | lost mid-task | nothing until approved line by line |
 
-/preflight should end its verdict with one line when FLAGGED is non-empty: `N items flagged. Run /tidy to clear them.` It does not run /tidy itself.
+/preflight ends its verdict with `N items flagged. Run /tidy to clear them.` when FLAGGED is non-empty. It does not run /tidy itself.
 
-**/tidy never creates new work.** It never commits, never edits files, never fixes something it finds. It only moves things that already exist: committed branches, open PRs, worktrees, refs.
+**/tidy never creates new work.** It never writes new content or fixes what it notices on its own initiative. The one exception is the Fix tier: a fix Kyle picked by name in this run's Q&A, such as committing a conflict resolution.
 
 ## The test
 
-> After /tidy runs, does the next /preflight come back with an empty FLAGGED table, or with only items that genuinely need Kyle's judgment?
+> After /tidy runs, does the next /preflight come back with an empty FLAGGED table, or with only items Kyle chose to leave?
 
 If an action doesn't move toward that, skip it.
 
 ## Operating principles
 
-1. **One plan, then one approval per tier.** Never ask item by item when a batch question will do. Never act on an item that wasn't in the plan Kyle saw.
-2. **Reversibility decides the tier, not how scary it sounds.** Deleting a fully merged branch is recoverable from its recorded SHA. Pushing is not retractable. Merging is a decision.
-3. **Re-derive, don't trust.** Never act on preflight's earlier output. Re-gather state at the start of the run and again immediately before each write.
-4. **Record before removing.** Every branch deleted and worktree removed gets its SHA, path and a restore command written to the recovery log before the removal runs.
-5. **Teach as it goes.** Same voice as /preflight: one plain sentence on why each item is in its tier. Kyle is learning git.
-6. **Questions are rare and come with a default.** Max 3 per run, numbered, each with the proposed answer.
+1. **Ask, don't report.** Every issue that needs a decision becomes a structured question with options Kyle can pick. Prose is for the final report only, and it stays short.
+2. **Recommendations are vetted.** The recommended option comes from the reviewer pass (scout proposes, skeptic attacks), not a first guess. Each question says in one line why it is recommended.
+3. **Reversibility decides the tier, not how scary it sounds.** Deleting a fully merged branch is recoverable from its recorded SHA. Pushing can't be undone. Merging is a decision.
+4. **Re-derive, don't trust.** Never act on preflight's earlier output. Re-gather at the start, and re-check live state immediately before each write.
+5. **Record before removing.** Every branch deleted and worktree removed gets its SHA, path and restore command written to the recovery log first.
+6. **Teach as it goes.** Same voice as /preflight: each option's description says in one plain sentence what happens and why it's safe. Kyle is learning git.
 
 ## Config
 
-Extend the existing per-user preflight config at `~/.claude/preflight/<repo-key>.yml` (same key derivation as /preflight Step 3) with a `tidy:` block. Never write config into the repo.
+Extend the per-user preflight config at `~/.claude/preflight/<repo-key>.yml` (same key derivation as /preflight Step 3) with a `tidy:` block. Never write config into the repo.
 
 ```yaml
 tidy:
@@ -78,25 +79,25 @@ tidy:
   egress_check: true                       # flag client names before any external review
   stale_unpushed_days: 7                   # unpushed non-docs commits older than this get escalated
   stash_report_weeks: 8
+  reviewer_model: sonnet                   # small model for the scout and skeptic agents
 ```
 
-If the block is missing on first run, write these defaults, show Kyle the file path, and continue. Blocklist always wins over allowlist. Patterns are gitignore-style globs matched against the repo-relative path; a pattern without `/` matches only at the root, so use `**/` to catch nested copies.
+If the block or a key is missing, write the defaults, show Kyle the file path, and continue. Blocklist always wins over allowlist. Patterns are gitignore-style globs matched against the repo-relative path; a pattern without `/` matches only at the root, so use `**/` to catch nested copies.
 
 ## The tiers
 
-Every candidate item lands in exactly one tier. If an item doesn't clearly fit Tier 1 or 2, it goes to Tier 3 (report only).
+Every item lands in exactly one tier. An item that fits none of Tiers 1, 2 or F is Tier 3.
 
-### Tier 0: Just do it (narrated, no approval)
-
-Local, read-only against others, or trivially reversible.
+### Tier 0: Just do it (narrated, no question)
 
 - `git fetch --prune --no-tags origin`
-- Re-reading PR, CI and review status
+- Re-reading PR, CI and review status; `git merge-tree` dry runs
+- The reviewer agents (read-only)
 - Writing the recovery log and run ledger under `~/.claude/tidy/`
 
-### Tier 1: Batch approval (one yes covers the whole list)
+### Tier 1: Routine removals (one multi-select question)
 
-Shown as a numbered list. Kyle answers `yes`, `yes except 3`, or `no`.
+Asked as a single multi-select question, one option per item, all recommended. Kyle ticks what to run. More than 4 items: split across questions in the same round.
 
 | Action | Preconditions (all must hold) |
 |---|---|
@@ -106,65 +107,84 @@ Shown as a numbered list. Kyle answers `yes`, `yes except 3`, or `no`.
 | **Delete a merged remote branch** (`git push origin --delete "$b"`) | its PR is merged; author is Kyle or this agent; not protected; repo doesn't already auto-delete |
 | **Remove a finished worktree** (`git worktree remove "$path"`, never `--force`) | its branch is merged or identical to default; `git -C "$path" status --porcelain -uall --ignored` is empty (ignored included: `worktree remove` deletes ignored files such as `.env` without asking); not locked, or locked by a session whose PID is no longer running; not the primary checkout; not this run's own worktree |
 
-`git update-ref -d` with the old SHA refuses if the branch moved since it was read, and `git worktree remove` refuses on tracked changes or untracked files. Those refusals are the safety net. (Plain `git branch -d` can't be the net: it refuses every squash-merged branch, and it checks against HEAD when the upstream is gone, so the answer depends on what's checked out.) Never add `--force` or `-D` to get past it. A refusal moves the item to Tier 3 with the reason.
+`git update-ref -d` with the old SHA refuses if the branch moved since it was read, and `git worktree remove` refuses on tracked changes or untracked files. Those refusals are the safety net. (Plain `git branch -d` can't be the net: it refuses every squash-merged branch, and checks against HEAD when the upstream is gone.) Never add `--force` or `-D` to get past it. A refusal moves the item to the report with the reason.
 
-### Tier 2: Per-item approval (one question each, with a default)
+### Tier 2: Decisions (one question each)
 
-- **Merging a docs/journal PR.** See the merge gate below. Asked fresh every run, never remembered, because a merge is a decision and on a release-on-merge repo it may cut a tag.
-- **Switching a different worktree back to the default branch** after its branch merged (for example the primary checkout left on a merged journal branch). Only if that worktree is clean and has no live session. The command runs with `git -C "$path" switch "$default"`.
-- **Removing a worktree whose only leftovers are gitignored files.** List the top-level ignored entries (for example `node_modules/`, `.env`) and say plainly that they will be deleted. Default answer is **no** if any is a `.env*` or other non-regenerable file.
-- **Removing a worktree locked by a dead session.** Show the lock reason and the dead PID first. Needs `git worktree unlock` before removal.
-- **Dropping a stash.** Show `git stash show -p` for that entry first. Stashes are shared across every worktree and session, so locate the entry by its SHA right before dropping, never by a remembered `stash@{n}`. Default answer is **no**.
+- **Merging a docs/journal PR.** See the merge gate below. Asked fresh every run, never remembered: a merge is a decision, and on a release-on-merge repo it may cut a tag.
+- **Switching a different worktree back to the default branch** after its branch merged. Only if that worktree is clean and has no live session: `git -C "$path" switch "$default"`.
+- **Removing a worktree whose only leftovers are gitignored files.** The option description names the top-level ignored entries (for example `node_modules/`, `.env`) and says they will be deleted. Recommend **leave it** if any is a `.env*` or other non-regenerable file.
+- **Removing a worktree locked by a dead session.** Show the lock reason and the dead PID. Needs `git worktree unlock` before removal.
+- **Dropping a stash.** Show `git stash show -p` for that entry first. Stashes are shared across every worktree and session, so locate it by SHA right before dropping, never by a remembered `stash@{n}`. Recommend **leave it**.
+
+### Tier F: Fix on request (only what Kyle picked by name this run)
+
+These run only when Kyle picked that exact option for that exact item in this run's Q&A. Never remembered between runs, never inferred from a neighbouring answer.
+
+| Fix | How (all on Kyle's own branches and PRs only) |
+|---|---|
+| **Resolve a conflict with the default branch** | Merge (never rebase) `origin/<default>` into the branch with `--no-ff --no-commit`. For a non-current branch, do it in a scratch worktree outside the repo, never by switching Kyle's checkout. Only when the reviewers found the resolution mechanical (for example both sides added rows); otherwise the option is "show me the conflicts". Confirm no conflict markers remain and the staged diff against the default branch adds nothing beyond the two sides, then commit. Push only if the picked option said push. Remove the scratch worktree after. |
+| **Close a PR** | `gh pr close "$n" --comment "<reason>"`. Never `--delete-branch`, so the PR can be reopened. |
+| **Comment on or nudge a PR** | Draft the text, show it in the question, post only the picked draft. Slack or other outside channels: draft only, Kyle sends. |
+| **Run an AI Router review** | Run the egress check (merge gate check 7) first, then `/ai-router review <n>` on the current head, verifying `headRefOid` before fetching the diff. |
+| **Push a branch Kyle's fix just committed** | Only as part of the fix option he picked; never `--force`. |
+
+A pushed commit on an **approved** PR dismisses the approval on repos with branch protection. When that applies, the option description says so.
 
 ### Tier 3: Never (report only)
 
-No approval makes these allowed.
+No answer makes these allowed.
 
 - Force-push, rebase, reset, cherry-pick, history rewrite, `branch -D`, `worktree remove --force`, `--no-verify`
 - Merging any PR whose prefix isn't in `merge_eligible_prefixes` (feature/, fix/, chore/ stay with their own merge rules and humans)
 - Merging any PR that touches a blocklisted path, even with a docs/ prefix
-- Acting on another person's branch, PR or worktree
+- Acting on another person's branch, PR or worktree (reading it and asking whether to nudge them is fine)
 - Removing a worktree with any uncommitted or untracked file, or one locked by a running session
 - Pushing or deleting the default or a protected branch
-- Committing, editing or deleting any file in a working tree
+- Editing file content beyond a Tier F conflict resolution, or committing anything other than that resolution
 - Deleting a branch that has commits not on any remote
 - Touching anything gitignored, except removing a worktree after its Tier 2 yes
 
-> If an item isn't clearly inside Tier 1 or Tier 2, it's a line in the report, not an action.
-
 ## The merge gate (docs and journal PRs)
 
-A PR is offered for merge (Tier 2) only when **every** check passes. Show the checklist with each row PASS or the reason it failed.
+A PR is offered for merge (Tier 2) only when **every** check passes. The question's description lists the checks that passed and anything that failed.
 
 1. Head branch prefix is in `merge_eligible_prefixes`.
-2. Every changed file matches `merge_path_allowlist` and none matches `merge_path_blocklist`. List the files.
+2. Every changed file matches `merge_path_allowlist` and none matches `merge_path_blocklist`.
 3. PR author is Kyle or this agent.
 4. Not a draft; `mergeable` is `MERGEABLE`; no `CHANGES_REQUESTED` review.
-5. All required CI checks are green on the head commit (`gh pr checks`). Pending is not green; wait or skip, never merge on pending.
-6. Review gate satisfied on the **final** commit:
-   - `ai-router`: a clean AI Router pass exists for the head SHA. If none exists, offer to run it (Tier 2) after the egress check.
-   - `ci-only`: check 5 is enough.
-   - `human`: an approving review exists.
-7. **Egress check** (when `egress_check: true`): before sending any diff to an external reviewer, scan it for client names, dollar figures and personal details. Journals usually name clients. If anything is found, stop and ask Kyle: sanitize, send anyway, or substitute human review. Never redact or send silently.
+5. All required CI checks are green on the head commit (`gh pr checks`). Pending is not green.
+6. Review gate satisfied on the **final** commit: `ai-router` needs a clean AI Router pass for the head SHA (if none, offer one as a Tier F option); `ci-only` needs check 5; `human` needs an approving review.
+7. **Egress check** (when `egress_check: true`): before any diff goes to an external reviewer, scan it for client names, dollar figures and personal details. Any hit becomes a question: sanitize, send anyway, or use human review instead. Never redact or send silently.
 8. Head SHA hasn't moved since the checks were read. Re-read right before merging.
 
-If 1 to 3 fail, the PR is not a merge candidate at all; report it. If 4 to 8 fail, report what's missing and what would unblock it.
+If 1 to 3 fail, the PR is not a merge candidate; its question offers other fixes. If 4 to 8 fail, the options say what would unblock it.
 
-Merge with `gh pr merge "$n" --"$merge_method" --match-head-commit "$sha"`. The `--match-head-commit` flag makes GitHub refuse if someone pushed after the check. Leave out `--delete-branch`: it force-deletes the local branch with no recovery line, can switch the current checkout, and exits non-zero after a successful merge when the branch is pinned in a worktree. Branch cleanup belongs to the Tier 1 sweep.
+Merge with `gh pr merge "$n" --"$merge_method" --match-head-commit "$sha"`. Leave out `--delete-branch`: it force-deletes the local branch with no recovery line, can switch the current checkout, and exits non-zero after a successful merge when the branch is pinned in a worktree. Branch cleanup belongs to Tier 1.
 
-After a merge: fetch, then fast-forward the local default branch: `git -C "$wt" merge --ff-only "origin/$default"` in the worktree that has it checked out, only if that worktree is clean, or `git fetch origin "$default:$default"` if no worktree has it checked out; then re-run the Tier 1 sweep so the merged branch and its worktree become cleanup candidates in the same run.
+After a merge: fetch, fast-forward the local default branch (`git -C "$wt" merge --ff-only "origin/$default"` in the clean worktree that has it checked out, or `git fetch origin "$default:$default"` if none does), then loop back to Phase 1 once so the merged branch's cleanup is asked in the same run.
 
-## When to stop and ask instead of acting
+## The reviewers (scout and skeptic)
 
-Raise these as numbered questions (max 3, each with a proposed default). Everything beyond 3 goes in the report.
+Two read-only sub-agents on `reviewer_model` (default Sonnet). At most two per run, however many issues there are. Their prompts are in `REFERENCE.md → "Scout prompt"` and `→ "Skeptic prompt"`; load them when spawning.
 
-- A branch or commit Kyle didn't create and the agent can't explain
-- Unpushed commits on a **non-docs** branch older than `stale_unpushed_days`: work at risk, but not tidy's to land. Default: "leave it, run /mise-en-place in that worktree."
-- A diverged branch (both ahead and behind)
-- A docs PR that touches a blocklisted file: probably a mis-prefixed branch. Default: "leave it for human review."
-- Egress hits from check 7
-- A worktree whose session lock PID is still running: someone is working there. Default: skip it.
-- Anything matching /preflight's "escalate to Martina" list (rewritten remote history, secrets in history, conflicts across many files). Stop the run for that repo and hand over the summary.
+- **Scout** gets the full Phase 1 output pasted in (it does not re-gather) plus the list of decision items. For each item it investigates (`git log`, `git merge-tree`, `gh pr view`, file reads) and returns 2 to 4 candidate fixes with evidence.
+- **Skeptic** gets the scout's output and the same gather. It tries to break each candidate (wrong assumption, hidden risk, a charter violation, a cheaper option), then returns the final options per item: which is recommended, one line why, and what would change the answer.
+
+Both prompts say plainly that the agent must not run any command that writes (no commit, push, merge, checkout, switch, worktree add, `gh pr` edit, close or comment). Spawn the scout, wait, then the skeptic. Skip both when every item is a Tier 1 removal; spawn only the scout when there is a single decision item and its fix is mechanical. If an agent fails or returns malformed output, ask with your own options and say in the question that they were not reviewed.
+
+## Asking
+
+Use the host's structured question tool (AskUserQuestion in Claude Code). If none exists, ask numbered questions in chat, one per issue, each with lettered options.
+
+- **One question per issue**, up to 4 per round (the tool's cap), most urgent first. Up to 4 options per question.
+- **Recommended option first**, label ending `(Recommended)`, description giving the skeptic's one-line reason. Every option's description says exactly what will happen, including any push.
+- **Every question has a no-op option** ("Leave it"), so declining is always one pick.
+- **Header** is the item's short name (`#32`, `old-branch`), at most 12 characters.
+- **Tier 1** is one multi-select question per round, not one question per removal.
+- **A typed answer ("Other") is an instruction**, not a yes to the recommendation. Re-plan that item from what it says; if that changes the action, confirm the new plan in the next round before running it.
+- **Follow-ups**: when an answer opens a new decision (a resolved conflict now needs a push; a fixed PR now needs a review), ask it in the next round instead of assuming.
+- **No prose plan before the questions.** One line ("Found N issues, 2 reviewers checked them, questions below") and then the questions.
 
 ## Procedure
 
@@ -172,8 +192,8 @@ Raise these as numbered questions (max 3, each with a proposed default). Everyth
 
 1. Run /preflight's Step 1 checks (in a repo, `origin` exists, not detached, not unborn). Any failure ends the run.
 2. Load config; derive the repo key exactly as /preflight does.
-3. Confirm `gh auth status`. Without it, Tier 1 PR actions and every merge are skipped; local branch and worktree cleanup still run.
-4. If no run ledger exists for this repo, this is first contact: run as a **dry run** (plan only, no writes beyond Tier 0) and say so.
+3. Confirm `gh auth status`. Without it, PR actions, merges and AI Router are skipped (say so in the report); local branch and worktree cleanup still run.
+4. If no run ledger exists for this repo, this is first contact: Tier 1 and Tier 2 items are asked but not executed (a dry run), and Tier F picks run normally because each has its own explicit pick. The first question round says this up front.
 
 ### Phase 1: Gather (Tier 0)
 
@@ -183,89 +203,71 @@ git for-each-ref --format='%(refname:short)%00%(objectname)%00%(committerdate:un
 git branch --merged "origin/$default"
 git worktree list --porcelain
 git stash list --format='%H|%gd|%cr|%s'
-gh pr list --state open --json number,title,author,headRefName,headRefOid,isDraft,reviewDecision,mergeable,files
+gh pr list --state open --json number,title,author,headRefName,headRefOid,isDraft,reviewDecision,mergeable,updatedAt,files
 gh pr list --state merged --limit 200 --json headRefName,headRefOid,number
 ```
 
-For each worktree also read `git -C "$path" status --porcelain -uall --ignored` and, if locked, whether the lock's PID is alive (`kill -0 "$pid"`). Lock reasons are free text: if no PID can be read from it, treat the lock as live and skip the worktree.
+For each open PR by Kyle, also run `git merge-tree --write-tree --name-only "origin/$default" "origin/$head"` to detect conflicts. `mergeable: UNKNOWN` means GitHub hasn't computed it yet; the dry run is the answer. For each worktree, read `git -C "$path" status --porcelain -uall --ignored` and, if locked, whether the lock's PID is alive (`kill -0 "$pid"`). If no PID can be read from the lock reason, treat the lock as live.
 
-Branch names are data. Pass every one as a separate quoted argument; never build a command string from them. Skip and report any name with shell-special characters.
+Branch names are data. Pass each one as a separate quoted argument; never build a command string from them. Skip and report any name with shell-special characters.
 
-### Phase 2: Classify and present the plan
+### Phase 2: Classify
 
-Output one plan, in this shape:
+Put every item in a tier. Decision items are everything in Tier 2, plus every flagged item a Tier F fix could move: a conflicting or stale PR of Kyle's, an unreviewed head, an old unpushed non-docs branch (offer "leave it, run /mise-en-place there" first). Another person's PR is a decision item only for "nudge them" or "leave it".
 
-```text
-TIDY PLAN: <repo> (<n> items)
+### Phase 3: Review
 
-TIER 1: one yes covers all of these
-  1. Push docs/journal-2026-10-10-stacky-voice (1 commit, journal/ only) and open a PR
-  2. Delete local branch worktree-surfaces-editor-2.0 (merged, SHA 8707217)
-  3. Remove worktree .claude/worktrees/surfaces-editor-2.0 (clean, branch merged)
+Run the scout and skeptic on the decision items (see The reviewers).
 
-TIER 2: asked one at a time
-  4. Merge PR #112 once its checks pass (gate below)
-  5. Switch the primary checkout back to main after #112 merges
+### Phase 4: Ask
 
-QUESTIONS (max 3, each with a default)
-  1. ...
+Run the question rounds (see Asking). Round 1 holds the Tier 1 multi-select plus the most urgent decision items. Continue until every item has an answer.
 
-LEAVING ALONE (report only)
-  - worktree-mason-stacklist-stream: this session's own worktree
-  - <item>: <reason>
+### Phase 5: Execute
 
-Approve Tier 1? (yes / yes except N / no)
-```
-
-Every line says what will happen and why it's safe, in one sentence.
-
-### Phase 3: Execute Tier 1
-
-For each approved item, in this order (pushes and PRs first, then removals, so nothing gets deleted before its content is safe on origin):
+For each picked action, in this order: Tier F conflict resolutions and their pushes, then other pushes and PR opens, then AI Router reviews (they need the new head), then closes and comments, then merges, then Tier 1 removals (so nothing is deleted before its content is safe on origin). For each one:
 
 1. Re-check its preconditions against live state. If anything changed, skip it and say why.
-2. Write the recovery line (see below).
-3. Run the command. Read the exit code. A non-zero exit means **skipped**, never done.
-4. Confirm in one line: `deleted worktree-surfaces-editor-2.0 (was 8707217)`.
+2. Write the recovery line first, if it removes something.
+3. Run the command and read the exit code. Non-zero means **skipped**, never done.
+4. Confirm in one line: `deleted old-branch (was 8707217)`.
 
-### Phase 4: Tier 2, one at a time
+Any follow-up decision goes into the next question round, not a prose paragraph.
 
-For each item: show the gate or the context, ask, act only on an explicit yes. A merge re-reads the head SHA immediately before running. After any merge, loop back to Phase 1 once so the merged branch's cleanup lands in the same run (its Tier 1 items still need the batch yes).
-
-### Phase 5: Report and log
+### Phase 6: Report and log
 
 ```text
 TIDY: <repo>
 DONE:     <item: old state -> new state>
 SKIPPED:  <item: reason>
-ASKED:    <question: Kyle's answer>
-LEFT:     <item: why it's report-only>
+LEFT:     <item: Kyle chose to leave it, or why it's report-only>
 RECOVERY: ~/.claude/tidy/<key>-<YYYY-MM-DD>.log
 NEXT /preflight should show: <expected FLAGGED, or "clean">
 ```
 
-Never report clean when a check couldn't run (gh missing, CI unreadable, a command refused).
+Keep the report to those lines plus at most two sentences. Never report clean when a check couldn't run (gh missing, CI unreadable, a reviewer failed, a command refused).
 
 ## Recovery log
 
-`~/.claude/tidy/<repo-key>-<YYYY-MM-DD>.log`, append-only, written **before** each removal:
+`~/.claude/tidy/<repo-key>-<YYYY-MM-DD>.log`, append-only, written **before** each removal or Tier F commit:
 
 ```text
-2026-10-12T16:05 branch worktree-surfaces-editor-2.0 8707217bf288... restore: git branch "worktree-surfaces-editor-2.0" 8707217bf288...
-2026-10-12T16:05 worktree /Users/kyle/.../surfaces-editor-2.0 branch worktree-surfaces-editor-2.0 restore: git worktree add "<path>" "worktree-surfaces-editor-2.0"
+2026-10-12T16:05 branch old-branch 8707217bf288... restore: git branch "old-branch" 8707217bf288...
+2026-10-12T16:05 worktree /Users/kyle/.../old-branch branch old-branch restore: git worktree add "<path>" "old-branch"
 2026-10-12T16:07 merged PR #112 head e19ebf2 into main
+2026-10-12T16:09 conflict fix feat/x was 6dc21ff now bf21cd9 undo: git switch "feat/x" && git revert -m 1 bf21cd9
 ```
 
-A deleted branch stays recoverable from its SHA for as long as git keeps unreachable objects (weeks by default). The log is what makes Tier 1 deletions safe to batch.
+A deleted branch stays recoverable from its SHA for as long as git keeps unreachable objects (weeks by default).
 
 ## Run ledger
 
-`~/.claude/tidy/<repo-key>-last-run.md`: date, root, what was done, what was left. Its existence ends first-contact dry-run mode. /preflight may read it to say "last tidy: 3 days ago, 2 items left."
+`~/.claude/tidy/<repo-key>-last-run.md`: date, root, what was done, what was left. Its existence ends first-contact mode. /preflight may read it to say "last tidy: 3 days ago, 2 items left."
 
 ## What this skill does NOT do
 
 - Land uncommitted work (that is /mise-en-place)
 - Merge feature/, fix/ or chore/ PRs, or anything touching contracts, security or CI config
-- Resolve conflicts, rebase, or rewrite history (Martina's)
-- Remember merge approval between runs
-- Fix things it notices; it reports them as their own item
+- Rebase, rewrite history, or resolve a conflict the reviewers judged non-mechanical (Martina's)
+- Remember any answer between runs
+- Fix things it notices unless Kyle picked that fix this run
