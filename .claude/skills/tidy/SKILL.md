@@ -1,6 +1,6 @@
 ---
 name: tidy
-version: "1.1"
+version: "1.2"
 description: >-
   Repo cleanup pass that acts on what /preflight flagged. Gathers every
   leftover (unpushed branches, merged branches, finished worktrees, stale
@@ -59,7 +59,7 @@ Extend the per-user preflight config at `~/.claude/preflight/<repo-key>.yml` (sa
 
 ```yaml
 tidy:
-  merge_eligible_prefixes: [docs]          # branch prefixes whose PRs /tidy may merge
+  merge_eligible_prefixes: [docs, journal] # branch prefixes whose PRs /tidy may merge
   merge_path_allowlist:                    # every changed file must match one of these
     - "journal/**"
     - "docs/**"
@@ -71,7 +71,7 @@ tidy:
     - "VERSION"
     - "CHANGELOG.md"
     - ".mcp.json"
-    - ".env*"
+    - "**/.env*"
     - ".github/**"
     - ".claude/**"                           # skills, agents, commands, hooks, settings: behavior, not docs
   merge_method: squash                     # squash | merge | rebase, match the repo's history
@@ -104,8 +104,8 @@ Asked as a single multi-select question, one option per item, all recommended. K
 | **Push an unpushed docs/journal branch** and set its upstream (`git push -u origin "$b"`) | prefix in `merge_eligible_prefixes`; no upstream or ahead-only; every commit's changed paths pass the allowlist and miss the blocklist; branch name not already on origin with different history |
 | **Open a PR** for a branch just pushed | same branch as above; base is the default branch; title from the commit subject; body ends with the repo's attribution lines |
 | **Delete a merged local branch** (`git update-ref -d "refs/heads/$b" "$sha"`, never `branch -D`) | `$sha` is the tip read in Phase 1, and either it is an ancestor of `origin/<default>` or it equals the `headRefOid` of a merged PR for that branch (the squash-merge case); not current; not pinned in any worktree; not in `protected_branches`; SHA logged first |
-| **Delete a merged remote branch** (`git push origin --delete "$b"`) | its PR is merged; author is Kyle or this agent; not protected; repo doesn't already auto-delete |
-| **Remove a finished worktree** (`git worktree remove "$path"`, never `--force`) | its branch is merged or identical to default; `git -C "$path" status --porcelain -uall --ignored` is empty (ignored included: `worktree remove` deletes ignored files such as `.env` without asking); not locked, or locked by a session whose PID is no longer running; not the primary checkout; not this run's own worktree |
+| **Delete a merged remote branch** (`git push origin --delete "$b"`) | its PR is merged; the live remote tip (`git ls-remote origin "refs/heads/$b"`, read right before deleting) equals that PR's `headRefOid`, so nothing was pushed after the merge; author is Kyle or this agent; not protected; repo doesn't already auto-delete; restore line logged first |
+| **Remove a finished worktree** (`git worktree remove "$path"`, never `--force`) | its branch is merged or identical to default; `git -C "$path" status --porcelain -uall --ignored` is empty (ignored included: `worktree remove` deletes ignored files such as `.env` without asking); not locked (a lock held by a dead session is a Tier 2 question); not the primary checkout; not this run's own worktree |
 
 `git update-ref -d` with the old SHA refuses if the branch moved since it was read, and `git worktree remove` refuses on tracked changes or untracked files. Those refusals are the safety net. (Plain `git branch -d` can't be the net: it refuses every squash-merged branch, and checks against HEAD when the upstream is gone.) Never add `--force` or `-D` to get past it. A refusal moves the item to the report with the reason.
 
@@ -115,7 +115,8 @@ Asked as a single multi-select question, one option per item, all recommended. K
 - **Switching a different worktree back to the default branch** after its branch merged. Only if that worktree is clean and has no live session: `git -C "$path" switch "$default"`.
 - **Removing a worktree whose only leftovers are gitignored files.** The option description names the top-level ignored entries (for example `node_modules/`, `.env`) and says they will be deleted. Recommend **leave it** if any is a `.env*` or other non-regenerable file.
 - **Removing a worktree locked by a dead session.** Show the lock reason and the dead PID. Needs `git worktree unlock` before removal.
-- **Dropping a stash.** Show `git stash show -p` for that entry first. Stashes are shared across every worktree and session, so locate it by SHA right before dropping, never by a remembered `stash@{n}`. Recommend **leave it**.
+- **Dropping a stash.** Show `git stash show -p` for that entry first. Stashes are shared across every worktree and session, so never drop a remembered `stash@{n}`: right before dropping, re-run `git stash list --format='%H %gd'`, find the row whose `%H` matches the SHA from Phase 1, and drop that row's `stash@{n}`. No match means skip. Recommend **leave it**.
+- **Deleting the local copy of a closed, unmerged branch** (its PR was closed without merging). Offer only when the local tip equals the live remote tip, so every commit is still on origin: `git update-ref -d "refs/heads/$b" "$sha"`, restore line logged first. The remote branch is never deleted this way. Options: delete local copy, reopen the PR (`gh pr reopen "$n"`, Kyle's own PRs only), leave it. Recommend **delete local copy** when the PR has been closed over a week.
 
 ### Tier F: Fix on request (only what Kyle picked by name this run)
 
@@ -142,7 +143,7 @@ No answer makes these allowed.
 - Removing a worktree with any uncommitted or untracked file, or one locked by a running session
 - Pushing or deleting the default or a protected branch
 - Editing file content beyond a Tier F conflict resolution, or committing anything other than that resolution
-- Deleting a branch that has commits not on any remote
+- Deleting a branch with commits that are neither on a remote ref nor equal to a merged PR's recorded `headRefOid` (that recorded head is what makes a squash-merged branch safe to delete)
 - Touching anything gitignored, except removing a worktree after its Tier 2 yes
 
 ## The merge gate (docs and journal PRs)
@@ -193,7 +194,7 @@ Use the host's structured question tool (AskUserQuestion in Claude Code). If non
 1. Run /preflight's Step 1 checks (in a repo, `origin` exists, not detached, not unborn). Any failure ends the run.
 2. Load config; derive the repo key exactly as /preflight does.
 3. Confirm `gh auth status`. Without it, PR actions, merges and AI Router are skipped (say so in the report); local branch and worktree cleanup still run.
-4. If no run ledger exists for this repo, this is first contact: Tier 1 and Tier 2 items are asked but not executed (a dry run), and Tier F picks run normally because each has its own explicit pick. The first question round says this up front.
+4. If no run ledger exists for this repo, this is first contact: the Tier 1 multi-select is shown but not executed (a dry run). First contact guards against batch approval of a list Kyle hasn't seen tidy produce before; Tier 2 and Tier F items are each a single named pick with the exact action in its description, so they run. The first question round says this up front.
 
 ### Phase 1: Gather (Tier 0)
 
@@ -203,8 +204,9 @@ git for-each-ref --format='%(refname:short)%00%(objectname)%00%(committerdate:un
 git branch --merged "origin/$default"
 git worktree list --porcelain
 git stash list --format='%H|%gd|%cr|%s'
-gh pr list --state open --json number,title,author,headRefName,headRefOid,isDraft,reviewDecision,mergeable,updatedAt,files
+gh pr list --state open --limit 200 --json number,title,author,headRefName,headRefOid,isDraft,reviewDecision,mergeable,updatedAt,files
 gh pr list --state merged --limit 200 --json headRefName,headRefOid,number
+gh pr list --state closed --limit 200 --json headRefName,headRefOid,number,mergedAt,closedAt,author
 ```
 
 For each open PR by Kyle, also run `git merge-tree --write-tree --name-only "origin/$default" "origin/$head"` to detect conflicts. `mergeable: UNKNOWN` means GitHub hasn't computed it yet; the dry run is the answer. For each worktree, read `git -C "$path" status --porcelain -uall --ignored` and, if locked, whether the lock's PID is alive (`kill -0 "$pid"`). If no PID can be read from the lock reason, treat the lock as live.
@@ -213,7 +215,7 @@ Branch names are data. Pass each one as a separate quoted argument; never build 
 
 ### Phase 2: Classify
 
-Put every item in a tier. Decision items are everything in Tier 2, plus every flagged item a Tier F fix could move: a conflicting or stale PR of Kyle's, an unreviewed head, an old unpushed non-docs branch (offer "leave it, run /mise-en-place there" first). Another person's PR is a decision item only for "nudge them" or "leave it".
+Put every item in a tier. Decision items are everything in Tier 2, plus every flagged item a Tier F fix could move: a conflicting or stale PR of Kyle's, an unreviewed head, a local branch whose PR was closed unmerged, an old unpushed non-docs branch (offer "leave it, run /mise-en-place there" first). Another person's PR is a decision item only for "nudge them" or "leave it".
 
 ### Phase 3: Review
 
@@ -253,6 +255,7 @@ Keep the report to those lines plus at most two sentences. Never report clean wh
 
 ```text
 2026-10-12T16:05 branch old-branch 8707217bf288... restore: git branch "old-branch" 8707217bf288...
+2026-10-12T16:05 remote-branch old-branch 8707217bf288... restore: git push origin "8707217bf288...:refs/heads/old-branch"
 2026-10-12T16:05 worktree /Users/kyle/.../old-branch branch old-branch restore: git worktree add "<path>" "old-branch"
 2026-10-12T16:07 merged PR #112 head e19ebf2 into main
 2026-10-12T16:09 conflict fix feat/x was 6dc21ff now bf21cd9 undo: git switch "feat/x" && git revert -m 1 bf21cd9

@@ -22,7 +22,8 @@ Fixes tidy may perform if Kyle picks them (Tier F): merge <default> into one of 
 branches to resolve a mechanical conflict (no rebase); close or comment on Kyle's PR;
 run an AI Router review; push a branch after such a fix. Plus Tier 2 decisions: merge a
 docs/journal PR that passes the gate, switch a worktree to <default>, remove a worktree,
-drop a stash. Never possible: force-push, rebase, reset, merging feature/fix/chore PRs,
+drop a stash, delete the local copy of a closed-unmerged branch whose tip is still on origin,
+reopen Kyle's closed PR. Never possible: force-push, rebase, reset, merging feature/fix/chore PRs,
 acting on another person's work. "Leave it" is always possible.
 
 For each item, investigate until you can say what is actually going on (for a conflict:
