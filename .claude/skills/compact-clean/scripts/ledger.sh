@@ -268,14 +268,19 @@ def session_notes(any_root=False):
 
 if mode == 'guard':
     # Auto-compaction is never blocked, and neither is anything this cannot judge.
-    if ptrig != 'manual' or not SESS or re.search(r'(?<![a-z0-9])noflush(?![a-z0-9])', (args[0] if args else '').lower()):
+    if ptrig != 'manual' or not SESS or re.search(r'(?<!\w)noflush(?!\w)', (args[0] if args else '').lower()):
         sys.exit(0)
     # Any worktree of this origin: the guard protects against a failed flush, and a session
     # that flushed in one worktree and moved to another did flush.
+    recs = load_records()
+    # A repo no session has ever flushed has nothing to protect. Hook records don't count:
+    # the evidence hook runs beside this one and may have just created the ledger.
+    if not any(r.get('trigger') in ('manual', 'evidence') for r in recs):
+        sys.exit(0)
     if any(r.get('session') == SESS
            and r.get('trigger') in ('manual', 'evidence')
            and isinstance(r.get('written_at'), int) and 0 <= now - r['written_at'] < GUARD_WINDOW
-           for r in load_records()):
+           for r in recs):
         sys.exit(0)
     sys.stderr.write('compact-clean guard: no /compact-clean flush from this session in the last %d '
                      'minutes, so compacting now loses which edits were yours. Run /compact-clean, then '

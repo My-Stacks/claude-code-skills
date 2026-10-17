@@ -226,6 +226,8 @@ eq "$(( $(cat "$HOME"/.claude/compact-clean/*.ledger.jsonl | wc -l) - n0 ))" 0 "
 rm -f "$HOME"/.claude/compact-clean/*.ledger.jsonl   # test repos share one origin, so one ledger
 R="$T/g1"; repo "$R"; cd "$R"; baseline "$R" 120; echo s > a
 g() { printf '{"cwd":"%s","session_id":"%s","trigger":"%s","custom_instructions":"%s"}' "$R" "$1" "$2" "$3" | bash "$L" guard 2>"$T/gerr"; echo $?; }
+eq "$(g $S1 manual '')" 0 "guard allows in a repo no session has ever flushed"
+CLAUDE_CODE_SESSION_ID=99999999-9999-9999-9999-999999999999 bash "$L" evidence </dev/null >/dev/null
 eq "$(g $S1 manual '')" 2 "guard blocks a manual /compact with no flush"
 eq "$(grep -c 'compact noflush' "$T/gerr")" 1 "guard explains the bypass"
 eq "$(g $S1 auto '')" 0 "guard never blocks auto-compaction"
@@ -284,6 +286,8 @@ eq "$(gx '\ud83d x')" 2 "lone surrogate in the payload still blocks"
 eq "$(PYTHONIOENCODING=ascii gx 'café')" 2 "raw UTF-8 under an ascii locale still blocks"
 eq "$(PYTHONIOENCODING=ascii gx 'caf\u00e9')" 2 "escaped non-ASCII under an ascii locale still blocks"
 eq "$(gx 'noflushlater')" 2 "noflush must be a word, not a substring"
+eq "$(gx 'noflush_later')" 2 "an underscore does not end the word"
+eq "$(gx 'noflushé')" 2 "a non-ASCII letter does not end the word"
 eq "$(gx 'focus on X (noflush)')" 0 "noflush beside punctuation bypasses"
 
 # --- key parity with /preflight 5.3 ---
